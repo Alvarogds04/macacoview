@@ -1,0 +1,345 @@
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #e0e0e0;
+  background-color: #1a1a2e;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ── App shell ────────────────────────────────────────────────────────────── */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #1a1a2e;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+.header {
+  padding: 1rem 1.5rem;
+  background: #16213e;
+  color: #fff;
+  border-bottom: 1px solid #0f3460;
+}
+
+.header h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* ── Tab bar ──────────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: #0f3460;
+  padding: 0 1.5rem;
+}
+
+.tab {
+  padding: 0.6rem 1.2rem;
+  background: #1a1a2e;
+  cursor: pointer;
+  font-size: 0.9rem;
+  user-select: none;
+  color: #888;
+  transition: color 0.15s, background 0.15s;
+}
+
+.tab:hover {
+  color: #ccc;
+}
+
+.tab.active {
+  background: #1a1a2e;
+  color: #fff;
+  font-weight: 600;
+  border-bottom: 2px solid #4a6cf7;
+}
+
+/* ── Tab content ──────────────────────────────────────────────────────────── */
+
+.tab-content {
+  flex: 1;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  overflow-y: auto;
+}
+
+/* ── Placeholder ──────────────────────────────────────────────────────────── */
+
+.placeholder {
+  color: #666;
+  font-size: 0.95rem;
+  text-align: center;
+  padding: 3rem 0;
+}
+
+/* ── Section ──────────────────────────────────────────────────────────────── */
+
+.section {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8899aa;
+  padding: 0.75rem 1rem 0.5rem;
+  border-bottom: 1px solid #0f3460;
+}
+
+.section-body {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table thead th {
+  text-align: left;
+  padding: 0.45rem 0.75rem;
+  color: #8899aa;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #0f3460;
+}
+
+/* Numeric columns */
+.table .col-num {
+  text-align: right;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  font-size: 0.82rem;
+  color: #b0c4de;
+  white-space: nowrap;
+}
+
+/* Model column */
+.table .col-model {
+  padding: 0.4rem 0.75rem;
+  color: #e0e0e0;
+  font-size: 0.82rem;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Group column */
+.table .col-group {
+  padding: 0.4rem 0.75rem;
+  color: #e0e0e0;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.model-row td,
+.group-row td {
+  padding: 0.35rem 0.75rem;
+}
+
+.model-row:hover td,
+.group-row:hover td {
+  background: rgba(74, 108, 247, 0.08);
+}
+
+/* ── Memory summary ───────────────────────────────────────────────────────── */
+
+.memory-summary {
+  padding: 0.25rem 0.5rem;
+}
+
+.mem-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  font-size: 0.85rem;
+}
+
+.mem-row + .mem-row {
+  border-top: 1px solid rgba(15, 52, 96, 0.5);
+}
+
+.mem-label {
+  color: #8899aa;
+  font-weight: 500;
+}
+
+.mem-value {
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  color: #b0c4de;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* ── Loading state ────────────────────────────────────────────────────────── */
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #666;
+  font-size: 0.9rem;
+  padding: 3rem 0;
+  justify-content: center;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #333;
+  border-top-color: #4a6cf7;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Error banner ─────────────────────────────────────────────────────────── */
+
+.error-banner {
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  border-radius: 6px;
+  color: #e57373;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+/* ── Footnote ─────────────────────────────────────────────────────────────── */
+
+.footnote {
+  color: #555;
+  font-size: 0.75rem;
+  font-style: italic;
+  margin-top: 0.5rem;
+}
+
+/* ── Ports tab ────────────────────────────────────────────────────────────── */
+
+.puertos-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.ports-summary {
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  color: #b0c4de;
+  font-size: 0.82rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #0f3460;
+  white-space: nowrap;
+}
+
+/* Exposed-row highlight — warning emphasis, dark-theme readable */
+.port-row-exposed td {
+  background: rgba(255, 152, 0, 0.09);
+  color: inherit;
+}
+
+.port-row-exposed:hover td {
+  background: rgba(255, 152, 0, 0.16);
+}
+
+.ports-table .port-row td {
+  padding: 0.35rem 0.75rem;
+}
+
+/* ── History sparklines ───────────────────────────────────────────────────── */
+
+.history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.history-placeholder {
+  color: #666;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.82rem;
+}
+
+.history-label {
+  color: #8899aa;
+  min-width: 180px;
+  flex-shrink: 0;
+}
+
+.history-sparkline {
+  flex: 1;
+  height: 28px;
+}
+
+.history-sparkline text {
+  font-size: 12px;
+}
+
+.history-value {
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  color: #b0c4de;
+  min-width: 52px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Processes tab ────────────────────────────────────────────────────────── */
+
+.procesos-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Clip long commands in CSS (complements JS truncation guard) */
+.col-args {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processes-table .process-row td {
+  padding: 0.35rem 0.75rem;
+}
+
+.process-row:hover td {
+  background: rgba(74, 108, 247, 0.08);
+}
