@@ -48,8 +48,8 @@ jobs:
           # under `set -euo pipefail` a pipeline ending in `head` returns 1 on
           # SIGPIPE, which used to kill this step after apt had already
           # succeeded. A missing typelib must degrade, not abort the install.
-          typelib_adw=$(apt-cache --no-generics -R '^gir1\.2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
-          typelib_gtk=$(apt-cache --no-generics -R '^gir1\.2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
+          typelib_adw=$(apt-cache --no-generics -R '^gir1[.]2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true
+          typelib_gtk=$(apt-cache --no-generics -R '^gir1[.]2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true
           echo "typelibs resueltos: adw='${typelib_adw}' gtk='${typelib_gtk}'"
           for pkg in ${typelib_adw} ${typelib_gtk}; do
             sudo apt-get install -y --no-install-recommends "$pkg" || echo "aviso: $pkg no instalable"
