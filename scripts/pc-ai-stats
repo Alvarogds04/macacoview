@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+import sys
+
+
+def run(cmd):
+    try:
+        return subprocess.check_output(
+            cmd,
+            text=True,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        return ""
+
+
+def gib(kb):
+    return kb / 1024 / 1024
+
+
+# --------------------------------------------------
+# Memoria del sistema
+# --------------------------------------------------
+
+meminfo = {}
+
+try:
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, value = line.split(":", 1)
+            meminfo[key] = int(value.strip().split()[0])
+except Exception:
+    pass
+
+total_kb = meminfo.get("MemTotal", 0)
+avail_kb = meminfo.get("MemAvailable", 0)
+used_kb = max(0, total_kb - avail_kb)
+
+swap_total = meminfo.get("SwapTotal", 0)
+swap_free = meminfo.get("SwapFree", 0)
+swap_used = max(0, swap_total - swap_free)
+
+
+# --------------------------------------------------
+# Procesos
+# --------------------------------------------------
+
+ps_output = run([
+    "ps",
+    "-eo",
+    "pid=,ppid=,uid=,rss=,%cpu=,comm=,args="
+])
+
+processes = []
+
+for line in ps_output.splitlines():
+    try:
+        parts = line.strip().split(None, 6)
+
+        if len(parts) < 7:
+            continue
+
+        pid = int(parts[0])
+        ppid = int(parts[1])
+        uid = int(parts[2])
+        rss = int(parts[3])
+        cpu = float(parts[4])
+        comm = parts[5]
+        args = parts[6]
+
+        processes.append({
+            "pid": pid,
+            "ppid": ppid,
+            "uid": uid,
+            "rss_kb": rss,
+            "cpu": cpu,
+            "comm": comm,
+            "args": args,
+        })
+
+    except Exception:
+        continue
+
+
+# --------------------------------------------------
+# AMDGPU / GTT
+# --------------------------------------------------
+
+gem_data = run([
+    "sudo",
+    "-n",
+    "/usr/local/bin/amdgpu-gem-info-read"
+])
+
+gtt_by_pid = {}
+vram_by_pid = {}
+
+current_pid = None
+
+for line in gem_data.splitlines():
+
+    m = re.match(r"^pid\s+(\d+)\s+", line)
+
+    if m:
+        current_pid = int(m.group(1))
+        continue
+
+    if current_pid is None:
+        continue
+
+    m = re.search(
+        r":\s+(\d+)\s+byte\s+(GTT|VRAM)",
+        line
+    )
+
+    if not m:
+        continue
+
+    size = int(m.group(1))
+    kind = m.group(2)
+
+    if kind == "GTT":
+        gtt_by_pid[current_pid] = \
+            gtt_by_pid.get(current_pid, 0) + size
+
+    elif kind == "VRAM":
+        vram_by_pid[current_pid] = \
+            vram_by_pid.get(current_pid, 0) + size
+
+
+# --------------------------------------------------
+# Categorías
+# --------------------------------------------------
+
+groups = {
+    "pi": {"rss_kb": 0, "cpu": 0, "pids": []},
+    "hermes": {"rss_kb": 0, "cpu": 0, "pids": []},
+    "firefox": {"rss_kb": 0, "cpu": 0, "pids": []},
+    "system": {"rss_kb": 0, "cpu": 0, "pids": []},
+    "other": {"rss_kb": 0, "cpu": 0, "pids": []},
+}
+
+models = []
+
+for p in processes:
+
+    args = p["args"]
+    comm = p["comm"]
+    pid = p["pid"]
+
+    # Modelos llama.cpp
+    if "llama-server" in args:
+
+        alias_match = re.search(r"--alias\s+(\S+)", args)
+        model_match = re.search(r"--model\s+(\S+)", args)
+        port_match = re.search(r"--port\s+(\d+)", args)
+
+        alias = (
+            alias_match.group(1)
+            if alias_match
+            else f"llama-{pid}"
+        )
+
+        model_path = (
+            model_match.group(1)
+            if model_match
+            else ""
+        )
+
+        port = (
+            int(port_match.group(1))
+            if port_match
+            else None
+        )
+
+        models.append({
+            "alias": alias,
+            "pid": pid,
+            "port": port,
+            "model": os.path.basename(model_path),
+            "rss_gib": gib(p["rss_kb"]),
+            "cpu": p["cpu"],
+            "gtt_gib":
+                gtt_by_pid.get(pid, 0) / 1024**3,
+            "vram_gib":
+                vram_by_pid.get(pid, 0) / 1024**3,
+        })
+
+        continue
+
+    # PI
+    is_pi = (
+        comm == "pi"
+        or "/.pi-lens/" in args
+        or "/.pi/agent/" in args
+    )
+
+    # Hermes
+    is_hermes = (
+        comm == "hermes"
+        or "/.hermes/" in args
+        or "hermes_cli" in args
+    )
+
+    # Firefox
+    is_firefox = (
+        comm == "firefox"
+        or "/firefox/" in args
+        or "/snap/firefox/" in args
+    )
+
+    if is_pi:
+        group = "pi"
+
+    elif is_hermes:
+        group = "hermes"
+
+    elif is_firefox:
+        group = "firefox"
+
+    elif p["uid"] == 0:
+        group = "system"
+
+    else:
+        group = "other"
+
+    groups[group]["rss_kb"] += p["rss_kb"]
+    groups[group]["cpu"] += p["cpu"]
+    groups[group]["pids"].append(pid)
+
+
+for value in groups.values():
+    value["rss_gib"] = gib(value.pop("rss_kb"))
+
+
+data = {
+    "memory": {
+        "total_gib": gib(total_kb),
+        "used_gib": gib(used_kb),
+        "available_gib": gib(avail_kb),
+        "swap_total_gib": gib(swap_total),
+        "swap_used_gib": gib(swap_used),
+    },
+    "models": models,
+    "groups": groups,
+    "processes": processes,
+}
+
+
+# --------------------------------------------------
+# Chip builder
+# --------------------------------------------------
+
+BAR_CONFIG = Path.home() / ".config/pc-ai-monitor/config.toml"
+BAR_DEFAULTS = {"hide_zero": True, "always_show": [], "only": [], "units": "gb", "models": "separate"}
+
+
+def _load_bar_config():
+    """Preferencias del pill, tomadas del config de la app.
+
+    Sin archivo (o con TOML roto) valen los defaults: un error de configuración
+    nunca deja la barra sin datos.
+    """
+    try:
+        import tomllib
+
+        section = (tomllib.loads(BAR_CONFIG.read_text()).get("bar")) or {}
+    except Exception:
+        return dict(BAR_DEFAULTS)
+
+    always = section.get("always_show") or []
+    only = section.get("only") or []
+    units = str(section.get("units", "gb")).lower()
+    models = str(section.get("models", "separate")).lower()
+    return {
+        "hide_zero": bool(section.get("hide_zero", True)),
+        "always_show": [str(item).lower() for item in always] if isinstance(always, list) else [],
+        "only": [str(item).lower() for item in only] if isinstance(only, list) else [],
+        "units": units if units in ("gb", "percent") else "gb",
+        "models": models if models in ("separate", "combined") else "separate",
+    }
+
+
+def _fmt(value, config, mem_total):
+    """GiB con un decimal, o porcentaje de la memoria total de la máquina."""
+    if config["units"] == "percent":
+        if mem_total <= 0:
+            return "0%"
+        return f"{value / mem_total * 100:.0f}%"
+    return f"{value:.1f}"
+
+
+def _wanted(key, value, config):
+    """Filtro explícito, lista de deseados, y ceros ocultos por defecto."""
+    if config["only"] and key not in config["only"]:
+        return False
+    if config["always_show"] and key in config["always_show"]:
+        return True
+    if value > 0:
+        return True
+    return not config["hide_zero"]
+
+
+def _build_chips(models, groups, memory=None):
+    """Return the chip string shared by --bar and --pill.
+
+    Qué se muestra y cómo lo decide `[bar]` del config de la app: ceros ocultos
+    por defecto, `always_show`/`only` para acotar, `units` (gb o percent) y
+    `models` (un chip por modelo o una métrica sumada).
+    """
+    config = _load_bar_config()
+    mem_total = float((memory or {}).get("total_gib") or 0.0)
+    parts = []
+
+    if config["models"] == "combined":
+        total = sum(float(m["gtt_gib"]) for m in models)
+        if _wanted("modelos", total, config):
+            parts.append(f'\U0001f5a5{_fmt(total, config, mem_total)}')
+    else:
+        for m in models:
+
+            alias = m["alias"].lower()
+
+            if "abito" in alias:
+                icon = "\U0001f916"
+
+            elif "personal" in alias:
+                icon = "\U0001f9e0"
+
+            else:
+                icon = "\U0001f9e9"
+
+            value = float(m["gtt_gib"])
+
+            if _wanted(alias, value, config):
+                parts.append(
+                    f'{icon}{_fmt(value, config, mem_total)}'
+                )
+
+    for key, icon in (("pi", "\U0001f967"), ("hermes", "\U0001fab6"), ("firefox", "\U0001f98a")):
+
+        value = float((groups.get(key) or {}).get("rss_gib") or 0.0)
+
+        if _wanted(key, value, config):
+            parts.append(
+                f'{icon}{_fmt(value, config, mem_total)}'
+            )
+
+    return "  ".join(parts) if parts else "\u2014"
+
+
+if "--bar" in sys.argv:
+
+    print(_build_chips(models, groups, data.get("memory")))
+
+elif "--pill" in sys.argv:
+
+    chips = _build_chips(models, groups, data.get("memory"))
+    mem = data["memory"]
+    print(f'{mem["used_gib"]:.1f}|{mem["total_gib"]:.1f}|{chips}')
+
+else:
+    print(json.dumps(data))

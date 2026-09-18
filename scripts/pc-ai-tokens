@@ -1,0 +1,476 @@
+#!/usr/bin/python3
+"""Token consumption collector for PC-AI Monitor.
+
+Aggregates four independent sources into one JSON document on stdout:
+
+  remote  litellm proxy token counters, read through the local Prometheus that
+          already scrapes the proxy. No API key is needed or read here.
+  local   llama-server (llama.cpp) token counters, read from the /metrics
+          endpoint of every running server discovered in /proc.
+  pi      token usage recorded in the Pi session transcripts.
+  codex   Codex subscription window usage (percentages, not token counts).
+
+Every source is isolated: one failing source is reported as unavailable and the
+others still return data, so the caller never loses the whole snapshot.
+
+The Pi transcripts are the only expensive source (hundreds of MB, append-only
+JSONL). They are read incrementally: a cache keeps the byte offset already
+consumed per file, so a poll parses only the bytes appended since the last one.
+A file that shrank is re-read from the start, which covers truncation and
+rotation.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+PROMETHEUS = "http://127.0.0.1:9090/api/v1/query"
+CODEXBAR = "/home/alvaro/.local/bin/codexbar"
+SESSIONS_DIR = Path.home() / ".pi/agent/sessions"
+CACHE_DIR = Path.home() / ".cache/pc-ai-tokens"
+PI_CACHE = CACHE_DIR / "pi-sessions.json"
+CODEX_CACHE = CACHE_DIR / "codex.json"
+
+# Bump whenever the cached shape changes: an older cache is ignored and the
+# transcripts are re-read from the start, which self-heals without manual
+# cleanup. Version 2 added the per-model counters.
+PI_CACHE_VERSION = 2
+
+HTTP_TIMEOUT = 3.0
+CODEX_TIMEOUT = 15.0
+CODEX_TTL = 60.0  # seconds; codexbar reaches the network, so cache it
+
+REMOTE_METRICS = {
+    "input": "litellm_input_tokens_metric_total",
+    "input_cached": "litellm_input_cached_tokens_metric_total",
+    "output": "litellm_output_tokens_metric_total",
+    "reasoning": "litellm_output_reasoning_tokens_metric_total",
+    "total": "litellm_total_tokens_metric_total",
+    "spend_usd": "litellm_spend_metric_total",
+}
+
+LOCAL_METRICS = {
+    "input": "llamacpp:prompt_tokens_total",
+    "input_cached": "llamacpp:prompt_tokens_cached_total",
+    "output": "llamacpp:tokens_predicted_total",
+}
+
+PI_COUNTERS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def get_json(url: str, timeout: float) -> object:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        return json.loads(response.read())
+
+
+def as_int(value: object) -> int:
+    try:
+        return int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def as_float(value: object) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def empty_pi_sums() -> dict[str, float]:
+    sums: dict[str, float] = {name: 0.0 for name in PI_COUNTERS}
+    sums["cost_usd"] = 0.0
+    sums["turns"] = 0.0
+    return sums
+
+
+# ---------------------------------------------------------------------------
+# remote — litellm counters via Prometheus
+# ---------------------------------------------------------------------------
+
+
+def prometheus_by_model(metric: str) -> dict[str, float]:
+    query = urllib.parse.urlencode({"query": f"sum by (model) ({metric})"})
+    payload = get_json(f"{PROMETHEUS}?{query}", HTTP_TIMEOUT)
+    result = payload["data"]["result"]  # type: ignore[index]
+    return {
+        str(entry["metric"].get("model", "?")): as_float(entry["value"][1])
+        for entry in result
+    }
+
+
+def collect_remote() -> dict[str, object]:
+    per_metric = {key: prometheus_by_model(name) for key, name in REMOTE_METRICS.items()}
+
+    models = []
+    for model in sorted(set().union(*(series.keys() for series in per_metric.values()))):
+        row = {key: series.get(model, 0.0) for key, series in per_metric.items()}
+        if sum(row[key] for key in REMOTE_METRICS if key != "spend_usd") <= 0:
+            continue
+        models.append(
+            {
+                "name": model,
+                "input": int(row["input"]),
+                "input_cached": int(row["input_cached"]),
+                "output": int(row["output"]),
+                "reasoning": int(row["reasoning"]),
+                "total": int(row["total"]),
+                "spend_usd": round(row["spend_usd"], 6),
+            }
+        )
+
+    models.sort(key=lambda row: row["total"], reverse=True)
+    return {
+        "status": "ok",
+        "models": models,
+        "total": sum(row["total"] for row in models),
+        "spend_usd": round(sum(row["spend_usd"] for row in models), 6),
+    }
+
+
+# ---------------------------------------------------------------------------
+# local — llama.cpp servers discovered in /proc
+# ---------------------------------------------------------------------------
+
+
+def running_llama_servers() -> list[tuple[str, int]]:
+    servers: list[tuple[str, int]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        argv = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+        if not argv or not argv[0].endswith("llama-server"):
+            continue
+        port = alias = None
+        for index, arg in enumerate(argv):
+            if arg == "--port" and index + 1 < len(argv):
+                port = as_int(argv[index + 1])
+            elif arg.startswith("--port="):
+                port = as_int(arg.split("=", 1)[1])
+            elif arg == "--alias" and index + 1 < len(argv):
+                alias = argv[index + 1]
+            elif arg.startswith("--alias="):
+                alias = arg.split("=", 1)[1]
+        if port and alias:
+            servers.append((alias, port))
+    return sorted(set(servers))
+
+
+def collect_local() -> dict[str, object]:
+    models = []
+    for alias, port in running_llama_servers():
+        try:
+            body = urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/metrics", timeout=HTTP_TIMEOUT
+            ).read().decode("utf-8", "replace")
+        except (OSError, urllib.error.URLError, TimeoutError):
+            # Server without --metrics (HTTP 501) or already gone: skip it.
+            continue
+
+        counters = {}
+        for line in body.splitlines():
+            if not line or line.startswith("#"):
+                continue
+            name, _, value = line.partition(" ")
+            counters[name] = as_float(value)
+
+        if not any(name in counters for name in LOCAL_METRICS.values()):
+            continue
+
+        row = {key: as_int(counters.get(name)) for key, name in LOCAL_METRICS.items()}
+        models.append(
+            {
+                "name": alias,
+                "port": port,
+                "input": row["input"],
+                "input_cached": row["input_cached"],
+                "output": row["output"],
+                "total": row["input"] + row["output"],
+            }
+        )
+
+    models.sort(key=lambda row: row["total"], reverse=True)
+    return {
+        "status": "ok",
+        "models": models,
+        "total": sum(row["total"] for row in models),
+    }
+
+
+# ---------------------------------------------------------------------------
+# pi — incremental scan of the session transcripts
+# ---------------------------------------------------------------------------
+
+
+def load_cache(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def store_cache(path: Path, payload: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    except OSError:
+        pass
+
+
+def coerce_sums(raw: object) -> dict[str, float]:
+    """Rebuild a counter map from cached JSON, tolerating missing keys."""
+    source = raw if isinstance(raw, dict) else {}
+    return {name: as_float(source.get(name)) for name in empty_pi_sums()}
+
+
+def accumulate_usage(
+    usage: dict,
+    sums: dict[str, float],
+    models: dict[str, dict],
+    model: str,
+    provider: str,
+) -> None:
+    """Add one turn to the global counters and to its own model's counters.
+
+    The model name comes from the transcript record itself, so nothing has to be
+    configured or guessed here.
+    """
+    entry = models.get(model)
+    if not isinstance(entry, dict):
+        entry = {"sums": empty_pi_sums(), "provider": provider}
+        models[model] = entry
+    if provider:
+        entry["provider"] = provider
+
+    for target in (sums, entry["sums"]):
+        target["input"] += as_float(usage.get("input"))
+        target["output"] += as_float(usage.get("output"))
+        target["cache_read"] += as_float(usage.get("cacheRead"))
+        target["cache_write"] += as_float(usage.get("cacheWrite"))
+        target["reasoning"] += as_float(usage.get("reasoning"))
+        target["total"] += as_float(usage.get("totalTokens"))
+        target["cost_usd"] += as_float((usage.get("cost") or {}).get("total"))
+        target["turns"] += 1
+
+
+def collect_pi() -> dict[str, object]:
+    cache = load_cache(PI_CACHE)
+    files: dict[str, dict] = {}
+    if isinstance(cache, dict) and cache.get("version") == PI_CACHE_VERSION:
+        stored = cache.get("files")
+        files = stored if isinstance(stored, dict) else {}
+
+    totals = empty_pi_sums()
+    per_model: dict[str, dict] = {}
+    visited: set[str] = set()
+    sessions = 0
+    for path in sorted(SESSIONS_DIR.rglob("*.jsonl")):
+        key = str(path)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+
+        visited.add(key)
+        seen = files.get(key) if isinstance(files.get(key), dict) else None
+        offset = int(seen.get("offset", 0)) if seen else 0
+        sums = coerce_sums((seen or {}).get("sums"))
+        models = {
+            str(name): {
+                "sums": coerce_sums(entry.get("sums")),
+                "provider": str(entry.get("provider") or ""),
+            }
+            for name, entry in ((seen or {}).get("models") or {}).items()
+            if isinstance(entry, dict)
+        }
+        if offset > size:  # truncated or rotated: start over
+            offset = 0
+            sums = empty_pi_sums()
+            models = {}
+
+        if size > offset:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                appended = handle.read(size - offset)
+
+            consumed = 0
+            for line in appended.split(b"\n")[:-1]:  # keep the trailing partial line
+                consumed += len(line) + 1
+                if b'"usage"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                message = record.get("message") or {}
+                usage = message.get("usage")
+                if isinstance(usage, dict):
+                    accumulate_usage(
+                        usage,
+                        sums,
+                        models,
+                        str(message.get("model") or "sin-modelo"),
+                        str(message.get("provider") or ""),
+                    )
+
+            offset += consumed
+
+        files[key] = {"offset": offset, "sums": sums, "models": models}
+        if sums["turns"] > 0:
+            sessions += 1
+        for name in empty_pi_sums():
+            totals[name] += sums[name]
+
+        for name, entry in models.items():
+            acc = per_model.setdefault(name, {"sums": empty_pi_sums(), "provider": ""})
+            for counter in empty_pi_sums():
+                acc["sums"][counter] += as_float(entry["sums"].get(counter))
+            if entry.get("provider"):
+                acc["provider"] = entry["provider"]
+
+    # Forget transcripts that no longer exist, so a deleted session stops
+    # counting instead of lingering in the cached totals.
+    store_cache(
+        PI_CACHE,
+        {"version": PI_CACHE_VERSION, "files": {k: v for k, v in files.items() if k in visited}},
+    )
+
+    model_rows = [
+        {
+            "name": name,
+            "provider": str(data.get("provider") or ""),
+            "input": int(data["sums"]["input"]),
+            "output": int(data["sums"]["output"]),
+            "cache_read": int(data["sums"]["cache_read"]),
+            "cache_write": int(data["sums"]["cache_write"]),
+            "reasoning": int(data["sums"]["reasoning"]),
+            "total": int(data["sums"]["total"]),
+            "cost_usd": round(as_float(data["sums"]["cost_usd"]), 6),
+            "turns": int(data["sums"]["turns"]),
+        }
+        for name, data in per_model.items()
+        if data["sums"]["turns"] > 0
+    ]
+    # Zero-token rows are real and stay: a local model reached through Pi
+    # reports turns but no usage counters, so it ranks by turns after the
+    # models that do report tokens.
+    model_rows.sort(key=lambda row: (row["total"], row["turns"]), reverse=True)
+
+    return {
+        "status": "ok",
+        "input": int(totals["input"]),
+        "output": int(totals["output"]),
+        "cache_read": int(totals["cache_read"]),
+        "cache_write": int(totals["cache_write"]),
+        "reasoning": int(totals["reasoning"]),
+        "total": int(totals["total"]),
+        "cost_usd": round(totals["cost_usd"], 6),
+        "turns": int(totals["turns"]),
+        "sessions": sessions,
+        "models": model_rows,
+    }
+
+
+# ---------------------------------------------------------------------------
+# codex — subscription window usage
+# ---------------------------------------------------------------------------
+
+
+def window_label(minutes: int) -> str:
+    if minutes <= 0:
+        return "ventana"
+    if minutes >= 7 * 24 * 60:
+        return "semanal"
+    if minutes % 60 == 0:
+        return f"{minutes // 60} h"
+    return f"{minutes} min"
+
+
+def collect_codex() -> dict[str, object]:
+    cached = load_cache(CODEX_CACHE)
+    if isinstance(cached, dict) and time.time() - as_float(cached.get("fetched_at")) < CODEX_TTL:
+        return cached["payload"]  # type: ignore[return-value]
+
+    payload: dict[str, object]
+    try:
+        completed = subprocess.run(
+            [CODEXBAR, "--provider", "codex", "--source", "auto", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=CODEX_TIMEOUT,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"codexbar exited with {completed.returncode}")
+
+        entry = json.loads(completed.stdout)[0]
+        usage = entry.get("usage") or {}
+        identity = usage.get("identity") or {}
+
+        windows = []
+        for slot, label in (("primary", "sesión"), ("secondary", "semanal")):
+            window = usage.get(slot)
+            if not isinstance(window, dict):
+                continue
+            windows.append(
+                {
+                    "label": label,
+                    "used_percent": round(as_float(window.get("usedPercent")), 1),
+                    "window_minutes": as_int(window.get("windowMinutes")),
+                    "resets_at": str(window.get("resetsAt") or ""),
+                }
+            )
+
+        payload = {
+            "status": "ok",
+            "plan": str(identity.get("loginMethod") or ""),
+            "windows": windows,
+        }
+    except (OSError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        payload = {"status": "unavailable", "error": exc.__class__.__name__, "windows": []}
+
+    store_cache(CODEX_CACHE, {"fetched_at": time.time(), "payload": payload})
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def source(name: str, collector) -> dict[str, object]:
+    try:
+        return collector()
+    except Exception as exc:  # noqa: BLE001 — one bad source must not hide the rest
+        return {"status": "unavailable", "error": f"{name}: {exc.__class__.__name__}"}
+
+
+def main() -> int:
+    document = {
+        "remote": source("remote", collect_remote),
+        "local": source("local", collect_local),
+        "pi": source("pi", collect_pi),
+        "codex": source("codex", collect_codex),
+    }
+    print(json.dumps(document, separators=(",", ":"), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

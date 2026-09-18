@@ -1,0 +1,17 @@
+# La app se arranca desde systemd --user y no desde la extension: gnome-shell no
+# exporta WAYLAND_DISPLAY ni DBUS_SESSION_BUS_ADDRESS a sus procesos hijos, asi
+# que un spawn directo muere sin dejar rastro visible. Las unidades de usuario
+# corren dentro de la sesion de login, y ahi GTK si encuentra el compositor.
+[Unit]
+Description=PC AI Monitor (GNOME app)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=%h/.local/lib/pc-ai-monitor
+ExecStart=%h/.local/bin/pc-ai-monitor-gnome
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target

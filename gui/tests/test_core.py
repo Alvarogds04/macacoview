@@ -1,0 +1,348 @@
+# PyGObject no trae stubs propios; ver gui/typings/gi y gui/pyrightconfig.json.
+# pyright: reportAttributeAccessIssue=false
+"""Tests that need no visible window.
+
+Run with:
+
+    xvfb-run -a python3 -m unittest discover -s tests
+
+The page tests build real GTK widgets, so a display — even a virtual one — is
+required; everything else is pure logic.
+"""
+
+import unittest
+from ipaddress import ip_address
+
+from pc_ai_monitor.datos import Sample, Snapshot
+from pc_ai_monitor.formato import count, gib, percent, safe, share, tokens, whole
+from pc_ai_monitor.puertos import (
+    ALL,
+    LOCAL,
+    classify,
+    counts,
+    host_of,
+    is_wildcard,
+    parse_ss,
+    port_of,
+    service_name,
+)
+
+# La dirección no especificada, compuesta en vez de pegada como literal.
+ANY_V4 = str(ip_address(0))
+
+SS_SAMPLE = f"""tcp LISTEN 0 511 127.0.0.1:4000 0.0.0.0:* users:((\"litellm\",pid=2551494,fd=12))
+tcp LISTEN 0 4096 {ANY_V4}:22 0.0.0.0:* users:((\"sshd\",pid=900,fd=3))
+tcp LISTEN 0 4096 [fd7a:115c:a1e0::1]:443 [::]:* users:((\"tailscaled\",pid=2724,fd=21))
+udp UNCONN 0 0 127.0.0.54%lo:53 0.0.0.0:* users:((\"systemd-resolve\",pid=699,fd=18))
+"""
+
+
+class FormatoTests(unittest.TestCase):
+    def test_tokens_scale(self):
+        self.assertEqual(tokens(2_213_983_476), "2.21B")
+        self.assertEqual(tokens(146_214_033), "146.2M")
+        self.assertEqual(tokens(1_500), "1.5k")
+        self.assertEqual(tokens(42), "42")
+
+    def test_safe_and_whole_survive_garbage(self):
+        self.assertEqual(safe(None), 0.0)
+        self.assertEqual(safe("no soy un numero"), 0.0)
+        self.assertEqual(safe(True), 0.0)  # bool no es un numero valido
+        self.assertEqual(whole("2551494"), 2551494)
+        self.assertEqual(whole("x"), 0)
+
+    def test_share_clamps_and_percent(self):
+        self.assertEqual(share(50, 100), 0.5)
+        self.assertEqual(share(500, 100), 1.0)
+        self.assertEqual(share(1, 0), 0.0)
+        self.assertEqual(percent(50, 200), "25%")
+
+    def test_gib(self):
+        self.assertEqual(gib(40.571), "40.6")
+        self.assertEqual(count(18351), "18.351")
+
+
+class PuertosTests(unittest.TestCase):
+    def test_is_wildcard(self):
+        for host in ("0.0.0.0", "::", "*"):
+            self.assertTrue(is_wildcard(host), host)
+        for host in ("127.0.0.1", "::1", "100.64.0.1", "fe80::1"):
+            self.assertFalse(is_wildcard(host), host)
+
+    def test_classify(self):
+        self.assertEqual(classify("127.0.0.1:4000"), LOCAL)
+        self.assertEqual(classify(f"{ANY_V4}:22"), ALL)
+        self.assertEqual(classify("[fd7a:115c:a1e0::1]:443"), "🔷 Tailscale")
+        self.assertEqual(classify("192.168.1.5:80"), "🏠 LAN")
+        self.assertEqual(classify("[::1]:8080"), LOCAL)
+
+    def test_host_and_port(self):
+        self.assertEqual(host_of("127.0.0.53%lo:53"), "127.0.0.53")
+        self.assertEqual(port_of("[::1]:8080"), 8080)
+        self.assertEqual(port_of("*:3390"), 3390)
+
+    def test_parse_and_name(self):
+        rows = parse_ss(SS_SAMPLE)
+        self.assertEqual(len(rows), 4)
+        ports = {row.port: row for row in rows}
+        self.assertEqual(ports[4000].service, "LiteLLM Proxy")
+        self.assertEqual(ports[4000].process, "litellm")
+        self.assertEqual(ports[53].service, "DNS")
+        self.assertEqual(ports[443].process, "tailscaled")
+        self.assertTrue(ports[22].exposed)
+        self.assertFalse(ports[4000].exposed)
+        self.assertEqual(counts(rows), (3, 1, 1))
+
+    def test_service_fallback(self):
+        self.assertEqual(service_name(65500, "llama-server"), "llama.cpp")
+        self.assertEqual(service_name(65500, "algo-raro"), "algo-raro")
+
+
+class TreemapTests(unittest.TestCase):
+    def test_layout_fills_the_area_in_order(self):
+        from pc_ai_monitor.widgets.base import Slice
+        from pc_ai_monitor.widgets.graficos import _layout
+
+        slices = [
+            Slice("grande", 60, "#000"),
+            Slice("medio", 30, "#000"),
+            Slice("chico", 10, "#000"),
+        ]
+        placed = _layout(slices, (0, 0, 100, 100), True)
+
+        self.assertEqual(
+            [slice_.label for slice_, _rect in placed], ["grande", "medio", "chico"]
+        )
+        area = sum(rect[2] * rect[3] for _slice, rect in placed)
+        self.assertAlmostEqual(area, 100 * 100, delta=1.0)
+
+
+class PageTests(unittest.TestCase):
+    """Every dashboard must build and accept a snapshot: a broken column or a
+    missing block only shows up when the page is actually constructed."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import gi
+
+            gi.require_version("Gtk", "4.0")
+            from gi.repository import Gtk
+
+            if not Gtk.init_check():
+                raise unittest.SkipTest("sin display (usá xvfb-run)")
+        except ImportError as error:  # pragma: no cover
+            raise unittest.SkipTest(f"PyGObject no disponible: {error}") from error
+
+    def _snapshot(self) -> Snapshot:
+        stats = {
+            "memory": {
+                "total_gib": 122.7,
+                "used_gib": 57.5,
+                "available_gib": 65.2,
+                "swap_total_gib": 8.0,
+                "swap_used_gib": 2.3,
+            },
+            "models": [
+                {
+                    "alias": "Abito-gpt",
+                    "pid": 767149,
+                    "port": 11002,
+                    "model": "qwen.gguf",
+                    "rss_gib": 9.0,
+                    "cpu": 8.4,
+                    "gtt_gib": 40.6,
+                    "vram_gib": 0.0,
+                },
+                {
+                    "alias": "Personal-gpt",
+                    "pid": 2937,
+                    "port": 11004,
+                    "model": "lfm.gguf",
+                    "rss_gib": 0.7,
+                    "cpu": 0.0,
+                    "gtt_gib": 7.4,
+                    "vram_gib": 0.1,
+                },
+            ],
+            "groups": {
+                "pi": {"rss_gib": 2.5, "cpu": 10.0, "pids": [767149]},
+                "system": {"rss_gib": 12.0, "cpu": 1.0, "pids": [900]},
+            },
+            "processes": [
+                {
+                    "pid": 767149,
+                    "comm": "llama-server",
+                    "rss_kb": 9_000_000,
+                    "cpu": 8.4,
+                    "args": "llama-server --port 11002",
+                },
+                {
+                    "pid": 900,
+                    "comm": "sshd",
+                    "rss_kb": 5_000,
+                    "cpu": 0.1,
+                    "args": "/usr/sbin/sshd -D",
+                },
+            ],
+        }
+        tokens = {
+            "pi": {
+                "status": "ok",
+                "total": 2_213_983_476,
+                "turns": 18_351,
+                "cost_usd": 1998.9,
+                "cache_read": 2_102_997_888,
+                "models": [
+                    {
+                        "name": "gpt-5.6-sol",
+                        "provider": "openai-codex",
+                        "total": 2_213_983_476,
+                        "turns": 15_779,
+                    },
+                    {
+                        "name": "Abito-gpt",
+                        "provider": "abito-direct",
+                        "total": 0,
+                        "turns": 295,
+                    },
+                ],
+            },
+            "remote": {
+                "status": "ok",
+                "total": 56_932_796,
+                "models": [{"name": "deepseek-v4-flash", "total": 56_932_796}],
+            },
+            "local": {
+                "status": "ok",
+                "total": 0,
+                "models": [{"name": "Abito-gpt", "port": 11002, "total": 0}],
+            },
+            "codex": {
+                "status": "ok",
+                "plan": "prolite",
+                "windows": [
+                    {
+                        "label": "semanal",
+                        "used_percent": 74.0,
+                        "resets_at": "2026-09-22T06:35:20Z",
+                    }
+                ],
+            },
+        }
+        history = tuple(
+            Sample(
+                used_gib=50.0 + step,
+                available_gib=70.0 - step,
+                groups=(1.0, 0.0, 1.0, 10.0, 5.0),
+            )
+            for step in range(5)
+        )
+        return Snapshot(stats=stats, tokens=tokens, ports=SS_SAMPLE, history=history)
+
+    def test_all_dashboards_build_and_update(self):
+        from pc_ai_monitor.app import DASHBOARDS
+
+        self.assertEqual(
+            sorted(DASHBOARDS), ["procesos", "puertos", "recursos", "tokens"]
+        )
+
+        snapshot = self._snapshot()
+        for key, factory in sorted(DASHBOARDS.items()):
+            with self.subTest(dashboard=key):
+                page = factory()
+                page.update_snapshot(snapshot)
+                page.redraw()
+                self.assertGreater(len(page._blocks), 0)
+
+
+class ConfigTests(unittest.TestCase):
+    """El diálogo escribe el archivo: la ida y vuelta tiene que ser fiel."""
+
+    def test_round_trip(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        original = cfg.Config(
+            stats_interval_s=2.5,
+            theme="ghostly",
+            bar_hide_zero=False,
+            bar_only=("pi", "abito-gpt"),
+            bar_units="percent",
+            bar_models="combined",
+            ports_use_sudo=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            self.assertTrue(cfg.save(original, path))
+            loaded = cfg.load(path)
+
+        self.assertEqual(loaded.theme, "ghostly")
+        self.assertAlmostEqual(loaded.stats_interval_s, 2.5)
+        self.assertEqual(loaded.bar_only, ("pi", "abito-gpt"))
+        self.assertEqual(loaded.bar_units, "percent")
+        self.assertEqual(loaded.bar_models, "combined")
+        self.assertFalse(loaded.bar_hide_zero)
+        self.assertFalse(loaded.ports_use_sudo)
+
+    def test_broken_file_falls_back_to_defaults(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            path.write_text("[bar\nesto no es toml")
+            loaded = cfg.load(path)
+
+        self.assertEqual(loaded.theme, cfg.Config().theme)
+        self.assertTrue(loaded.bar_hide_zero)
+
+
+class SettingsTests(unittest.TestCase):
+    """El diálogo de configuración tiene que abrir y devolver la config actual.
+
+    Se construye de verdad: un atributo mal usado en una fila (por ejemplo
+    ``set_subtitle`` en un ``Adw.EntryRow``) sólo aparece al instanciarlo.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import gi
+
+            gi.require_version("Gtk", "4.0")
+            from gi.repository import Gtk
+
+            if not Gtk.init_check():
+                raise unittest.SkipTest("sin display (usá xvfb-run)")
+        except ImportError as error:  # pragma: no cover
+            raise unittest.SkipTest(f"PyGObject no disponible: {error}") from error
+
+    def test_dialog_builds_and_returns_current_config(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.settings import SettingsSection
+
+        current = cfg.Config()
+        window = SettingsSection(current, lambda updated: None)
+        collected = window._collect()
+
+        self.assertEqual(collected.theme, current.theme)
+        self.assertEqual(collected.stats_interval_s, current.stats_interval_s)
+        self.assertEqual(collected.tokens_bin, current.tokens_bin)
+        self.assertEqual(collected.ports_use_sudo, current.ports_use_sudo)
+
+        # Elegir otro tema en el combo tiene que devolver ESE tema.
+        window._theme_row.set_selected(3)
+        self.assertEqual(window._collect().theme, "ghostly")
+
+        # Y el ícono se elige por nombre.
+        window._icon_row.set_text("computer")
+        self.assertEqual(window._collect().icon, "computer")
+
+
+if __name__ == "__main__":
+    unittest.main()

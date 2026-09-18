@@ -1,0 +1,11 @@
+{
+  "include": ["pc_ai_monitor", "tests"],
+  "extraPaths": ["."],
+  "stubPath": "typings",
+  "typeCheckingMode": "standard",
+  "reportMissingTypeStubs": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "pythonVersion": "3.12"
+}
