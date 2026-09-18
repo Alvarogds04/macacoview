@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Local Pi runtime state
+.atl/
+
+# Python: la app GNOME se ejecuta desde ~/.local, el bytecode no se versiona
+__pycache__/
+*.py[cod]
+
+# Estado local del agente (preflight de SDD, caches de sesion)
+.pi/
