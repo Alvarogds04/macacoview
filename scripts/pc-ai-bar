@@ -1,0 +1,13 @@
+#!/bin/bash
+# Panel entry point for PC-AI Monitor.
+# No arguments: the classic compact bar line.
+# With arguments: forwarded to the collector (for example --pill).
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    set -- --bar
+fi
+
+# Resolved from $HOME: the first version hard-coded one user's home directory,
+# which is why the pill worked on exactly one machine.
+exec "$HOME/.local/bin/pc-ai-stats" "$@"

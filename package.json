@@ -1,5 +1,5 @@
 {
-  "name": "pc-ai-monitor",
+  "name": "@alvarogds04/pc-ai-monitor",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -21,5 +21,13 @@
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
     "@tauri-apps/cli": "^2"
-  }
+  },
+  "description": "PC-AI Monitor",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ]
 }

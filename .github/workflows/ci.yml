@@ -126,3 +126,39 @@ jobs:
               sys.exit("pc-ai-stats no longer reads /proc: update this")
           print("expected: pc-ai-stats is Linux-only and needs a macOS sibling")
           PY
+
+  # A machine that is not mine: install into a fresh user and require real data.
+  # The check job above cannot catch this class of bug -- it never runs install.sh,
+  # which is exactly how the app shipped without its three collectors.
+  install-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a32679bbb6499e6d2e904aca496e8c4a8 # v4
+        with:
+          persist-credentials: false
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-1 libadwaita-1-0 gir1.2-adw-1 gir1.2-gtk-4.0 \
+            python3-gi python3-gi-cairo xvfb
+
+      - name: Install as a user with no prior state
+        run: |
+          sudo useradd -m -s /bin/bash friend
+          sudo -u friend -H bash gui/install.sh
+
+      - name: The app must find its collectors and report data
+        run: |
+          out=$(sudo -u friend -H xvfb-run -a python3 -m pc_ai_monitor --self-test 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "errores ninguno" || { echo "FALLO: la app no consiguio datos"; exit 1; }
+          echo "$out" | grep -q "stats True" || { echo "FALLO: pc-ai-stats no encontrado"; exit 1; }
+          pill=$(sudo -u friend -H "$HOME/.local/bin/pc-ai-bar" --pill 2>&1 || true)
+          echo "pill: $pill"
+
+      - name: Config must not contain the runner's home path
+        run: |
+          cfg=$(sudo -u friend -H cat .config/pc-ai-monitor/config.toml)
+          echo "$cfg" | grep -q '"~/' || { echo "FALLO: el template embebe una ruta absoluta"; exit 1; }

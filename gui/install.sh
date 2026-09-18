@@ -42,6 +42,12 @@ rm -rf "$lib"
 mkdir -p "$lib" "$bin" "$apps"
 cp -r "$root/pc_ai_monitor" "$lib/"
 
+# The collectors: the app shells out to these, so an install without them opens
+# with empty dashboards. They live in ../scripts, not in this directory.
+for tool in pc-ai-stats pc-ai-tokens pc-ai-bar; do
+  install -m 755 "$root/../scripts/$tool" "$bin/$tool"
+done
+
 cat > "$bin/pc-ai-monitor-gnome" <<LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
@@ -85,6 +91,16 @@ install -m 644 "$root/systemd/pc-ai-monitor-gnome.service" \
   "$HOME/.config/systemd/user/pc-ai-monitor-gnome.service"
 systemctl --user daemon-reload || true
 
+# AMD GPUs read GTT through a root-owned helper. Without it the app degrades to
+# 0 rather than failing, but the number is the reason the pill is useful, so we
+# say what is missing instead of showing a silent zero. Installing it needs
+# root, which this script does not assume:
+#   sudo install -m 755 scripts/root/amdgpu-gem-info-read /usr/local/bin/
+#   echo "$USER ALL=(root) NOPASSWD: /usr/local/bin/amdgpu-gem-info-read" | sudo tee /etc/sudoers.d/pc-ai-monitor
+if ! sudo -n /usr/local/bin/amdgpu-gem-info-read >/dev/null 2>&1; then
+  echo "aviso: sin amdgpu-gem-info-read, la memoria de GPU AMD saldra en 0" >&2
+fi
+
 # Config template, never overwriting an existing file.
 PYTHONPATH="$lib" python3 -c \
   "from pc_ai_monitor.config import write_template; write_template()" || true
@@ -92,6 +108,7 @@ PYTHONPATH="$lib" python3 -c \
 echo "Instalado:"
 echo "  $lib"
 echo "  $bin/pc-ai-monitor-gnome"
+echo "  $bin/pc-ai-stats, pc-ai-tokens, pc-ai-bar"
 echo "  $apps/pc-ai-monitor-gnome.desktop"
 echo "  extension pc-ai-monitor@alvaro"
 echo "  systemd --user pc-ai-monitor-gnome.service"

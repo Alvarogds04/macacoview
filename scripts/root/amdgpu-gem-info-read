@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /usr/bin/cat /sys/kernel/debug/dri/0/amdgpu_gem_info
