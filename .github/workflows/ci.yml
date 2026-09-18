@@ -45,8 +45,8 @@ jobs:
           # Ubuntu 24.04 does not carry them under the Debian names.
           apt_cache=$(dpkg -S libadwaita 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
           echo "paquetes libadwaita instalables: ${apt_cache}"
-          typelib_adw=$(apt-cache search --names-only 'gir1.2-adw.*' | awk '{print $1}' | head -1)
-          typelib_gtk=$(apt-cache search --names-only 'gir1.2-gtk-4.*' | awk '{print $1}' | head -1)
+          typelib_adw=$(apt-cache --no-generics -R '^gir1\\.2-adw' show | awk -F': ' '/^Package/{print $2}' | head -1)
+          typelib_gtk=$(apt-cache --no-generics -R '^gir1\\.2-gtk-4' show | awk -F': ' '/^Package/{print $2}' | head -1)
           sudo apt-get install -y --no-install-recommends \
             libgtk-4-1 libadwaita-1-0 python3-gi python3-gi-cairo xvfb
           for pkg in "$typelib_adw" "$typelib_gtk"; do
