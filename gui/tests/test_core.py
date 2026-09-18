@@ -398,7 +398,14 @@ class ExtensionTests(unittest.TestCase):
             # part needs a real GNOME session.
             self.skipTest("gnome-shell not installed on this host")
         out = subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True)
-        current = out.stdout.strip().split()[-1].split(".")[0]
+        words = out.stdout.strip().split()
+        # ubuntu-24.04 runners DO ship gnome-shell on PATH -- it comes in as a
+        # desktop dependency -- but it answers with an empty stdout there. A
+        # version that cannot be parsed is not a host without GNOME: skip, do
+        # not invent a comparison.
+        if out.returncode != 0 or not words or not words[-1][0].isdigit():
+            self.skipTest(f"gnome-shell no reporto version: {out.stdout!r}")
+        current = words[-1].split(".")[0]
         self.assertIn(current, supported, f"shell {current} no esta soportado")
 
     def test_class_matches_metadata_uuid(self):
