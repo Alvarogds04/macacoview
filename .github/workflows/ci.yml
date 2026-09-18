@@ -1,0 +1,107 @@
+# yamllint disable rule:line-length
+name: ci
+
+# 0.2.0 is reserved for "runs on macOS the same way it does here". This workflow
+# is what turns that into a measurable gate instead of a feeling: the two jobs
+# below report, per push, which layers actually hold on each OS.
+#
+# What is proven here vs. what is not:
+#   - The Rust parsers run on both OSes because their fixtures are synthetic
+#     strings (`ports.rs` parses `ss` output and never reads /proc), so a green
+#     macos test suite does NOT mean port collection works on macOS.
+#   - Collection is the part that does not port: `ports.rs` shells out to `ss`
+#     (Linux-only) and `collector.rs` shells out to the pc-ai-* scripts, which
+#     read /proc. Those need a macOS implementation before they can be gated.
+#
+# Deliberately absent: an npm publish / release job. There is no portable binary
+# to package yet, and a half-working Mac artifact is worse than a red check that
+# names what is missing.
+#
+# Third-party actions are pinned by commit SHA: a mutable version tag can be
+# moved by whoever owns the repo, and this workflow runs with a GITHUB_TOKEN.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Linux: the platform the app runs on today. Everything here must be green.
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a32679bbb6499e6d2e904aca496e8c4a8 # v4
+        with:
+          persist-credentials: false
+
+      - name: System deps (GTK 4 + libadwaita + PyGObject)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-1 libadwaita-1 python3-gi python3-gi-cairo \
+            gir1.2-gtk-4.0 gir1.2-adw-1 xvfb
+
+      - uses: actions/setup-node@49933ea5288ca242134a44a9fa8eff3a1117754d # v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Frontend typecheck and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Extension syntax
+        run: node --check gui/gnome-extension/extension.js
+
+      - name: Python tests (headless, under xvfb)
+        working-directory: gui
+        run: xvfb-run -a python3 -m unittest discover -s tests
+
+  # macOS: the honest diagnostic. It compiles, runs the pure parsers and builds
+  # the frontend. It keeps failing on anything that still assumes Linux, and
+  # that failure is the list of work left for 0.2.0.
+  check-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a32679bbb6499e6d2e904aca496e8c4a8 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288ca242134a44a9fa8eff3a1117754d # v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+
+      - name: Rust tests (parsers only -- collection is not portable yet)
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Frontend typecheck and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Record which layer is still Linux-only
+        run: |
+          # ss and /proc do not exist here. This step documents the gap instead
+          # of pretending the collectors work, so a red run names the missing
+          # piece rather than a stack trace.
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          stats = pathlib.Path("scripts/pc-ai-stats").read_text()
+          if "/proc" not in stats:
+              sys.exit("pc-ai-stats no longer reads /proc: update this")
+          print("expected: pc-ai-stats is Linux-only and needs a macOS sibling")
+          PY
