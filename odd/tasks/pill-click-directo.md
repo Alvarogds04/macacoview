@@ -62,3 +62,14 @@ Dos defectos separados:
 
 - Recargar GNOME Shell: `Alt+F2` y despus `r`. Sin eso el clic izquierdo sigue
   abriendo el men viejo.
+
+## Seguido (fuera del scope original, salió de aca)
+
+- [x] `metadata.json`: `shell-version` de `["50"]` a `["45".."50"]`. Con el pin
+      viejo gnome-shell rechazaba cargar la extension en cualquier otra release,
+      sin aviso visible para el usuario.
+- [x] `const BAR` tambien resolvio `$HOME` (quedaba una ruta de usuario).
+- [x] `ExtensionTests` (6 tests) pinan: cero rutas literales, clic izq por
+      systemd, menu sin items informativos, nombre de clase exportada, parser
+      `|` intacto, y que el shell de la maquina este en la lista soportada.
+- Total: 20 tests OK. Tag 0.1.0 movido al HEAD de la linea base.

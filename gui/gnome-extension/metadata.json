@@ -3,6 +3,11 @@
   "description": "Monitor PC-AI de modelos y recursos",
   "uuid": "pc-ai-monitor@alvaro",
   "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
     "50"
   ]
 }

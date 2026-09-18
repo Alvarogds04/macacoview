@@ -11,6 +11,7 @@ required; everything else is pure logic.
 """
 
 import json
+import subprocess
 import unittest
 from ipaddress import ip_address
 from pathlib import Path
@@ -377,6 +378,22 @@ class ExtensionTests(unittest.TestCase):
     def test_menu_has_no_informational_items(self):
         self.assertNotIn("_statusItem", self.js)
         self.assertNotIn("PopupSeparatorMenuItem", self.js)
+
+    def test_shell_version_covers_the_running_shell(self):
+        """A pin to one shell release silently bricks the pill on other distros.
+
+        The extension uses ESM imports, PanelMenu.Button and
+        communicate_utf8_async only, which is the GNOME 45+ API surface, so 45
+        is the honest floor rather than every release we cannot test.
+        """
+        supported = self.meta["shell-version"]
+        self.assertIn("45", supported)
+        self.assertIn("50", supported)
+        self.assertNotIn("42", supported, "no declare soporte de lo no probado")
+
+        out = subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True)
+        current = out.stdout.strip().split()[-1].split(".")[0]
+        self.assertIn(current, supported, f"shell {current} no esta soportado")
 
     def test_class_matches_metadata_uuid(self):
         self.assertEqual(self.meta["uuid"], "pc-ai-monitor@alvaro")
