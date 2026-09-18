@@ -40,16 +40,12 @@ jobs:
       - name: System deps (GTK 4 + libadwaita + PyGObject)
         run: |
           sudo apt-get update
-          # `libadwaita-1` does not exist: the runtime is `libadwaita-1-0`. The
-          # typelib package names are resolved here instead of guessed, because
-          # Ubuntu 24.04 does not carry them under the Debian names.
-          # The typelib package is not called gir1.2-adw-1 on Ubuntu 24.04, so
-          # it is looked up rather than hard-coded. Every probe is `|| true`:
-          # under `set -euo pipefail` a pipeline ending in `head` returns 1 on
-          # SIGPIPE, which used to kill this step after apt had already
-          # succeeded. A missing typelib must degrade, not abort the install.
-          typelib_adw=$(apt-cache --no-generics -R '^gir1[.]2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true
-          typelib_gtk=$(apt-cache --no-generics -R '^gir1[.]2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true
+          # Ubuntu 24.04 ships the runtime as libadwaita-1-0, not libadwaita-1, and
+          # the typelib names are looked up here rather than guessed. Every probe
+          # ends in `|| true`: under `set -euo pipefail` a pipeline whose last
+          # command closes early used to kill this step after apt had succeeded.
+          typelib_adw=$(apt-cache --no-generics -R '^gir1[.]2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
+          typelib_gtk=$(apt-cache --no-generics -R '^gir1[.]2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
           echo "typelibs resueltos: adw='${typelib_adw}' gtk='${typelib_gtk}'"
           for pkg in ${typelib_adw} ${typelib_gtk}; do
             sudo apt-get install -y --no-install-recommends "$pkg" || echo "aviso: $pkg no instalable"
