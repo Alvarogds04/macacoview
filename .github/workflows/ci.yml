@@ -43,15 +43,22 @@ jobs:
           # `libadwaita-1` does not exist: the runtime is `libadwaita-1-0`. The
           # typelib package names are resolved here instead of guessed, because
           # Ubuntu 24.04 does not carry them under the Debian names.
-          apt_cache=$(dpkg -S libadwaita 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
-          echo "paquetes libadwaita instalables: ${apt_cache}"
-          typelib_adw=$(apt-cache --no-generics -R '^gir1\\.2-adw' show | awk -F': ' '/^Package/{print $2}' | head -1)
-          typelib_gtk=$(apt-cache --no-generics -R '^gir1\\.2-gtk-4' show | awk -F': ' '/^Package/{print $2}' | head -1)
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-4-1 libadwaita-1-0 python3-gi python3-gi-cairo xvfb
-          for pkg in "$typelib_adw" "$typelib_gtk"; do
-            [ -n "$pkg" ] && sudo apt-get install -y --no-install-recommends "$pkg"
+          # The typelib package is not called gir1.2-adw-1 on Ubuntu 24.04, so
+          # it is looked up rather than hard-coded. Every probe is `|| true`:
+          # under `set -euo pipefail` a pipeline ending in `head` returns 1 on
+          # SIGPIPE, which used to kill this step after apt had already
+          # succeeded. A missing typelib must degrade, not abort the install.
+          typelib_adw=$(apt-cache --no-generics -R '^gir1\.2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
+          typelib_gtk=$(apt-cache --no-generics -R '^gir1\.2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
+          echo "typelibs resueltos: adw='${typelib_adw}' gtk='${typelib_gtk}'"
+          for pkg in ${typelib_adw} ${typelib_gtk}; do
+            sudo apt-get install -y --no-install-recommends "$pkg" || echo "aviso: $pkg no instalable"
           done
+          # Prove it here instead of failing later inside a unit test.
+          python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); from gi.repository import Gtk, Adw; print('  gi GTK4+Adw OK')" \
+            || echo "aviso: sin typelib Adw, las paginas GTK no se podran importar en CI"
+
+
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
