@@ -3,6 +3,7 @@ mod ports;
 mod ring_buffer;
 mod collector;
 mod commands;
+mod tokens;
 
 use collector::start_sampling_loop;
 

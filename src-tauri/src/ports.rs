@@ -49,6 +49,7 @@ static NAMED_PORTS: &[(u16, &str)] = &[
     (3306, "MariaDB"),
     (3389, "Remote Desktop"),
     (3390, "Remote Desktop"),
+    (4000, "LiteLLM Proxy"),
     (4171, "Abito CV agent-1"),
     (4172, "Abito CV agent-2"),
     (4174, "Abito CV agent-4"),
@@ -480,6 +481,11 @@ mod tests {
     #[test]
     fn test_named_port_nginx() {
         assert_eq!(name_service(80, "nginx"), "Nginx / HTTP");
+    }
+
+    #[test]
+    fn test_named_port_4000() {
+        assert_eq!(name_service(4000, "litellm"), "LiteLLM Proxy");
     }
 
     #[test]

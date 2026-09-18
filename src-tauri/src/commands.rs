@@ -8,5 +8,5 @@ use crate::collector::{CollectorState, read_state};
 pub fn get_state(
     state: State<'_, std::sync::Arc<parking_lot::Mutex<CollectorState>>>,
 ) -> crate::collector::GetState {
-    read_state(&state.inner())
+    read_state(state.inner())
 }

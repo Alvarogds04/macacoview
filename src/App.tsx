@@ -2,11 +2,13 @@ import "./App.css";
 import { useState } from "react";
 import { useAppState } from "./hooks/useAppState";
 import { Recursos } from "./components/Recursos";
+import { Tokens } from "./components/Tokens";
 import { Puertos } from "./components/Puertos";
 import { Procesos } from "./components/Procesos";
 
 const TABS = [
   { key: "recursos", label: "Recursos" },
+  { key: "tokens", label: "Tokens" },
   { key: "puertos", label: "Puertos" },
   { key: "procesos", label: "Procesos" },
 ] as const;
@@ -42,6 +44,10 @@ function App() {
       <main className="tab-content">
         {activeTab === "recursos" && (
           <Recursos snapshot={snapshot} error={error} history={history} />
+        )}
+
+        {activeTab === "tokens" && (
+          <Tokens snapshot={snapshot} error={error} />
         )}
 
         {activeTab === "puertos" && (

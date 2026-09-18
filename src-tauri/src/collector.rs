@@ -9,6 +9,12 @@ use serde::Serialize;
 use crate::ports::{parse_ss_output, PortRow};
 use crate::ring_buffer::{sample_from_stats, HistorySample, RingBuffer, RING_BUFFER_CAPACITY};
 use crate::stats::{Groups, Memory, Model, Process, Stats};
+use crate::tokens::{collect_tokens, Tokens};
+
+/// Token counters come from Prometheus, every llama.cpp server, a transcript
+/// scan and codexbar: too heavy for the one-second loop. They refresh on their
+/// own cadence and the last value is carried into every snapshot.
+const TOKENS_INTERVAL_SECS: u64 = 10;
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -22,6 +28,7 @@ pub struct FullSnapshot {
     pub groups: Groups,
     pub processes: Vec<Process>,
     pub ports: Vec<PortRow>,
+    pub tokens: Option<Tokens>,
 }
 
 /// The payload returned by the `get_state` command.
@@ -35,6 +42,7 @@ pub struct GetState {
 pub struct CollectorState {
     snapshot: Option<FullSnapshot>,
     history: RingBuffer<HistorySample>,
+    tokens: Option<Tokens>,
 }
 
 impl CollectorState {
@@ -42,6 +50,7 @@ impl CollectorState {
         Self {
             snapshot: None,
             history: RingBuffer::new(RING_BUFFER_CAPACITY),
+            tokens: None,
         }
     }
 
@@ -61,7 +70,17 @@ impl CollectorState {
             groups: stats.groups,
             processes: stats.processes,
             ports,
+            tokens: self.tokens.clone(),
         });
+    }
+
+    /// Publish fresh token counters. They land on the stored snapshot too, so
+    /// the tab is populated immediately instead of waiting up to a second.
+    fn set_tokens(&mut self, tokens: Tokens) {
+        self.tokens = Some(tokens.clone());
+        if let Some(snapshot) = self.snapshot.as_mut() {
+            snapshot.tokens = Some(tokens);
+        }
     }
 
     pub fn get_state(&self) -> GetState {
@@ -152,9 +171,26 @@ pub fn start_sampling_loop() -> Arc<Mutex<CollectorState>> {
 
     thread::spawn({
         let state = Arc::clone(&state);
-        move || loop {
-            run_tick(&state);
-            thread::sleep(Duration::from_secs(1));
+        move || {
+            let mut tick: u64 = 0;
+            loop {
+                run_tick(&state);
+
+                // Tick zero collects too, so the tab fills on startup.
+                if tick.is_multiple_of(TOKENS_INTERVAL_SECS) {
+                    match collect_tokens() {
+                        Ok(tokens) => state.lock().set_tokens(tokens),
+                        // Keep the previous value: a transient failure must not
+                        // blank a section that was showing real numbers.
+                        Err(error) => {
+                            eprintln!("collector: tokens collection failed: {error}")
+                        }
+                    }
+                }
+
+                tick += 1;
+                thread::sleep(Duration::from_secs(1));
+            }
         }
     });
 
@@ -213,6 +249,34 @@ mod tests {
         let history = state.history.samples();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].used_gib, 40.0);
+    }
+
+    #[test]
+    fn test_set_tokens_reaches_snapshot() {
+        // Token counters arrive on their own cadence: they must show up on the
+        // next snapshot without waiting for a new stats collection.
+        let mut state = CollectorState::new();
+        let stats: Stats = serde_json::from_str(
+            r#"{"memory": {"total_gib": 1.0, "used_gib": 0.5, "available_gib": 0.5,
+                "swap_total_gib": 0.0, "swap_used_gib": 0.0},
+                "models": [], "groups": {}, "processes": []}"#,
+        )
+        .expect("fixture must parse");
+
+        state.apply(stats.clone(), Vec::new());
+        assert!(state.snapshot.as_ref().unwrap().tokens.is_none());
+
+        let tokens: Tokens = serde_json::from_str(
+            r#"{"remote": {"status": "ok", "total": 42}}"#,
+        )
+        .expect("tokens fixture must parse");
+        state.set_tokens(tokens);
+
+        assert_eq!(state.snapshot.as_ref().unwrap().tokens.as_ref().unwrap().remote.total, 42);
+
+        // And they survive the next stats tick.
+        state.apply(stats, Vec::new());
+        assert_eq!(state.snapshot.as_ref().unwrap().tokens.as_ref().unwrap().remote.total, 42);
     }
 
     #[test]
