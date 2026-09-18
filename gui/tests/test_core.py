@@ -11,6 +11,7 @@ required; everything else is pure logic.
 """
 
 import json
+import shutil
 import subprocess
 import unittest
 from ipaddress import ip_address
@@ -391,6 +392,11 @@ class ExtensionTests(unittest.TestCase):
         self.assertIn("50", supported)
         self.assertNotIn("42", supported, "no declare soporte de lo no probado")
 
+        if shutil.which("gnome-shell") is None:
+            # A headless CI box has no shell to match against: the release list
+            # is still checked above, only the "this machine's shell is listed"
+            # part needs a real GNOME session.
+            self.skipTest("gnome-shell not installed on this host")
         out = subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True)
         current = out.stdout.strip().split()[-1].split(".")[0]
         self.assertIn(current, supported, f"shell {current} no esta soportado")
