@@ -96,7 +96,7 @@ impl CollectorState {
 // ---------------------------------------------------------------------------
 
 fn collect_stats() -> Result<Stats, String> {
-    let output = Command::new("/home/alvaro/.local/bin/pc-ai-stats")
+    let output = Command::new(pc_ai_stats_bin())
         .output()
         .map_err(|e| format!("pc-ai-stats: {e}"))?;
 
@@ -116,6 +116,13 @@ fn collect_stats() -> Result<Stats, String> {
 
 /// Read the privileged listener table. The helper is invoked with an argv
 /// array only: no shell, no interpolation, and no option beyond `-n`.
+/// The collectors ship under $HOME/.local/bin; hard-coding a home directory is
+/// what made the suite pass on exactly one machine.
+fn pc_ai_stats_bin() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/.local/bin/pc-ai-stats")
+}
+
 fn collect_ports() -> Result<Vec<PortRow>, String> {
     let output = Command::new("sudo")
         .args(["-n", "/usr/local/bin/pc-ai-ports-read"])
@@ -211,7 +218,8 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    const BASELINE: &str = "/home/alvaro/.local/state/pc-ai-monitor/backups/20260917T125433Z-pre-tauri/baseline/ports-ss.txt";
+    const BASELINE: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ports_ss.txt");
 
     #[test]
     fn test_collect_ports_from_baseline() {

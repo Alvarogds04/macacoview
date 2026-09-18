@@ -488,6 +488,13 @@ mod tests {
         assert_eq!(name_service(4000, "litellm"), "LiteLLM Proxy");
     }
 
+    fn fixture_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
     #[test]
     fn test_named_port_11002() {
         // Port 11002 is "Abito-gpt" in the named table
@@ -663,14 +670,15 @@ udp UNCONN 0      0                                        0.0.0.0:5353  0.0.0.0
         assert_eq!(rows[3].proto, "udp");
     }
 
-    // ---- Full baseline integration test ----
+    // ---- Fixture integration test ----
 
     #[test]
     fn test_parse_baseline_ports_file() {
-        let input = std::fs::read_to_string(
-            "/home/alvaro/.local/state/pc-ai-monitor/backups/20260917T125433Z-pre-tauri/baseline/ports-ss.txt",
-        )
-        .expect("baseline file should be readable");
+        // Synthetic `ss` capture committed under tests/fixtures. The previous
+        // version read a real capture from one developer's home directory, so
+        // it only passed on that machine -- and on a Linux runner by accident.
+        let input = std::fs::read_to_string(fixture_path("ports_ss.txt"))
+            .expect("the committed fixture should be readable");
         let rows = parse_ss_output(&input);
 
         // Find port 11002 row
@@ -689,14 +697,17 @@ udp UNCONN 0      0                                        0.0.0.0:5353  0.0.0.0
             "port 11002 (127.0.0.1) should be Local"
         );
 
-        // Count exposed-to-all-interfaces (Classification::Todas).
-        // The baseline holds 12 such listeners: tcp *:11434, *:3389, *:3390,
-        // 0.0.0.0:22, 0.0.0.0:80, [::]:22, [::]:80, plus udp 0.0.0.0:34530,
-        // 0.0.0.0:41641, 0.0.0.0:5353, [::]:41641 and [::]:5353.
+        // Count exposed-to-all-interfaces (Classification::Todas). This count
+        // travels with the committed fixture instead of describing one
+        // developer's machine, which is what the old `== 12` did.
         let exposed_count = rows
             .iter()
             .filter(|r| matches!(r.classification, Classification::Todas))
             .count();
-        assert_eq!(exposed_count, 12, "exposed-to-all count should be 12");
+        // 13 rows in the fixture have a WILDCARD LOCAL address (0.0.0.0 / * /
+        // [::]). Only the local column is classified, so the 7 further lines
+        // whose *peer* is 0.0.0.0:* are not exposed listeners. If the fixture
+        // changes, recount the local column -- do not reuse a private capture.
+        assert_eq!(exposed_count, 13, "fixture: 13 wildcard local listeners");
     }
 }

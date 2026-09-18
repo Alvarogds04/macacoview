@@ -1,7 +1,7 @@
 //! Token consumption per source.
 //!
 //! The aggregation lives in `scripts/pc-ai-tokens` (installed as
-//! `/home/alvaro/.local/bin/pc-ai-tokens`), which talks to Prometheus,
+//! `$HOME/.local/bin/pc-ai-tokens`), which talks to Prometheus,
 //! llama.cpp, the Pi session transcripts and codexbar. This module only runs it
 //! and deserializes the document: keeping the four sources out of the Rust tree
 //! avoids adding an HTTP client to an app that needs none.
@@ -14,7 +14,10 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-const TOKENS_BIN: &str = "/home/alvaro/.local/bin/pc-ai-tokens";
+fn tokens_bin() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/.local/bin/pc-ai-tokens")
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -126,7 +129,7 @@ pub struct Tokens {
 /// Run the collector and parse its document. Errors are returned so the caller
 /// can log them and keep the previous value instead of blanking the section.
 pub fn collect_tokens() -> Result<Tokens, String> {
-    let output = Command::new(TOKENS_BIN)
+    let output = Command::new(tokens_bin())
         .output()
         .map_err(|e| format!("pc-ai-tokens: {e}"))?;
 
