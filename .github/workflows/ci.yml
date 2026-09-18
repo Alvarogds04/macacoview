@@ -40,15 +40,25 @@ jobs:
       - name: System deps (GTK 4 + libadwaita + PyGObject)
         run: |
           sudo apt-get update
+          # `libadwaita-1` does not exist: the runtime is `libadwaita-1-0`. The
+          # typelib package names are resolved here instead of guessed, because
+          # Ubuntu 24.04 does not carry them under the Debian names.
+          apt_cache=$(dpkg -S libadwaita 2>/dev/null | cut -d: -f1 | sort -u | tr '\n' ' ')
+          echo "paquetes libadwaita instalables: ${apt_cache}"
+          typelib_adw=$(apt-cache search --names-only 'gir1.2-adw.*' | awk '{print $1}' | head -1)
+          typelib_gtk=$(apt-cache search --names-only 'gir1.2-gtk-4.*' | awk '{print $1}' | head -1)
           sudo apt-get install -y --no-install-recommends \
-            libgtk-4-1 libadwaita-1 python3-gi python3-gi-cairo \
-            gir1.2-gtk-4.0 gir1.2-adw-1 xvfb
+            libgtk-4-1 libadwaita-1-0 python3-gi python3-gi-cairo xvfb
+          for pkg in "$typelib_adw" "$typelib_gtk"; do
+            [ -n "$pkg" ] && sudo apt-get install -y --no-install-recommends "$pkg"
+          done
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+      - name: Rust toolchain (preinstalled on this runner image)
+        run: rustc --version && cargo --version
 
       - name: Rust tests
         working-directory: src-tauri
@@ -80,7 +90,8 @@ jobs:
         with:
           node-version: 22
 
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # stable
+      - name: Rust toolchain (preinstalled on this runner image)
+        run: rustc --version && cargo --version
 
       - name: Rust tests (parsers only -- collection is not portable yet)
         working-directory: src-tauri
