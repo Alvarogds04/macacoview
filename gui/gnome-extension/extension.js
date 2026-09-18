@@ -9,7 +9,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BAR = '/home/alvaro/.local/bin/pc-ai-bar';
+const BAR = GLib.getenv('HOME') + '/.local/bin/pc-ai-bar';
 const SERVICE = 'pc-ai-monitor-gnome.service';
 const LAUNCHER =
     GLib.getenv('HOME') + '/.local/bin/pc-ai-monitor-gnome';
@@ -96,20 +96,6 @@ export default class PcAiMonitorExtension extends Extension {
             this._openApp();
             return Clutter.EVENT_STOP;
         });
-
-        this._indicator.menu.addMenuItem(
-            new PopupMenu.PopupSeparatorMenuItem()
-        );
-
-        this._statusItem =
-            new PopupMenu.PopupMenuItem(
-                'Actualizando…',
-                {reactive: false}
-            );
-
-        this._indicator.menu.addMenuItem(
-            this._statusItem
-        );
 
         Main.panel.addToStatusArea(
             'pc-ai-monitor',
@@ -232,10 +218,6 @@ export default class PcAiMonitorExtension extends Extension {
                                         `${used.toFixed(1)}G`;
                                     this._chipsLabel.text = chips;
 
-                                    if (this._statusItem)
-                                        this._statusItem.label.text =
-                                            `🧠 ${used.toFixed(1)}G / ${total.toFixed(1)}G`;
-
                                     return;
                                 }
                             }
@@ -269,9 +251,6 @@ export default class PcAiMonitorExtension extends Extension {
         this._fill.width = 0;
         this._ramLabel.text = '0.0G';
         this._chipsLabel.text = text;
-        if (this._statusItem)
-            this._statusItem.label.text =
-                text === '🖥 ?' ? 'Sin datos' : 'Error';
     }
 
     disable() {
@@ -296,6 +275,5 @@ export default class PcAiMonitorExtension extends Extension {
         this._ramLabel = null;
         this._sep = null;
         this._chipsLabel = null;
-        this._statusItem = null;
     }
 }

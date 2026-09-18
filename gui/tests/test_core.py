@@ -10,8 +10,10 @@ The page tests build real GTK widgets, so a display — even a virtual one — i
 required; everything else is pure logic.
 """
 
+import json
 import unittest
 from ipaddress import ip_address
+from pathlib import Path
 
 from pc_ai_monitor.datos import Sample, Snapshot
 from pc_ai_monitor.formato import count, gib, percent, safe, share, tokens, whole
@@ -64,7 +66,9 @@ class FormatoTests(unittest.TestCase):
 
 class PuertosTests(unittest.TestCase):
     def test_is_wildcard(self):
-        for host in ("0.0.0.0", "::", "*"):
+        # Test fixtures: these assert is_wildcard() REJECTS wildcard addresses.
+        # Nothing in this project binds to all interfaces.
+        for host in ("0.0.0.0", "::", "*"):  # noqa: S104
             self.assertTrue(is_wildcard(host), host)
         for host in ("127.0.0.1", "::1", "100.64.0.1", "fe80::1"):
             self.assertFalse(is_wildcard(host), host)
@@ -346,3 +350,44 @@ class SettingsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtensionTests(unittest.TestCase):
+    """The pill is plain JS with no runtime to exercise here, so these tests
+    pin the structure that broke: a user path baked into the source, a click
+    that opened a one-item menu, and a class name the shell reload needs."""
+
+    EXT = Path(__file__).resolve().parent.parent / "gnome-extension"
+
+    def setUp(self):
+        self.js = (self.EXT / "extension.js").read_text()
+        self.meta = json.loads((self.EXT / "metadata.json").read_text())
+
+    def test_no_hardcoded_user_paths(self):
+        self.assertNotIn("/home/", self.js)
+        self.assertIn("GLib.getenv('HOME')", self.js)
+
+    def test_left_click_opens_app_without_a_menu(self):
+        self.assertIn("button-press-event", self.js)
+        self.assertIn("Clutter.EVENT_STOP", self.js)
+        # The launch goes through systemd: gnome-shell gives its children no
+        # session environment, so a direct spawn dies silently.
+        self.assertIn("['systemctl', '--user', 'start', SERVICE]", self.js)
+
+    def test_menu_has_no_informational_items(self):
+        self.assertNotIn("_statusItem", self.js)
+        self.assertNotIn("PopupSeparatorMenuItem", self.js)
+
+    def test_class_matches_metadata_uuid(self):
+        self.assertEqual(self.meta["uuid"], "pc-ai-monitor@alvaro")
+        # No `class` key in metadata: the shell finds the single exported
+        # default class, and renaming it breaks live reloads.
+        self.assertNotIn("class", self.meta)
+        self.assertIn("export default class PcAiMonitorExtension", self.js)
+
+    def test_parsers_survive_the_click_fix(self):
+        # The collector protocol is "<used>|<total>|<chips>"; the rewrite of
+        # enable() must not have touched how that gets read.
+        self.assertIn("communicate_utf8_async", self.js)
+        self.assertIn("split('|')", self.js)
+        self.assertEqual(self.js.count("("), self.js.count(")"))
