@@ -37,24 +37,34 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: System deps (GTK 4 + libadwaita + PyGObject)
+      - name: System deps (GTK 4 + libadwaita + PyGObject + Rust build headers)
         run: |
           sudo apt-get update
-          # Ubuntu 24.04 ships the runtime as libadwaita-1-0, not libadwaita-1, and
-          # the typelib names are looked up here rather than guessed. Every probe
-          # ends in `|| true`: under `set -euo pipefail` a pipeline whose last
-          # command closes early used to kill this step after apt had succeeded.
-          typelib_adw=$(apt-cache --no-generics -R '^gir1[.]2-adw' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
-          typelib_gtk=$(apt-cache --no-generics -R '^gir1[.]2-gtk-4' show 2>/dev/null | awk -F': ' '/^Package/{print $2; exit}' || true)
-          echo "typelibs resueltos: adw='${typelib_adw}' gtk='${typelib_gtk}'"
-          for pkg in ${typelib_adw} ${typelib_gtk}; do
-            sudo apt-get install -y --no-install-recommends "$pkg" || echo "aviso: $pkg no instalable"
+          # Runtime + typelibs for the Python/GTK tests. Ubuntu names the
+          # libadwaita runtime libadwaita-1-0; the gir1.2 packages are resolved
+          # by lookup because they differ from Debian's names.
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-1 libadwaita-1-0 python3-gi python3-gi-cairo xvfb
+          for pat in '^gir1[.]2-adw' '^gir1[.]2-gtk-4'; do
+            pkg=$(apt-cache --no-generics -R "$pat" show 2>/dev/null \
+                  | awk -F': ' '/^Package/{print $2; exit}') || true
+            [ -n "${pkg:-}" ] && sudo apt-get install -y --no-install-recommends "$pkg" \
+              || echo "aviso: sin typelib para $pat"
           done
-          # Prove it here instead of failing later inside a unit test.
-          python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); from gi.repository import Gtk, Adw; print('  gi GTK4+Adw OK')" \
-            || echo "aviso: sin typelib Adw, las paginas GTK no se podran importar en CI"
-
-
+          # Build-time headers: the Tauri crate links glib/gobject/gio and the
+          # WebKit stack. A machine that has compiled this for years (mine)
+          # cannot show this gap; the runner can.
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-4-dev libadwaita-1-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
+            || echo "aviso: faltan headers de build, cargo test puede no compilar"
+          python3 - <<'CHECK'
+          import gi
+          gi.require_version("Gtk", "4.0")
+          gi.require_version("Adw", "1")
+          from gi.repository import Gtk, Adw  # noqa: F401
+          print("gi: Gtk 4 + Adw disponibles")
+          CHECK
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
