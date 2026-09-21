@@ -378,6 +378,24 @@ listview, gridview {
 .sidebar-label {
   font-size: 12px;
 }
+
+/* Router: valores alineados y semaforo de estado. */
+.mono {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.tier-ok {
+  color: @theme_green;
+}
+
+.tier-warn {
+  color: @theme_warning;
+}
+
+.tier-crit {
+  color: @theme_error;
+}
 """
 
 

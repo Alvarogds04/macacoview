@@ -156,6 +156,18 @@ class SettingsSection(Gtk.ScrolledWindow):
         self._models.connect("notify::selected", self._on_change)
         panel.add(self._models)
 
+        # Opt-in y desactivado de fabrica: la barra queda como estaba hasta que
+        # se encienda esta opcion.
+        self._router_indicators = Adw.SwitchRow(
+            title="Mostrar estado del router en la barra"
+        )
+        self._router_indicators.set_subtitle(
+            "A/F vivos · JEV · sesiones/slots · RAM libre · cola"
+        )
+        self._router_indicators.set_active(current.bar_router_indicators)
+        self._router_indicators.connect("notify::active", self._on_change)
+        panel.add(self._router_indicators)
+
         self._building = False
 
     # -- filas ----------------------------------------------------------------
@@ -207,6 +219,7 @@ class SettingsSection(Gtk.ScrolledWindow):
             bar_only=_split_keys(self._only.get_text()),
             bar_units="percent" if self._units.get_selected() == 1 else "gb",
             bar_models="combined" if self._models.get_selected() == 1 else "separate",
+            bar_router_indicators=self._router_indicators.get_active(),
         )
 
     def _on_change(self, *_args) -> None:

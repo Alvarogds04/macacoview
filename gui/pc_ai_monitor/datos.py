@@ -13,6 +13,8 @@ import json
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +27,11 @@ from pc_ai_monitor.config import Config
 STATS_TIMEOUT_S = 5.0
 PORTS_TIMEOUT_S = 10.0
 TOKENS_TIMEOUT_S = 45.0
+# El router local agrega sistema, motores, cloud, Jev y sesiones. Su /status hace
+# unas pocas llamadas locales, asi que 3s sobran y sigue siendo no bloqueante.
+ROUTER_TIMEOUT_S = 3.0
+ROUTER_STATUS_URL = "http://127.0.0.1:11009/status"
+ROUTER_METRICS_URL = "http://127.0.0.1:11009/metrics"
 
 # Ordered like the collectors: pi, hermes, firefox, system, other.
 GROUP_KEYS = ("pi", "hermes", "firefox", "system", "other")
@@ -42,11 +49,27 @@ class Snapshot:
     stats: dict[str, Any] | None = None
     tokens: dict[str, Any] | None = None
     ports: str | None = None
+    router_status: dict[str, Any] | None = None
+    router_metrics: dict[str, Any] | None = None
     errors: tuple[str, ...] = ()
     history: tuple[Sample, ...] = ()
 
     def memory(self) -> dict[str, Any]:
         return (self.stats or {}).get("memory", {})
+
+    def router(self) -> dict[str, Any]:
+        """Estado del router, motores, cloud, Jev y sesiones."""
+        return self.router_status or {}
+
+    def telemetry(self) -> dict[str, Any]:
+        """Agregados de decision: porcentajes, conteos, gasto estimado de Jev."""
+        return (self.router_metrics or {}).get("telemetry", {})
+
+    def skills_budget(self) -> dict[str, Any]:
+        return (self.router_metrics or {}).get("skills_budget", {})
+
+    def recent_routes(self) -> list[dict[str, Any]]:
+        return (self.router_metrics or {}).get("recent", []) or []
 
     def models(self) -> list[dict[str, Any]]:
         return (self.stats or {}).get("models", [])
@@ -88,6 +111,15 @@ def _run(argv: list[str], timeout: float) -> tuple[str | None, str | None]:
     return completed.stdout, None
 
 
+def _get_json(url: str, timeout: float) -> dict[str, Any] | None:
+    """GET JSON local. Devuelve None ante cualquier fallo: nunca propaga."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+
+
 class Collector:
     """Polls the enabled sources in a worker thread and publishes snapshots."""
 
@@ -101,6 +133,8 @@ class Collector:
         self._stats: dict[str, Any] | None = None
         self._ports: str | None = None
         self._tokens: dict[str, Any] | None = None
+        self._router_status: dict[str, Any] | None = None
+        self._router_metrics: dict[str, Any] | None = None
         self._errors: dict[str, str] = {}
         self._history: deque[Sample] = deque(maxlen=config.history_capacity)
 
@@ -126,6 +160,8 @@ class Collector:
                 stats=self._stats,
                 tokens=self._tokens,
                 ports=self._ports,
+                router_status=self._router_status,
+                router_metrics=self._router_metrics,
                 errors=tuple(
                     f"{key}: {value}" for key, value in sorted(self._errors.items())
                 ),
@@ -135,7 +171,7 @@ class Collector:
     # -- worker -----------------------------------------------------------
 
     def _loop(self) -> None:
-        next_stats = next_ports = next_tokens = 0.0
+        next_stats = next_ports = next_tokens = next_router = 0.0
         while not self._stop.is_set():
             now = time.monotonic()
             collected = False
@@ -149,11 +185,28 @@ class Collector:
             if now >= next_tokens:
                 next_tokens = now + self._config.tokens_interval_s
                 collected |= self._collect_tokens()
+            if now >= next_router:
+                next_router = now + self._config.stats_interval_s
+                collected |= self._collect_router()
 
             if collected:
                 self._publish()
 
             self._stop.wait(0.2)
+
+    def _collect_router(self) -> bool:
+        """Lee el router local. Si esta parado, la seccion queda vacia, no rompe."""
+        status = _get_json(ROUTER_STATUS_URL, ROUTER_TIMEOUT_S)
+        metrics = _get_json(ROUTER_METRICS_URL, ROUTER_TIMEOUT_S)
+
+        with self._lock:
+            self._router_status = status
+            self._router_metrics = metrics
+            if status is None:
+                self._errors["router"] = "router no responde en :11009"
+            else:
+                self._errors.pop("router", None)
+        return True
 
     def _collect_stats(self) -> bool:
         if not self._config.stats_bin.exists():

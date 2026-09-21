@@ -61,6 +61,9 @@ only = []
 units = "gb"
 # Con varios modelos: "separate" (un chip por modelo) o "combined" (una métrica sumada).
 models = "separate"
+# Bloque de estado del router (A/F, JEV, sesiones, RAM libre, cola) en la barra.
+# Viene OCULTO: activalo acá o desde el menú de configuración cuando lo quieras.
+router_indicators = false
 """
 
 
@@ -122,6 +125,8 @@ class Config:
     bar_only: tuple[str, ...] = ()
     bar_units: str = "gb"
     bar_models: str = "separate"
+    # Opt-in: el bloque de estado del router no se muestra salvo que se active.
+    bar_router_indicators: bool = False
 
     def with_theme(self, key: str) -> "Config":
         return replace(self, theme=key)
@@ -183,11 +188,14 @@ def load(path: Path = CONFIG_PATH) -> Config:
         bar_units=units
         if isinstance(units := bar.get("units"), str) and units in ("gb", "percent")
         else defaults.bar_units,
-        bar_models=models
-        if isinstance(models := bar.get("models"), str)
-        and models in ("separate", "combined")
-        else defaults.bar_models,
-    )
+          bar_models=models
+          if isinstance(models := bar.get("models"), str)
+          and models in ("separate", "combined")
+          else defaults.bar_models,
+          bar_router_indicators=_as_bool(
+              bar.get("router_indicators"), defaults.bar_router_indicators
+          ),
+      )
 
 
 def save(config: Config, path: Path = CONFIG_PATH) -> bool:
@@ -223,6 +231,7 @@ always_show = [{listed(config.bar_always_show)}]
 only = [{listed(config.bar_only)}]
 units = "{config.bar_units}"
 models = "{config.bar_models}"
+router_indicators = {str(config.bar_router_indicators).lower()}
 """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

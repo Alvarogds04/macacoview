@@ -21,6 +21,7 @@ from pc_ai_monitor.datos import Collector, Snapshot
 from pc_ai_monitor.pages.procesos import ProcesosPage
 from pc_ai_monitor.pages.puertos import PuertosPage
 from pc_ai_monitor.pages.recursos import RecursosPage
+from pc_ai_monitor.pages.router import RouterPage
 from pc_ai_monitor.pages.usage import TokensPage
 from pc_ai_monitor.settings import SettingsSection
 
@@ -28,6 +29,7 @@ APP_ID = "local.pcai.monitor.gnome"
 
 SECTIONS = (
     ("recursos", "Recursos", "view-list-symbolic"),
+    ("router", "Router", "network-transmit-receive-symbolic"),
     ("tokens", "Tokens", "emblem-shared-symbolic"),
     ("puertos", "Puertos", "network-wired-symbolic"),
     ("procesos", "Procesos", "system-run-symbolic"),
@@ -37,6 +39,7 @@ SECTIONS = (
 # Dashboards available by section key; anything else shows the placeholder.
 DASHBOARDS = {
     "recursos": RecursosPage,
+    "router": RouterPage,
     "tokens": TokensPage,
     "puertos": PuertosPage,
     "procesos": ProcesosPage,
