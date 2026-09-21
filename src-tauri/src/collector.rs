@@ -95,6 +95,14 @@ impl CollectorState {
 // Collection (runs outside the lock)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "macos")]
+fn collect_stats() -> Result<Stats, String> {
+    // /proc and `ss` do not exist on Darwin, so the Python collector cannot run
+    // here. Read the same numbers from sysctl/vm_stat/ps instead.
+    Ok(crate::macos::collect_stats())
+}
+
+#[cfg(not(target_os = "macos"))]
 fn collect_stats() -> Result<Stats, String> {
     let output = Command::new(pc_ai_stats_bin())
         .output()
@@ -118,11 +126,27 @@ fn collect_stats() -> Result<Stats, String> {
 /// array only: no shell, no interpolation, and no option beyond `-n`.
 /// The collectors ship under $HOME/.local/bin; hard-coding a home directory is
 /// what made the suite pass on exactly one machine.
+#[cfg(not(target_os = "macos"))]
 fn pc_ai_stats_bin() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     format!("{home}/.local/bin/pc-ai-stats")
 }
 
+#[cfg(target_os = "macos")]
+fn collect_ports() -> Result<Vec<PortRow>, String> {
+    // lsof needs no root to list listening sockets; the sudo helper is Linux-only.
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
+        .output()
+        .map_err(|e| format!("lsof: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("lsof salio con {}", output.status));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(crate::ports::parse_ss_output(&crate::macos::lsof_to_ss(&text)))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn collect_ports() -> Result<Vec<PortRow>, String> {
     let output = Command::new("sudo")
         .args(["-n", "/usr/local/bin/pc-ai-ports-read"])

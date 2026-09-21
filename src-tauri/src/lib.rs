@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod macos;
+
 mod stats;
 mod ports;
 mod ring_buffer;
