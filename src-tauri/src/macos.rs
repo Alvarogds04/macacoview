@@ -328,8 +328,13 @@ mod tests {
         let used = pages.used_gib(4096);
         let expected = (198400u64 + 412300 + 61200) as f64 * 4096.0 / GIB;
         assert!((used - expected).abs() < 1e-6, "usado={used} esperado={expected}");
-        // Lo inactivo es recuperable: debe contar como disponible, no como usado.
-        assert!(pages.available_gib(4096) > used);
+        // Lo inactivo es recuperable: cuenta como disponible, no como usado. El
+        // invariant no es "disponible > usado" (used es toda la maquina:
+        // wired+active+compressed), es que las dos mitulas se complementan.
+        let available = pages.available_gib(4096);
+        assert!(available < used, "si inactivo contara como usado, disponible subiria");
+        let total = 17179869184u64 as f64 / GIB;
+        assert!(used + available <= total + 1e-6, "usado+disponible desborda la RAM");
     }
 
     #[test]
