@@ -203,7 +203,12 @@ class Collector:
             self._router_status = status
             self._router_metrics = metrics
             if status is None:
-                self._errors["router"] = "router no responde en :11009"
+                if self._config.bar_router_indicators:
+                    self._errors["router"] = "router no responde en :11009"
+                else:
+                    # Opt-in: a box without the local router is not failing, it
+                    # never asked for this block. Report it only if it was asked.
+                    self._errors.pop("router", None)
             else:
                 self._errors.pop("router", None)
         return True
@@ -232,15 +237,18 @@ class Collector:
 
     def _collect_ports(self) -> bool:
         helper = self._config.ports_helper
+        # The helper exists to see other users' sockets, which needs root. Without
+        # it `ss` still answers for the current user, so a machine that never
+        # installed the privileged helper is degraded, not broken -- and must not
+        # report an error on every tick.
         if not helper.exists():
-            self._set_error("puertos", f"falta {helper.name}")
-            return True
-
-        argv = (
-            ["sudo", "-n", str(helper)]
-            if self._config.ports_use_sudo
-            else [str(helper)]
-        )
+            argv = ["ss", "-tulpn"]
+        else:
+            argv = (
+                ["sudo", "-n", str(helper)]
+                if self._config.ports_use_sudo
+                else [str(helper)]
+            )
         stdout, error = _run(argv, PORTS_TIMEOUT_S)
         if error is not None:
             self._set_error("puertos", error)
