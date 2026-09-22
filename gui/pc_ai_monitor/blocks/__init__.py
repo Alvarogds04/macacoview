@@ -76,6 +76,10 @@ def catalogue() -> dict[str, type[Block]]:
     from pc_ai_monitor.blocks.kpis import KpiBlock
     from pc_ai_monitor.blocks.memoria import MemoryBlock
     from pc_ai_monitor.blocks.modelos import ModelsBlock
+    from pc_ai_monitor.blocks.motores import (
+        MemoriaBlock,
+        MotoresBlock,
+    )
 
     return {
         "kpis": KpiBlock,
@@ -83,6 +87,8 @@ def catalogue() -> dict[str, type[Block]]:
         "grupos": GroupsBlock,
         "modelos": ModelsBlock,
         "historial": HistoryBlock,
+        "motores": MotoresBlock,
+        "motores_memoria": MemoriaBlock,
     }
 
 
