@@ -251,7 +251,7 @@ class PageTests(unittest.TestCase):
 
         self.assertEqual(
             sorted(DASHBOARDS),
-            ["motores", "procesos", "puertos", "recursos", "tokens"],
+            ["motores", "procesos", "puertos", "recursos", "router", "tokens"],
         )
 
         snapshot = self._snapshot()
