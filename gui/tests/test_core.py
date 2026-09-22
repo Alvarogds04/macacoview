@@ -250,7 +250,8 @@ class PageTests(unittest.TestCase):
         from pc_ai_monitor.app import DASHBOARDS
 
         self.assertEqual(
-            sorted(DASHBOARDS), ["procesos", "puertos", "recursos", "tokens"]
+            sorted(DASHBOARDS),
+            ["motores", "procesos", "puertos", "recursos", "tokens"],
         )
 
         snapshot = self._snapshot()

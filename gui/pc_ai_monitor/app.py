@@ -18,6 +18,7 @@ from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
 from pc_ai_monitor.config import write_template
 from pc_ai_monitor.datos import Collector, Snapshot
+from pc_ai_monitor.pages.motores import MotoresPage
 from pc_ai_monitor.pages.procesos import ProcesosPage
 from pc_ai_monitor.pages.puertos import PuertosPage
 from pc_ai_monitor.pages.recursos import RecursosPage
@@ -28,6 +29,7 @@ from pc_ai_monitor.settings import SettingsSection
 APP_ID = "local.pcai.monitor.gnome"
 
 SECTIONS = (
+    ("motores", "Motores", "system-run-symbolic"),
     ("recursos", "Recursos", "view-list-symbolic"),
     ("router", "Router", "network-transmit-receive-symbolic"),
     ("tokens", "Tokens", "emblem-shared-symbolic"),
@@ -38,6 +40,7 @@ SECTIONS = (
 
 # Dashboards available by section key; anything else shows the placeholder.
 DASHBOARDS = {
+    "motores": MotoresPage,
     "recursos": RecursosPage,
     "router": RouterPage,
     "tokens": TokensPage,
