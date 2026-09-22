@@ -133,7 +133,7 @@ jobs:
   install-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a32679bbb6499e6d2e904aca496e8c4a8 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
@@ -155,10 +155,10 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "errores ninguno" || { echo "FALLO: la app no consiguio datos"; exit 1; }
           echo "$out" | grep -q "stats True" || { echo "FALLO: pc-ai-stats no encontrado"; exit 1; }
-          pill=$(sudo -u friend -H "$HOME/.local/bin/pc-ai-bar" --pill 2>&1 || true)
+          pill=$(sudo -u friend -H /home/friend/.local/bin/pc-ai-bar --pill 2>&1 || true)
           echo "pill: $pill"
 
       - name: Config must not contain the runner's home path
         run: |
-          cfg=$(sudo -u friend -H cat .config/pc-ai-monitor/config.toml)
+          cfg=$(sudo -u friend -H cat /home/friend/.config/pc-ai-monitor/config.toml)
           echo "$cfg" | grep -q '"~/' || { echo "FALLO: el template embebe una ruta absoluta"; exit 1; }
