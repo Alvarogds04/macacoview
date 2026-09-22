@@ -147,7 +147,12 @@ jobs:
       - name: Install as a user with no prior state
         run: |
           sudo useradd -m -s /bin/bash friend
-          sudo -u friend -H bash gui/install.sh
+          # The workspace belongs to the runner user and is not readable by other
+          # accounts, so installing from it as a second user fails on the first cp.
+          # Copy the sources to a world-readable place, as a release tarball would be.
+          sudo cp -a "$GITHUB_WORKSPACE" /tmp/pcai-src
+          sudo chmod -R a+rX /tmp/pcai-src
+          sudo -u friend -H bash /tmp/pcai-src/gui/install.sh
 
       - name: The app must find its collectors and report data
         run: |
