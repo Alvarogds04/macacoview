@@ -32,7 +32,7 @@ import urllib.request
 from pathlib import Path
 
 PROMETHEUS = "http://127.0.0.1:9090/api/v1/query"
-CODEXBAR = "/home/alvaro/.local/bin/codexbar"
+CODEXBAR = os.path.expanduser("~/.local/bin/codexbar")
 SESSIONS_DIR = Path.home() / ".pi/agent/sessions"
 CACHE_DIR = Path.home() / ".cache/pc-ai-tokens"
 PI_CACHE = CACHE_DIR / "pi-sessions.json"
