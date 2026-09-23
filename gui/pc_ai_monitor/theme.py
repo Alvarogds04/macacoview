@@ -1,7 +1,7 @@
 """Visual identity: gentle-ai themes with a Ghostty-inspired terminal look.
 Two sources feed this module:
 
-* the three gentle-ai themes (``Gentle``, ``Gentleman-Cute``, ``Gentleman-Sexy``)
+* the three gentle-ai themes (keys ``gentle``, ``cute``, ``sexy``; Ghostty files Gentleman-*)
   for the palette and the semantic colours;
 * the user's Ghostty theme (``Liquid Carbon Transparent``) for the terminal
   variant: near-black background, desaturated cyan foreground, ANSI accents.
@@ -76,7 +76,7 @@ THEMES: dict[str, Palette] = {
     ),
     "cute": Palette(
         key="cute",
-        label="Gentleman Cute",
+        label="Cute",
         background="#060407",
         element="#100A0F",
         subtle="#0d070c",
@@ -102,7 +102,7 @@ THEMES: dict[str, Palette] = {
     ),
     "sexy": Palette(
         key="sexy",
-        label="Gentleman Sexy",
+        label="Sexy",
         background="#060407",
         element="#100A0F",
         subtle="#0d070c",
