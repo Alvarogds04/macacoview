@@ -1,0 +1,69 @@
+# yamllint disable rule:line-length
+name: release
+
+# Pushing a tag `v*` packages the installable tree and attaches it to the GitHub
+# release with a SHA256 checksum.
+#
+# What ships is NOT a binary. On Linux the product is Python + GTK4 source plus
+# gui/install.sh, so the tarball is exactly that tree: gui/ (the app, the GNOME
+# extension, the systemd unit) and scripts/ (the three collectors the app shells
+# out to). There is no macOS artifact and none is promised: the Rust collector
+# and the React frontend build, but there is no served UI and no models yet
+# (ci.yml's check-macos job tracks that gap).
+#
+# The repo is private, so machines download the artifact with a read-only GitHub
+# token: gui/install.sh --from-release does that, verifying the SHA256 before it
+# installs anything. No npm/node step is involved anywhere in this path.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Package the installable tree
+        run: |
+          set -euo pipefail
+          dir="pc-ai-monitor-$TAG"
+          tarball="pc-ai-monitor-$TAG-linux.tar.gz"
+          mkdir "$dir"
+          cp -a gui "$dir/gui"
+          cp -a scripts "$dir/scripts"
+          cp README.md "$dir/README.md"
+          # Dev-only files: the runtime install never needs the test suite, the
+          # type stubs or the pyright config, so the tarball ships without them.
+          rm -rf "$dir/gui/tests" "$dir/gui/typings" "$dir/gui/pyrightconfig.json"
+          # Normalized metadata so the checksum is stable for the same tree.
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            -czf "$tarball" "$dir"
+          sha256sum "$tarball" > "$tarball.sha256"
+          echo "tarball=$tarball" >> "$GITHUB_ENV"
+
+      - name: Smoke-install from the tarball, as a new machine would
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar -xzf "$tarball" -C "$tmp"
+          # The same gate install-smoke runs on push: if the packaged tree
+          # cannot install and find its collectors, the release must not exist.
+          HOME="$tmp/freshuser" bash "$tmp/pc-ai-monitor-$TAG/gui/install.sh"
+          HOME="$tmp/freshuser" "$tmp/freshuser/.local/bin/pc-ai-stats" --pill
+
+      - name: Attach tarball and checksum to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --verify-tag --generate-notes \
+            "$tarball" "$tarball.sha256"

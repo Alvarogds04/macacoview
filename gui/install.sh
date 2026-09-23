@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Installs the native GNOME app under ~/.local.
 #
+# Two modes:
+#   bash install.sh                        install from a checkout (this file's
+#                                          directory must sit next to ../scripts)
+#   bash install.sh --from-release [TAG]   download the release artifact for TAG
+#                                          (default: latest), verify its SHA256
+#                                          and only then install from it
+#
 #   ~/.local/lib/pc-ai-monitor/pc_ai_monitor        the package
 #   ~/.local/bin/pc-ai-monitor-gnome                launcher
 #   ~/.local/share/applications/pc-ai-monitor-gnome.desktop
@@ -9,6 +16,108 @@
 # It does not touch the Tauri app (pc-ai-monitor-gui / PC-AI Monitor), which
 # stays installed until the migration is complete.
 set -euo pipefail
+
+# --- modo bajar-y-correr -------------------------------------------------------
+# Para una maquina nueva sin el repositorio: baja el artefacto de la release,
+# verifica el SHA256 y recien despues instala. El repositorio es privado, asi
+# que hace falta un token de GitHub de solo lectura, leido del entorno
+# (PC_AI_GITHUB_TOKEN, luego GH_TOKEN, luego GITHUB_TOKEN) -- nunca por argumento
+# de linea de comandos, que quedaria en el historico de la shell.
+if [ "${1:-}" = "--from-release" ]; then
+  if [ $# -ge 2 ]; then
+    tag="$2"
+  else
+    tag="latest"
+  fi
+
+  case "$(uname -s)" in
+    Linux) ;;
+    Darwin)
+      # Honestidad antes que promesas: hoy no hay producto instalable en macOS.
+      # El colector Rust compila y el frontend React tambien, pero no hay UI
+      # servida ni modelos, y los colectores leen /proc. El artefacto de las
+      # releases empaqueta la app Linux (Python + GTK4).
+      cat >&2 <<'MAC'
+Todavia no hay producto instalable para macOS: el artefacto de las releases es
+la app Linux (Python + GTK4). El colector Rust compila en Mac, pero no hay UI
+servida ni modelos.
+
+Cuando exista un binario para Mac sin firmar, macOS lo marcara con cuarentena y
+habra que liberarlo antes de la primera corrida:
+  xattr -d com.apple.quarantine <binario>
+MAC
+      exit 1
+      ;;
+    *)
+      echo "plataforma no soportada: $(uname -s) (solo Linux hoy)" >&2
+      exit 1
+      ;;
+  esac
+
+  repo="${PC_AI_RELEASE_REPO:-Alvarogds04/pc-ai-monitor}"
+  token="${PC_AI_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+  if [ -z "$token" ]; then
+    cat >&2 <<'TOK'
+Este repositorio es privado: hace falta un token de GitHub de solo lectura.
+Exportalo antes de instalar (nunca como argumento en la linea de comandos):
+  export PC_AI_GITHUB_TOKEN=github_pat_xxx
+TOK
+    exit 1
+  fi
+
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    echo "necesito curl o wget para bajar la release" >&2
+    exit 1
+  fi
+
+  # gh_get <url>                cuerpo por stdout (API, JSON)
+  # gh_download <url> <destino> binario a archivo
+  # Con curl, el header Authorization se suelta solo al seguir el redirect
+  # hacia el storage de la release (curl >= 7.58), que es lo que hace falta.
+  gh_get() {
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL \
+        -H "Authorization: Bearer $token" \
+        -H "Accept: application/vnd.github+json" "$1"
+    else
+      wget -q --header="Authorization: Bearer $token" \
+        --header="Accept: application/vnd.github+json" -O - "$1"
+    fi
+  }
+  gh_download() {
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL -H "Authorization: Bearer $token" -o "$2" "$1"
+    else
+      wget -q --header="Authorization: Bearer $token" -O "$2" "$1"
+    fi
+  }
+
+  api="https://api.github.com/repos/$repo"
+  if [ "$tag" = "latest" ]; then
+    echo "Buscando la ultima release de $repo..."
+    tag="$(gh_get "$api/releases/latest" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["tag_name"])
+')"
+  fi
+
+  base="https://github.com/$repo/releases/download/$tag"
+  tarball="pc-ai-monitor-$tag-linux.tar.gz"
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+
+  echo "Bajando $tarball..."
+  gh_download "$base/$tarball" "$tmp/$tarball"
+  gh_download "$base/$tarball.sha256" "$tmp/$tarball.sha256"
+
+  echo "Verificando SHA256..."
+  ( cd "$tmp" && sha256sum -c "$tarball.sha256" )
+
+  echo "Instalando desde $tag..."
+  tar -xzf "$tmp/$tarball" -C "$tmp"
+  bash "$tmp/pc-ai-monitor-$tag/gui/install.sh"
+  exit 0
+fi
 
 # --- dependencias del sistema -------------------------------------------------
 # GTK4 + libadwaita + el puente cairo de PyGObject. El puente es el que más se
