@@ -1,0 +1,73 @@
+name: macos-capture
+
+# A fixture factory, not a gate. Parsers for macOS cannot honestly be written
+# against invented output: the collector reads sysctl/vm_stat/ps/lsof/ioreg, and
+# nobody here has an Apple Silicon machine to capture them on. The macos-14
+# runner is a real one, so this prints the authentic output to the job log.
+#
+# Deliberately manual: it exists to be run when a parser needs writing, not on
+# every push. It also uses no third-party actions, so there is no pinned SHA to
+# get wrong -- it only runs commands.
+#
+# The runner is ephemeral, so its output carries no personal data: the paths are
+# GitHub's /Users/runner, not anybody's home.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: macos-14
+    steps:
+      - name: Capture what the collector parses
+        # No `set -e`: a tool that does not exist here must not abort the rest.
+        run: |
+          set -uo pipefail
+
+          section() { printf '\n===== BEGIN %s =====\n' "$1"; }
+
+          section "uname"
+          uname -a
+          sw_vers 2>&1
+
+          section "sysctl-identity"
+          sysctl -n hw.memsize hw.pagesize hw.ncpu hw.model 2>&1
+          sysctl -n machdep.cpu.brand_string 2>&1
+          sysctl -n hw.optional.arm64 2>&1
+
+          section "sysctl-swapusage"
+          sysctl -n vm.swapusage 2>&1
+
+          section "vm_stat"
+          vm_stat 2>&1
+
+          section "ps"
+          # -ww matters: without it macOS truncates args and the model flags are
+          # invisible. This is the whole reason the parser needs a real capture.
+          ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,comm=,args= 2>&1 | head -50
+
+          section "lsof"
+          sudo lsof -nP -iTCP -sTCP:LISTEN 2>&1 | head -30
+
+          section "ioreg-accelerator"
+          ioreg -r -d 1 -w 0 -c IOAccelerator 2>&1 | head -60
+
+          section "ioreg-perfstats"
+          ioreg -l -w 0 2>&1 | grep -i -A3 PerformanceStatistics | head -60
+
+          section "system_profiler-displays"
+          system_profiler SPDisplaysDataType 2>&1 | head -40
+
+          section "model-servers"
+          # Whether any local model server exists on a clean runner, and what
+          # the tools report when they do. Expected: none, which is an answer
+          # in itself.
+          for tool in ollama llama-server vllm; do
+            printf '%s: %s\n' "$tool" "$(command -v "$tool" || echo ausente)"
+          done
+          command -v ollama >/dev/null 2>&1 && ollama ps 2>&1
+
+          section "END"
