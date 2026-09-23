@@ -9,8 +9,21 @@
 //! that can be tested on a Linux CI box too. The `collect_*` functions are the only
 //! ones that touch the outside world.
 
-use crate::stats::{Group, Memory, Process, Stats};
+// On non-macOS this module exists purely so the parsers and their tests
+// compile and run; the only callers of the parsers live behind the macOS
+// process boundary below (or in `#[cfg(test)]`), so rustc would flag every
+// item as dead in a non-test Linux build. This is scoped to this module and
+// platform-conditioned on purpose: the dead-code lint stays fully active on
+// macOS, where the parsers are reachable from `collect_*`.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
+use crate::stats::{Group, Memory, Process};
+#[cfg(target_os = "macos")]
+use crate::stats::Stats;
 use std::collections::HashMap;
+// Only the process boundary below spawns anything; on other platforms the
+// parsers compile and are tested, and this import would be unused.
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 /// `vm_stat` reports pages, not bytes, so every figure needs hw.pagesize.
@@ -217,7 +230,10 @@ pub fn lsof_to_ss(text: &str) -> String {
 }
 
 // -- process boundary: the only part that spawns anything ----------------------
-
+// Everything below launches macOS binaries (`sysctl`, `vm_stat`, `ps`) that do
+// not exist elsewhere, so it is only compiled on macOS. The pure parsers above
+// stay available on every platform for testing.
+#[cfg(target_os = "macos")]
 fn run(argv: &[&str]) -> Option<String> {
     let output = Command::new(argv[0]).args(&argv[1..]).output().ok()?;
     if !output.status.success() {
@@ -226,6 +242,7 @@ fn run(argv: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
+#[cfg(target_os = "macos")]
 pub fn collect_memory() -> Result<Memory, String> {
     let sizes = run(&["/usr/sbin/sysctl", "-n", "hw.memsize", "hw.pagesize"])
         .ok_or_else(|| "sysctl hw.memsize fallo".to_string())?;
@@ -245,6 +262,7 @@ pub fn collect_memory() -> Result<Memory, String> {
     Ok(memory)
 }
 
+#[cfg(target_os = "macos")]
 pub fn collect_processes() -> Vec<Process> {
     run(&[
         "/bin/ps",
@@ -258,6 +276,7 @@ pub fn collect_processes() -> Vec<Process> {
 /// Full snapshot without models: model discovery on macOS still needs the config
 /// reader that lives on the Python side, so it is reported as an empty list rather
 /// than guessed at from process names.
+#[cfg(target_os = "macos")]
 pub fn collect_stats() -> Stats {
     let processes = collect_processes();
     Stats {
