@@ -84,11 +84,16 @@ TOK
         --header="Accept: application/vnd.github+json" -O - "$1"
     fi
   }
+  # Los assets de una release privada no se bajan por la URL web: github.com/...
+  # /releases/download/ responde 404 aunque el token sea valido. Se bajan por la
+  # API, que exige el id del asset y Accept: application/octet-stream.
   gh_download() {
     if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -H "Authorization: Bearer $token" -o "$2" "$1"
+      curl -fsSL -H "Authorization: Bearer $token" \
+        -H "Accept: application/octet-stream" -o "$2" "$1"
     else
-      wget -q --header="Authorization: Bearer $token" -O "$2" "$1"
+      wget -q --header="Authorization: Bearer $token" \
+        --header="Accept: application/octet-stream" -O "$2" "$1"
     fi
   }
 
@@ -101,14 +106,29 @@ print(json.load(sys.stdin)["tag_name"])
 ')"
   fi
 
-  base="https://github.com/$repo/releases/download/$tag"
   tarball="pc-ai-monitor-$tag-linux.tar.gz"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
 
+  release_json="$(gh_get "$api/releases/tags/$tag")"
+  asset_id() {
+    printf '%s' "$release_json" | python3 -c '
+import json, sys
+name = sys.argv[1]
+for asset in json.load(sys.stdin).get("assets", []):
+    if asset["name"] == name:
+        print(asset["id"])
+        break
+' "$1"
+  }
+  api_asset="https://api.github.com/repos/$repo/releases/assets"
+
   echo "Bajando $tarball..."
-  gh_download "$base/$tarball" "$tmp/$tarball"
-  gh_download "$base/$tarball.sha256" "$tmp/$tarball.sha256"
+  for file in "$tarball" "$tarball.sha256"; do
+    id="$(asset_id "$file")"
+    [ -n "$id" ] || { echo "no encontre $file en la release $tag" >&2; exit 1; }
+    gh_download "$api_asset/$id" "$tmp/$file"
+  done
 
   echo "Verificando SHA256..."
   ( cd "$tmp" && sha256sum -c "$tarball.sha256" )
