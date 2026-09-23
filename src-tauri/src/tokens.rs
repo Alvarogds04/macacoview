@@ -1,17 +1,20 @@
 //! Token consumption per source.
 //!
-//! The aggregation lives in `scripts/pc-ai-tokens` (installed as
+//! The HTTP-facing aggregation lives in `scripts/pc-ai-tokens` (installed as
 //! `$HOME/.local/bin/pc-ai-tokens`), which talks to Prometheus, llama.cpp and
-//! codexbar. This module runs it and deserializes the document: keeping the
-//! HTTP sources out of the Rust tree avoids adding an HTTP client to an app
-//! that needs none.
+//! codexbar. This module runs it for those sources and deserializes the
+//! document: keeping the HTTP sources out of the Rust tree avoids adding an
+//! HTTP client to an app that needs none.
 //!
 //! The two transcript sources that only read local files, `codex_cli` and
-//! `claude_code`, are parsed natively at the bottom of this file: an
-//! incremental JSONL scan with a versioned per-source cache, mirroring the
-//! Python engine. That is what lets macOS read the tokens without spawning the
-//! script. The parsers and their tests compile and run on every platform —
-//! they only touch files, so nothing is `cfg`-gated.
+//! `claude_code`, are filled by the native parsers at the bottom of this file,
+//! not by the script: an incremental JSONL scan with a versioned per-source
+//! cache, mirroring the Python engine. That is what lets macOS read the tokens
+//! without spawning the script at all — when the script binary is missing, the
+//! document still comes back, with the script-fed sections degraded to
+//! `unavailable` and the two native sources fully populated. The parsers and
+//! their tests compile and run on every platform — they only touch files, so
+//! nothing is `cfg`-gated.
 //!
 //! Every section carries its own `status`, so one unavailable source degrades
 //! that section instead of the whole snapshot. Missing fields default, which is
@@ -133,19 +136,47 @@ pub struct Tokens {
     pub remote: RemoteTokens,
     pub local: LocalTokens,
     pub pi: TranscriptTokens,
-    /// Codex CLI rollout transcripts, read natively by `collect_codex_cli_tokens`.
+    /// Codex CLI rollout transcripts, scanned natively from `~/.codex/sessions`.
     pub codex_cli: TranscriptTokens,
-    /// Claude Code project transcripts, read natively by `collect_claude_code_tokens`.
+    /// Claude Code project transcripts, scanned natively from `~/.claude/projects`.
     pub claude_code: TranscriptTokens,
     pub codex: CodexTokens,
 }
 
-/// Run the collector and parse its document. Errors are returned so the caller
-/// can log them and keep the previous value instead of blanking the section.
+/// Run the collector and parse its document. The script keeps feeding the
+/// HTTP-facing sources (`remote`, `local`, `pi`, `codex`); the two transcript
+/// sources (`codex_cli`, `claude_code`) are always scanned natively, over what
+/// the script reported for them.
+///
+/// A missing script binary is not an error: macOS ships no Python, so the
+/// document comes back with the script-fed sections marked `unavailable` and
+/// the native sources populated. A script that runs but fails (non-zero exit,
+/// unparsable output) is an error, so the caller keeps the previous value
+/// instead of blanking a section that was showing real numbers.
 pub fn collect_tokens() -> Result<Tokens, String> {
-    let output = Command::new(tokens_bin())
-        .output()
-        .map_err(|e| format!("pc-ai-tokens: {e}"))?;
+    collect_tokens_from(Path::new(&tokens_bin()), &home_dir())
+}
+
+/// The composition behind `collect_tokens`, parameterized so tests can run it
+/// against a synthetic script path and a temporary home directory instead of
+/// the real binary and the live transcripts.
+fn collect_tokens_from(bin: &Path, home: &Path) -> Result<Tokens, String> {
+    let mut tokens = run_script_document(bin)?;
+    tokens.codex_cli = scan_transcripts(&codex_spec(home));
+    tokens.claude_code = scan_transcripts(&claude_spec(home));
+    Ok(tokens)
+}
+
+/// Run the script and parse its document, degrading to an all-`unavailable`
+/// document only when the binary itself is absent.
+fn run_script_document(bin: &Path) -> Result<Tokens, String> {
+    let output = match Command::new(bin).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(script_unavailable_tokens());
+        }
+        Err(error) => return Err(format!("pc-ai-tokens: {error}")),
+    };
 
     if !output.status.success() {
         return Err(format!(
@@ -156,6 +187,20 @@ pub fn collect_tokens() -> Result<Tokens, String> {
     }
 
     serde_json::from_slice(&output.stdout).map_err(|e| format!("pc-ai-tokens JSON parse error: {e}"))
+}
+
+/// The document used when the script binary does not exist: the sources only
+/// the script can fill report `unavailable`, matching the script's own
+/// per-source degradation vocabulary. The two native transcript sources are
+/// left at their defaults here; `collect_tokens_from` overwrites them right
+/// after with the real scans.
+fn script_unavailable_tokens() -> Tokens {
+    let mut tokens = Tokens::default();
+    tokens.remote.status = "unavailable".to_string();
+    tokens.local.status = "unavailable".to_string();
+    tokens.pi.status = "unavailable".to_string();
+    tokens.codex.status = "unavailable".to_string();
+    tokens
 }
 
 /// One turn's token counters as a transcript line reports them. `total` is
@@ -280,32 +325,32 @@ struct SourceSpec {
 
 /// Codex CLI rollouts (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`), read
 /// incrementally with the same cache files the Python collector uses.
-pub fn collect_codex_cli_tokens() -> TranscriptTokens {
-    scan_transcripts(&SourceSpec {
-        root: home_dir().join(".codex").join("sessions"),
-        cache_path: home_dir()
+fn codex_spec(home: &Path) -> SourceSpec {
+    SourceSpec {
+        root: home.join(".codex").join("sessions"),
+        cache_path: home
             .join(".cache")
             .join("pc-ai-tokens")
             .join("codex-cli-sessions.json"),
         cache_version: CODEX_CLI_CACHE_VERSION,
         pattern: "rollout-*.jsonl",
         parse_line: codex_parse_line,
-    })
+    }
 }
 
 /// Claude Code project transcripts (`~/.claude/projects/*/*.jsonl`), read
 /// incrementally with the same cache files the Python collector uses.
-pub fn collect_claude_code_tokens() -> TranscriptTokens {
-    scan_transcripts(&SourceSpec {
-        root: home_dir().join(".claude").join("projects"),
-        cache_path: home_dir()
+fn claude_spec(home: &Path) -> SourceSpec {
+    SourceSpec {
+        root: home.join(".claude").join("projects"),
+        cache_path: home
             .join(".cache")
             .join("pc-ai-tokens")
             .join("claude-code-sessions.json"),
         cache_version: CLAUDE_CACHE_VERSION,
         pattern: "*.jsonl",
         parse_line: claude_parse_line,
-    })
+    }
 }
 
 /// Incrementally scans JSONL transcripts under `spec.root`.
@@ -1103,6 +1148,93 @@ mod transcript_tests {
         assert!(tokens.models.is_empty());
     }
 
+    // -- integration with the collector document ------------------------------
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn missing_script_degrades_script_sources_and_keeps_the_native_ones() {
+        // macOS has no Python, so the script binary is absent there: the
+        // document must still come back, with the script-fed sections marked
+        // unavailable and the two native sources filled from the transcripts.
+        let home = temp_dir("collect-no-script");
+        let codex_file = format!("{}\n{}\n", codex_turn_context("gpt-a"), codex_event(100, 100));
+        write_file(
+            &home.join(".codex/sessions/2026/09/01/rollout-a.jsonl"),
+            codex_file.as_bytes(),
+        );
+        write_file(
+            &home.join(".claude/projects/-home-test/session.jsonl"),
+            format!("{}\n", claude_line(4, 2)).as_bytes(),
+        );
+
+        let tokens =
+            collect_tokens_from(Path::new("/nonexistent/pc-ai-tokens"), &home).expect("must not fail");
+
+        assert_eq!(tokens.remote.status, "unavailable");
+        assert_eq!(tokens.local.status, "unavailable");
+        assert_eq!(tokens.pi.status, "unavailable");
+        assert_eq!(tokens.codex.status, "unavailable");
+        assert_eq!(tokens.codex_cli.status, "ok");
+        assert_eq!(tokens.codex_cli.total, 100);
+        assert_eq!(tokens.codex_cli.models[0].name, "gpt-a");
+        assert_eq!(tokens.claude_code.status, "ok");
+        assert_eq!(tokens.claude_code.total, 6);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn script_sources_survive_and_native_sources_own_their_sections() {
+        // The script also reports codex_cli/claude_code on machines where it
+        // runs; the native scans always win those two sections, while the
+        // script's own sources pass through untouched.
+        let dir = temp_dir("collect-with-script");
+        let home = dir.join("home");
+        let script = dir.join("fake-pc-ai-tokens");
+        write_executable_script(
+            &script,
+            r#"#!/bin/sh
+echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi":{"status":"ok","total":9},"codex_cli":{"status":"ok","total":1},"claude_code":{"status":"ok","total":2},"codex":{"status":"ok","plan":"prolite"}}'
+"#,
+        );
+        write_file(
+            &home.join(".codex/sessions/2026/09/01/rollout-a.jsonl"),
+            format!("{}\n{}\n", codex_turn_context("gpt-a"), codex_event(100, 100)).as_bytes(),
+        );
+        write_file(
+            &home.join(".claude/projects/-home-test/session.jsonl"),
+            format!("{}\n", claude_line(4, 2)).as_bytes(),
+        );
+
+        let tokens = collect_tokens_from(&script, &home).expect("script must succeed");
+
+        assert_eq!(tokens.remote.total, 77);
+        assert_eq!(tokens.local.total, 3);
+        assert_eq!(tokens.pi.total, 9);
+        assert_eq!(tokens.codex.plan, "prolite");
+        // Overridden by the native scans, not the script's 1 and 2.
+        assert_eq!(tokens.codex_cli.total, 100);
+        assert_eq!(tokens.claude_code.total, 6);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_script_that_runs_and_fails_is_still_an_error() {
+        // Only a missing binary degrades the document; a script that runs and
+        // exits non-zero keeps the caller's keep-previous-value behavior.
+        let dir = temp_dir("collect-failing");
+        let script = dir.join("failing-pc-ai-tokens");
+        write_executable_script(&script, "#!/bin/sh\necho boom >&2\nexit 3\n");
+
+        let error = collect_tokens_from(&script, &dir.join("home")).unwrap_err();
+        assert!(error.contains("exited with"), "unexpected error: {error}");
+    }
+
     /// Ground-truth check against the live transcripts of this machine. It
     /// never runs by default: the real transcripts must be read in place, not
     /// copied into the repo. Run explicitly with
@@ -1110,7 +1242,8 @@ mod transcript_tests {
     #[test]
     #[ignore = "reads live ~/.codex and ~/.claude transcripts; run explicitly"]
     fn real_transcripts_match_the_python_collector() {
-        let codex = collect_codex_cli_tokens();
+        let codex = scan_transcripts(&codex_spec(&home_dir()));
+        let claude = scan_transcripts(&claude_spec(&home_dir()));
         eprintln!(
             "codex_cli: total={} turns={} sessions={}",
             codex.total, codex.turns, codex.sessions
@@ -1118,7 +1251,6 @@ mod transcript_tests {
         for model in &codex.models {
             eprintln!("  {}: total={} turns={}", model.name, model.total, model.turns);
         }
-        let claude = collect_claude_code_tokens();
         eprintln!(
             "claude_code: total={} turns={} sessions={}",
             claude.total, claude.turns, claude.sessions
