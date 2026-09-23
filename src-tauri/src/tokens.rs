@@ -1242,8 +1242,9 @@ echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi
     #[test]
     #[ignore = "reads live ~/.codex and ~/.claude transcripts; run explicitly"]
     fn real_transcripts_match_the_python_collector() {
-        let codex = scan_transcripts(&codex_spec(&home_dir()));
-        let claude = scan_transcripts(&claude_spec(&home_dir()));
+        let home = home_dir();
+        let codex = scan_transcripts(&codex_spec(&home));
+        let claude = scan_transcripts(&claude_spec(&home));
         eprintln!(
             "codex_cli: total={} turns={} sessions={}",
             codex.total, codex.turns, codex.sessions
@@ -1258,5 +1259,42 @@ echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi
         for model in &claude.models {
             eprintln!("  {}: total={} turns={}", model.name, model.total, model.turns);
         }
+
+        // Invariantes que valen con cualquier uso, sin fijar numeros que crecen
+        // con el uso de la maquina: los modelos reparten el total exactamente, no
+        // hay modelos sin turnos, y no puede haber total sin modelos.
+        for (name, section) in [("codex_cli", &codex), ("claude_code", &claude)] {
+            let by_model: u64 = section.models.iter().map(|model| model.total).sum();
+            assert_eq!(
+                by_model, section.total,
+                "{name}: los modelos no suman el total de la seccion"
+            );
+            for model in &section.models {
+                assert!(model.turns > 0, "{name}: {} aparece sin turnos", model.name);
+            }
+            assert_eq!(
+                section.models.is_empty(),
+                section.total == 0,
+                "{name}: el total y la lista de modelos se contradicen"
+            );
+        }
+
+        // El cruce que importa: otra implementacion, el script Python, sobre los
+        // mismos archivos. En macOS no existe el script, asi que ahi se saltea.
+        let bin = PathBuf::from(tokens_bin());
+        if !bin.exists() {
+            eprintln!("  (sin script Python: se saltea el cruce entre implementaciones)");
+            return;
+        }
+        let script = run_script_document(&bin).expect("el script debe producir un documento");
+        for (name, ours, theirs) in [
+            ("codex_cli total", codex.total, script.codex_cli.total),
+            ("codex_cli turns", codex.turns, script.codex_cli.turns),
+            ("claude_code total", claude.total, script.claude_code.total),
+            ("claude_code turns", claude.turns, script.claude_code.turns),
+        ] {
+            assert_eq!(ours, theirs, "{name}: Rust y Python discrepan");
+        }
+        eprintln!("  cruce contra el script Python: coincide");
     }
 }
