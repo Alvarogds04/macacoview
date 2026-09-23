@@ -23,9 +23,13 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Capture what the collector parses
-        # No `set -e`: a tool that does not exist here must not abort the rest.
+        # Actions already invokes this with `bash -e`, so `set +e` is needed to
+        # undo that: a probe that finds nothing is a result, not a failure. The
+        # first run died right after `ps | head` because pipefail plus errexit
+        # turned SIGPIPE on `ps` into an abort. The trailing `exit 0` keeps the
+        # step green no matter which probe came last.
         run: |
-          set -uo pipefail
+          set +e -u
 
           section() { printf '\n===== BEGIN %s =====\n' "$1"; }
 
@@ -44,7 +48,13 @@ jobs:
           section "vm_stat"
           vm_stat 2>&1
 
-          section "ps"
+          section "ps-comm"
+          # macOS truncates comm to MAXCOMLEN (16 chars): a long executable path
+          # arrives cut in half. Captured separately so the truncation shows up
+          # instead of silently corrupting whatever a parser assumes about it.
+          ps -ww -axo pid=,comm= 2>&1 | head -25
+
+          section "ps-args"
           # -ww matters: without it macOS truncates args and the model flags are
           # invisible. This is the whole reason the parser needs a real capture.
           ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,comm=,args= 2>&1 | head -50
@@ -71,3 +81,4 @@ jobs:
           command -v ollama >/dev/null 2>&1 && ollama ps 2>&1
 
           section "END"
+          exit 0
