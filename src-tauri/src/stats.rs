@@ -39,13 +39,49 @@ pub struct Process {
     pub args: String,
 }
 
+/// GPU memory at machine level, measured on macOS from the IOAccelerator
+/// counters in `ioreg`. The Linux collector (Python script) does not report
+/// it yet, so `Stats::gpu` is `#[serde(default)]` and stays `None` there;
+/// on macOS `collect_stats()` fills it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GpuMemory {
+    pub alloc_gib: f64,
+    pub in_use_gib: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
     pub memory: Memory,
     pub models: Vec<Model>,
     pub groups: Groups,
     pub processes: Vec<Process>,
+    #[serde(default)]
+    pub gpu: Option<GpuMemory>,
 }
 
 // Groups is a map of named groups
 pub type Groups = std::collections::HashMap<String, Group>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_ausente_en_el_json_de_linux_no_rompe_la_deserializacion() {
+        // El colector de Linux (script Python) no reporta GPU: el campo falta
+        // por completo en su documento JSON y no debe romper nada.
+        let json = r#"{"memory": {"total_gib": 1.0, "used_gib": 0.5, "available_gib": 0.5,
+            "swap_total_gib": 0.0, "swap_used_gib": 0.0},
+            "models": [], "groups": {}, "processes": []}"#;
+        let stats: Stats = serde_json::from_str(json).unwrap();
+        assert_eq!(stats.gpu, None);
+
+        // En macOS collect_stats() si lo llena.
+        let con_gpu = r#"{"memory": {"total_gib": 1.0, "used_gib": 0.5, "available_gib": 0.5,
+            "swap_total_gib": 0.0, "swap_used_gib": 0.0},
+            "models": [], "groups": {}, "processes": [],
+            "gpu": {"alloc_gib": 0.25, "in_use_gib": 0.125}}"#;
+        let stats: Stats = serde_json::from_str(con_gpu).unwrap();
+        assert_eq!(stats.gpu, Some(GpuMemory { alloc_gib: 0.25, in_use_gib: 0.125 }));
+    }
+}

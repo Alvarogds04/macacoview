@@ -12,9 +12,13 @@ export interface FullSnapshot {
   models: Model[];
   groups: Record<string, Group>;
   processes: Process[];
+  gpu: GpuMemory | null;
   ports: PortRow[];
   tokens: Tokens | null;
 }
+
+/// GPU memory at machine level, read from `ioreg` on macOS. `null` when it
+/// cannot be measured (the Linux collector does not report it yet).
 
 export interface Memory {
   total_gib: number;
@@ -22,6 +26,11 @@ export interface Memory {
   available_gib: number;
   swap_total_gib: number;
   swap_used_gib: number;
+}
+
+export interface GpuMemory {
+  alloc_gib: number;
+  in_use_gib: number;
 }
 
 export interface Model {
