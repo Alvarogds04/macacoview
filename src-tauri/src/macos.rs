@@ -17,10 +17,10 @@
 // macOS, where the parsers are reachable from `collect_*`.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use crate::stats::{Group, Memory, Process};
+use crate::stats::{Group, GpuMemory, Memory, Process};
 #[cfg(target_os = "macos")]
 use crate::stats::Stats;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 // Only the process boundary below spawns anything; on other platforms the
 // parsers compile and are tested, and this import would be unused.
 #[cfg(target_os = "macos")]
@@ -227,6 +227,162 @@ pub fn lsof_to_ss(text: &str) -> String {
     out
 }
 
+/// Parses `ioreg -l -w 0` into machine-level GPU memory.
+///
+/// Every IOAccelerator node (real `AGXAccelerator` silicon or the
+/// `AppleParavirtGPU` of a VM; device names are never matched) carries a
+/// `PerformanceStatistics` dictionary with the two counters in bytes:
+/// `"Alloc system memory"` and `"In use system memory"`. The rules, all
+/// observable in `tests/fixtures/macos-capture.txt`:
+///
+/// * The same node shows up more than once in one dump — its dictionary is
+///   repeated verbatim under `Entries`/`IOCompatibilityProperties` — so
+///   dictionaries are deduplicated by their exact text. Two distinct GPUs that
+///   reported byte-identical (fully idle) dictionaries would be counted once,
+///   which undercounts zero bytes; summing duplicates doubles one real GPU,
+///   which the capture shows happening.
+/// * `"In use system memory (driver)"` is ignored on purpose: it is the
+///   driver-attributed slice already included in `"In use system memory"`
+///   (equal to it in the capture), so summing it would double the count.
+/// * Dictionaries that do not report the whole pair (empty, or unrelated
+///   counters like `vramFreeBytes`) are skipped, as is a non-numeric value
+///   where a byte count belongs: half a measurement is no measurement.
+/// * No usable dictionary means "cannot measure": `None`, never zero — zero
+///   reads as "the GPU is idle", which is a different claim.
+pub fn parse_ioreg_gpu(text: &str) -> Option<GpuMemory> {
+    const KEY: &str = "\"PerformanceStatistics\"";
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut alloc_bytes = 0u64;
+    let mut in_use_bytes = 0u64;
+    let mut measured = false;
+    let mut rest = text;
+    while let Some(at) = rest.find(KEY) {
+        let after_key = &rest[at + KEY.len()..];
+        rest = after_key;
+        // The dictionary must open right after the key, with only ` = ` in
+        // between; anything else means this occurrence is not a property
+        // assignment and the scan moves on.
+        let Some(open) = after_key.find('{') else { break };
+        if !after_key[..open].chars().all(|c| c.is_whitespace() || c == '=') {
+            continue;
+        }
+        let Some(close) = dict_close(&after_key[open..]) else {
+            // Truncated dictionary: there is nothing trustworthy left to read.
+            break;
+        };
+        let dict = &after_key[open..=open + close];
+        rest = &after_key[open + close + 1..];
+        if !seen.insert(dict) {
+            continue; // same node repeated verbatim: counting it again doubles it
+        }
+        let Some((alloc, in_use)) = gpu_dict_values(dict) else { continue };
+        measured = true;
+        alloc_bytes += alloc;
+        in_use_bytes += in_use;
+    }
+    measured.then(|| GpuMemory {
+        alloc_gib: alloc_bytes as f64 / GIB,
+        in_use_gib: in_use_bytes as f64 / GIB,
+    })
+}
+
+/// Index (inside `s`, which starts at the opening `{`) of the `}` that closes
+/// the dictionary. Brace-aware and quote-aware: values may be quoted strings
+/// containing braces, and the captured output nests dictionaries freely.
+fn dict_close(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (idx, c) in s.char_indices() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_quotes = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_quotes = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `(alloc, in_use)` byte pair of one `PerformanceStatistics` dictionary,
+/// or `None` when the pair is not fully reported there.
+fn gpu_dict_values(dict: &str) -> Option<(u64, u64)> {
+    let mut alloc = None;
+    let mut in_use = None;
+    for (key, value) in perf_dict_entries(dict) {
+        match key {
+            "Alloc system memory" => alloc = value.parse().ok(),
+            "In use system memory" => in_use = value.parse().ok(),
+            _ => {} // recoveryCount, vramFreeBytes, ...: not part of this measurement
+        }
+    }
+    Some((alloc?, in_use?))
+}
+
+/// Splits one `PerformanceStatistics` dictionary body into its `"key"=value`
+/// pairs. Keys contain spaces and parentheses ("In use system memory
+/// (driver)"), so this is a small scanner rather than a `split(',')`; values
+/// may be quoted strings holding their own commas or braces.
+fn perf_dict_entries(dict: &str) -> Vec<(&str, &str)> {
+    let body = dict
+        .strip_prefix('{')
+        .and_then(|d| d.strip_suffix('}'))
+        .unwrap_or(dict);
+    let mut entries = Vec::new();
+    let mut i = 0;
+    while i < body.len() {
+        let Some(c) = body[i..].chars().next() else { break };
+        if c.is_whitespace() || c == ',' {
+            i += c.len_utf8();
+            continue;
+        }
+        if c != '"' {
+            // Malformed token: skip past the next separator and keep going.
+            match body[i..].find([',', '}']) {
+                Some(j) => i += j,
+                None => break,
+            }
+            continue;
+        }
+        let key_start = i + 1;
+        let Some(key_len) = body[key_start..].find('"') else { break };
+        let key = &body[key_start..key_start + key_len];
+        i = key_start + key_len + 1;
+        // Only whitespace may sit between the key and its `=`.
+        let Some(after_eq) = body[i..].trim_start().strip_prefix('=') else { continue };
+        let value_at = body.len() - after_eq.len();
+        let value_at = value_at + (body[value_at..].len() - body[value_at..].trim_start().len());
+        if body[value_at..].starts_with('"') {
+            let vstart = value_at + 1;
+            let Some(vend) = body[vstart..].find('"') else { break };
+            entries.push((key, &body[vstart..vstart + vend]));
+            i = vstart + vend + 1;
+        } else {
+            let end = body[value_at..]
+                .find(',')
+                .map_or(body.len(), |j| value_at + j);
+            entries.push((key, body[value_at..end].trim()));
+            i = end;
+        }
+    }
+    entries
+}
+
 // -- process boundary: the only part that spawns anything ----------------------
 // Everything below launches macOS binaries (`sysctl`, `vm_stat`, `ps`) that do
 // not exist elsewhere, so it is only compiled on macOS. The pure parsers above
@@ -260,6 +416,15 @@ pub fn collect_memory() -> Result<Memory, String> {
     Ok(memory)
 }
 
+/// Machine-level GPU memory from the live registry. `ioreg` is read-only and
+/// needs no privileges; a VM's paravirtual GPU reports the same
+/// PerformanceStatistics dictionary as retail silicon.
+#[cfg(target_os = "macos")]
+pub fn collect_gpu() -> Option<GpuMemory> {
+    let text = run(&["/usr/sbin/ioreg", "-l", "-w", "0"])?;
+    parse_ioreg_gpu(&text)
+}
+
 #[cfg(target_os = "macos")]
 pub fn collect_processes() -> Vec<Process> {
     run(&[
@@ -286,6 +451,7 @@ pub fn collect_stats() -> Stats {
             swap_used_gib: 0.0,
         }),
         models: Vec::new(),
+        gpu: collect_gpu(),
         groups: HashMap::new(),
         processes,
     }
@@ -416,5 +582,83 @@ mod tests {
         assert!(ss.contains("127.0.0.1:11434"), "{ss}");
         assert!(ss.contains("pid=4242"), "{ss}");
         assert_eq!(ss.lines().count(), 3, "una fila por socket, mas la cabecera");
+    }
+
+    // -- GPU (ioreg) -----------------------------------------------------------
+
+    // Lineas literales de src-tauri/tests/fixtures/macos-capture.txt: la misma
+    // GPU paravirtual aparece dos veces (seccion ioreg-accelerator y
+    // ioreg-perfstats) y su diccionario con "vramFreeBytes" otras dos dentro de
+    // entradas de compatibilidad. Cuatro apariciones, dos diccionarios unicos.
+    const CAPTURE_PERF_LINES: &str = concat!(
+        r#"    "PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936,"In use system memory (driver)"=50103936,"recoveryCount"=0}"#,
+        "\n",
+        r#"    "Entries" = ({"IOName"="display","IOClass"="IOPCIDevice","device-id"=<10680000>,"PerformanceStatistics"={"vramFreeBytes"=15728640},"IOGLBundleName"="AppleMetalGLRenderer","VRAM,totalMB"=16384})"#,
+        "\n",
+        r#"    "IOCompatibilityProperties" = {"IOName"="IOAccelerator","PerformanceStatistics"={"vramFreeBytes"=15728640},"MetalPluginName"="AGXMetalA12"}"#,
+        "\n",
+        r#"    | |   "PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936,"In use system memory (driver)"=50103936,"recoveryCount"=0}"#,
+        "\n",
+    );
+
+    #[test]
+    fn ioreg_captura_real_no_duplica_el_total() {
+        let gpu = parse_ioreg_gpu(CAPTURE_PERF_LINES).expect("la captura si reporta la GPU");
+        assert_eq!(gpu.alloc_gib, 39108608f64 / GIB);
+        assert_eq!(gpu.in_use_gib, 50103936f64 / GIB);
+        let duplicado = 2.0 * 39108608f64 / GIB;
+        assert!(gpu.alloc_gib < duplicado, "sumar a lo bruto duplica el nodo");
+    }
+
+    #[test]
+    fn ioreg_dos_dispositivos_distintos_se_suman() {
+        // Dos nodos con diccionarios distintos: los totales se suman. La clave
+        // "In use system memory (driver)" debe ignorarse (si se sumara, el
+        // primer nodo aportaria 1000 bytes de mas).
+        let text = concat!(
+            r#"  +-o AGXAccelerator  <class AGXAccelerator, id 0x1, registered>"#,
+            "\n",
+            r#"      "PerformanceStatistics" = {"Alloc system memory"=1073741824,"In use system memory"=536870912,"In use system memory (driver)"=1000,"recoveryCount"=2}"#,
+            "\n",
+            r#"  +-o AGXAccelerator  <class AGXAccelerator, id 0x2, registered>"#,
+            "\n",
+            r#"      "PerformanceStatistics" = {"Alloc system memory"=2147483648,"In use system memory"=1073741824,"recoveryCount"=0}"#,
+            "\n",
+        );
+        let gpu = parse_ioreg_gpu(text).unwrap();
+        assert_eq!(gpu.alloc_gib, 3.0);
+        assert_eq!(gpu.in_use_gib, 1.5);
+    }
+
+    #[test]
+    fn ioreg_diccionario_vacio_no_mide() {
+        assert!(parse_ioreg_gpu(r#""PerformanceStatistics" = {}"#).is_none());
+        assert!(parse_ioreg_gpu(r#""PerformanceStatistics" = {"recoveryCount"=0}"#).is_none());
+    }
+
+    #[test]
+    fn ioreg_sin_llave_de_cierre_no_inventa_valores() {
+        let text = r#""PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936"#;
+        assert!(parse_ioreg_gpu(text).is_none());
+    }
+
+    #[test]
+    fn ioreg_valor_no_numerico_no_mide_a_medias() {
+        let text = r#""PerformanceStatistics" = {"Alloc system memory"="desconocido","In use system memory"=50103936}"#;
+        assert!(parse_ioreg_gpu(text).is_none());
+    }
+
+    #[test]
+    fn ioreg_sin_ningun_performance_statistics_devuelve_none() {
+        assert!(parse_ioreg_gpu("+-o IOService  <class IOService>\n nada util\n").is_none());
+        assert!(parse_ioreg_gpu("").is_none());
+    }
+
+    #[test]
+    fn ioreg_llaves_dentro_de_comillas_no_cortan_el_diccionario() {
+        let text = r#""PerformanceStatistics" = {"Model"="Radeon }{ raro","Alloc system memory"=2048,"In use system memory"=1024}"#;
+        let gpu = parse_ioreg_gpu(text).unwrap();
+        assert_eq!(gpu.alloc_gib, 2048f64 / GIB);
+        assert_eq!(gpu.in_use_gib, 1024f64 / GIB);
     }
 }

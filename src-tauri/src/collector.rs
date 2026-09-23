@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::ports::{parse_ss_output, PortRow};
 use crate::ring_buffer::{sample_from_stats, HistorySample, RingBuffer, RING_BUFFER_CAPACITY};
-use crate::stats::{Groups, Memory, Model, Process, Stats};
+use crate::stats::{Groups, GpuMemory, Memory, Model, Process, Stats};
 use crate::tokens::{collect_tokens, Tokens};
 
 /// Token counters come from Prometheus, every llama.cpp server, a transcript
@@ -29,6 +29,9 @@ pub struct FullSnapshot {
     pub processes: Vec<Process>,
     pub ports: Vec<PortRow>,
     pub tokens: Option<Tokens>,
+    /// Machine-level GPU memory. `None` where it cannot be measured, which is
+    /// not the same as zero: the Linux collector does not report it at all.
+    pub gpu: Option<GpuMemory>,
 }
 
 /// The payload returned by the `get_state` command.
@@ -71,6 +74,7 @@ impl CollectorState {
             processes: stats.processes,
             ports,
             tokens: self.tokens.clone(),
+            gpu: stats.gpu,
         });
     }
 
