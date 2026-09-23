@@ -26,9 +26,11 @@ class HistoryBlock(Block):
         super().__init__()
         self._sparks: dict[str, Sparkline] = {}
         self._values: dict[str, Gtk.Label] = {}
+        self._rows: dict[str, Gtk.Box] = {}
 
         for index, (key, label) in enumerate(SERIES):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            self._rows[key] = row
 
             name = Gtk.Label(label=label, xalign=0)
             name.set_size_request(120, -1)
@@ -52,6 +54,13 @@ class HistoryBlock(Block):
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         samples = snapshot.history
+        hidden = set(snapshot.hidden_groups)
+        for key, _label in SERIES:
+            if key in self._rows:
+                # Ocultar es sólo visual: la muestra sigue trayendo la columna
+                # completa (por posición sobre GROUP_KEYS), asi que si la
+                # entrada vuelve, la serie retoma sin huecos.
+                self._rows[key].set_visible(key not in hidden)
         self._note.set_text(
             f"Ventana: {len(samples)} muestras a 1 Hz"
             if samples
@@ -64,6 +73,8 @@ class HistoryBlock(Block):
         for sample in samples:
             series["used"].append(sample.used_gib)
             series["avail"].append(sample.available_gib)
+            # GROUP_KEYS completo siempre: el índice es por posición y ocultar
+            # una entrada no puede correr los valores de las demás.
             for key in ("pi", "firefox"):
                 index = GROUP_KEYS.index(key)
                 series[key].append(

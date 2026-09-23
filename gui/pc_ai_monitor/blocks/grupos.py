@@ -31,7 +31,7 @@ class GroupsBlock(Block):
         row.append(self._donut)
 
         legend = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self._rows: dict[str, tuple[object, object]] = {}
+        self._rows: dict[str, tuple[Gtk.Box, object, object]] = {}
         for key, label in GROUP_LABELS.items():
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             line.add_css_class("legend-row")
@@ -55,7 +55,7 @@ class GroupsBlock(Block):
             line.add_controller(gesture)
 
             legend.append(line)
-            self._rows[key] = (value, pct)
+            self._rows[key] = (line, value, pct)
 
         row.append(legend)
         self.body.append(row)
@@ -72,10 +72,14 @@ class GroupsBlock(Block):
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self._snapshot = snapshot
         groups = snapshot.groups()
+        hidden = set(snapshot.hidden_groups)
+        visible_keys = [key for key in GROUP_KEYS if key not in hidden]
         values = {
             key: safe((groups.get(key) or {}).get("rss_gib")) for key in GROUP_KEYS
         }
-        total = sum(values.values())
+        # El color de cada serie queda anclado a su posición en GROUP_KEYS
+        # aunque se oculten entradas: la paleta no se corre.
+        total = sum(values[key] for key in visible_keys)
 
         slices = [
             Slice(
@@ -84,14 +88,19 @@ class GroupsBlock(Block):
                 color=theme.active().chart_series(index),
             )
             for index, key in enumerate(GROUP_KEYS)
+            if key not in hidden
         ]
         self._donut.set_data(slices, f"{gib(total, 2)}G", "RSS total")
 
-        if self._revealer.get_reveal_child() and self._selected:
+        if self._selected and self._selected in hidden:
+            self._selected = ""
+            self._revealer.set_reveal_child(False)
+        elif self._revealer.get_reveal_child() and self._selected:
             self._render_detail(self._selected)
 
         for key in GROUP_KEYS:
-            value, pct = self._rows[key]
+            line, value, pct = self._rows[key]
+            line.set_visible(key not in hidden)
             value.set_text(f"{gib(values[key], 2)}G")
             pct.set_text(percent(values[key], total))
 

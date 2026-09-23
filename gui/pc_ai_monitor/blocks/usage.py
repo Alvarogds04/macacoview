@@ -51,6 +51,61 @@ class TokenKpiBlock(Block):
         self._tiles["cache"].set_value(fmt_tokens(safe(pi.get("cache_read"))))
 
 
+class CliKpiBlock(Block):
+    """Headline consumption of one external CLI section.
+
+    The collector (``pc-ai-tokens``) emits ``codex_cli`` and ``claude_code``
+    with the same normalized fields, so the only per-CLI difference is which
+    section to read: reasoning (thinking in Claude Code), cache_write (cache
+    creation) and cache_read are metrics Pi's block does not show.
+    """
+
+    title = ""
+    frame = False
+    section = ""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._tiles = {
+            "total": KpiTile("—", "TOKENS"),
+            "reasoning": KpiTile("—", "RAZONAMIENTO"),
+            "cache_write": KpiTile("—", "ESCRITO EN CACHÉ"),
+            "cache_read": KpiTile("—", "LEÍDO DE CACHÉ"),
+            "turns": KpiTile("—", "TURNOS"),
+            "cost": KpiTile("—", "COSTO"),
+        }
+        strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for tile in self._tiles.values():
+            strip.append(tile)
+        self.body.append(strip)
+
+    def update_snapshot(self, snapshot: Snapshot) -> None:
+        data = snapshot.tokens_section(self.section)
+        self._tiles["total"].set_value(fmt_tokens(safe(data.get("total"))))
+        self._tiles["reasoning"].set_value(fmt_tokens(safe(data.get("reasoning"))))
+        self._tiles["cache_write"].set_value(
+            fmt_tokens(safe(data.get("cache_write")))
+        )
+        self._tiles["cache_read"].set_value(fmt_tokens(safe(data.get("cache_read"))))
+        self._tiles["turns"].set_value(count(safe(data.get("turns"))))
+        self._tiles["cost"].set_value(money(safe(data.get("cost_usd"))))
+
+
+class CodexCliKpiBlock(CliKpiBlock):
+    """Codex CLI sessions: adds reasoning and cache-write tokens."""
+
+    title = "CODEX CLI"
+    section = "codex_cli"
+
+
+class ClaudeCodeKpiBlock(CliKpiBlock):
+    """Claude Code sessions: thinking maps to reasoning, cache_creation to
+    cache_write (the collector normalizes both schemas)."""
+
+    title = "CLAUDE CODE"
+    section = "claude_code"
+
+
 class ProviderDonutBlock(Block):
     """Where the tokens went, grouped by provider."""
 
