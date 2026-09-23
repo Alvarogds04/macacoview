@@ -1,0 +1,181 @@
+# Captured on a real Apple Silicon runner (macos-14, Apple M1 Virtual, VirtualMac2,1)
+# by .github/workflows/macos-capture.yml. Regenerate with:
+#   gh workflow run macos-capture.yml && gh run view --log
+#
+# This is authentic tool output, not invented: parsers must be written
+# against this. It is a VM, so anything hardware-shaped (ioreg GPU nodes,
+# system_profiler) reflects paravirtualised devices, NOT retail silicon.
+ ===== BEGIN sysctl-identity =====
+ 7516192768
+ 16384
+ 3
+ VirtualMac2,1
+ Apple M1 (Virtual)
+ 1
+ 
+
+ ===== BEGIN sysctl-swapusage =====
+ total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)
+ 
+
+ ===== BEGIN vm_stat =====
+ Mach Virtual Memory Statistics: (page size of 16384 bytes)
+ Pages free:                                6704.
+ Pages active:                            195886.
+ Pages inactive:                          195584.
+ Pages speculative:                        12548.
+ Pages throttled:                              0.
+ Pages wired down:                         46474.
+ Pages purgeable:                           1635.
+ "Translation faults":                   4809197.
+ Pages copy-on-write:                     576616.
+ Pages zero filled:                      1626101.
+ Pages reactivated:                         1823.
+ Pages purged:                              3722.
+ File-backed pages:                       190482.
+ Anonymous pages:                         213536.
+ Pages stored in compressor:                2455.
+ Pages occupied by compressor:               690.
+ Decompressions:                              78.
+ Compressions:                              2533.
+ Pageins:                                 225479.
+ Pageouts:                                   485.
+ Swapins:                                      0.
+ Swapouts:                                     0.
+ 
+
+ ===== BEGIN ps-comm =====
+     1 /sbin/launchd
+    75 /usr/libexec/logd
+    76 /usr/libexec/smd
+    77 /usr/libexec/UserEventAgent
+    79 /System/Library/PrivateFrameworks/Uninstall.framework/Resources/uninstalld
+    80 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+    81 /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+    83 /usr/sbin/systemstats
+    86 /usr/libexec/configd
+    87 endpointsecurityd
+    88 /System/Library/CoreServices/powerd.bundle/powerd
+    89 /usr/libexec/IOMFB_bics_daemon
+    90 /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed
+    92 /usr/libexec/amfid
+    94 /usr/libexec/remoted
+    96 /usr/libexec/keybagd
+    97 /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated
+   103 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+   104 /System/Library/CoreServices/iconservicesd
+   105 /usr/libexec/kernelmanagerd
+   106 /usr/libexec/diskarbitrationd
+   109 /usr/libexec/coreduetd
+   110 /usr/sbin/syslogd
+   113 /usr/libexec/thermalmonitord
+   114 /usr/libexec/opendirectoryd
+ 
+
+ ===== BEGIN ps-args =====
+     1     0     0  20096   0.4 /sbin/launchd    /sbin/launchd
+    75     1     0  28512   0.0 /usr/libexec/log /usr/libexec/logd
+    76     1     0   3856   0.0 /usr/libexec/smd /usr/libexec/smd
+    77     1     0  22000   0.1 /usr/libexec/Use /usr/libexec/UserEventAgent (System)
+    79     1     0   4848   0.0 /System/Library/ /System/Library/PrivateFrameworks/Uninstall.framework/Resources/uninstalld
+    80     1     0  10464   0.1 /System/Library/ /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+    81     1     0  19904   0.0 /System/Library/ /System/Library/PrivateFrameworks/MediaRemote.framework/Support/mediaremoted
+    83     1     0  19232   0.0 /usr/sbin/system /usr/sbin/systemstats --daemon
+    86     1     0  13904   0.0 /usr/libexec/con /usr/libexec/configd
+    87     1     0   2128   0.0 endpointsecurity endpointsecurityd
+    88     1     0  11264   0.0 /System/Library/ /System/Library/CoreServices/powerd.bundle/powerd
+    89     1     0   4112   0.0 /usr/libexec/IOM /usr/libexec/IOMFB_bics_daemon
+    90     1   289  17888   0.0 /System/Library/ /System/Library/PrivateFrameworks/BiomeStreams.framework/Support/biomed
+    92     1     0   9936   0.0 /usr/libexec/amf /usr/libexec/amfid
+    94     1     0   5312   0.0 /usr/libexec/rem /usr/libexec/remoted
+    96     1     0   4176   0.0 /usr/libexec/key /usr/libexec/keybagd -t 15
+    97     1   200  11920   0.0 /System/Library/ /System/Library/PrivateFrameworks/MobileSoftwareUpdate.framework/Support/softwareupdated
+   103     1     0  94704   2.3 /System/Library/ /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+   104     1   240   7888   0.0 /System/Library/ /System/Library/CoreServices/iconservicesd
+   105     1     0  22176   0.0 /usr/libexec/ker /usr/libexec/kernelmanagerd
+   106     1     0   6336   0.0 /usr/libexec/dis /usr/libexec/diskarbitrationd
+   109     1     0  27616   0.0 /usr/libexec/cor /usr/libexec/coreduetd
+   110     1     0   1632   0.0 /usr/sbin/syslog /usr/sbin/syslogd
+   113     1     0   5104   0.0 /usr/libexec/the /usr/libexec/thermalmonitord
+   114     1     0  27792   0.0 /usr/libexec/ope /usr/libexec/opendirectoryd
+   115     1     0   9408   0.0 /System/Library/ /System/Library/CoreServices/launchservicesd
+   116     1   266   6960   0.0 /usr/libexec/tim /usr/libexec/timed
+   117     1   213  10416   0.0 /System/Library/ /System/Library/PrivateFrameworks/MobileDevice.framework/Versions/A/Resources/usbmuxd -launchd
+   118     1     0  11408   0.0 /usr/sbin/securi /usr/sbin/securityd -i
+   120     1   205  32160   0.0 /usr/libexec/loc /usr/libexec/locationd
+   121     1     0   3984   0.0 autofsd          autofsd
+   122     1     0  23472   0.4 /usr/libexec/das /usr/libexec/dasd
+   124     1   241   6400   0.0 /usr/sbin/distno /usr/sbin/distnoted daemon
+   125     1     0   5616   0.0 /System/Library/ /System/Library/PrivateFrameworks/AppleCredentialManager.framework/AppleCredentialManagerDaemon
+   126     1     0   1120   0.0 /usr/libexec/dir /usr/libexec/dirhelper
+   127     1     0   6784   0.0 /System/Library/ /System/Library/CoreServices/logind
+   128     1     0   7040   0.0 /System/Library/ /System/Library/PrivateFrameworks/GenerationalStorage.framework/Versions/A/Support/revisiond
+   129     1     0   2976   0.0 /usr/sbin/Kernel /usr/sbin/KernelEventAgent
+   130     1     0   6160   0.0 /usr/libexec/use /usr/libexec/usermanagerd -t 15
+   132     1     0  26256   0.0 /usr/sbin/blueto /usr/sbin/bluetoothd
+   133     1     0   5248   0.1 /usr/sbin/notify /usr/sbin/notifyd
+   134     1     0   6592   0.0 /usr/libexec/san /usr/libexec/sandboxd
+   135     1     0  22048   0.0 /usr/libexec/cor /usr/libexec/corebrightnessd --launchd
+   136     1     0  14672   0.0 /usr/libexec/Air /usr/libexec/AirPlayXPCHelper
+   137     1     0  28672   0.0 /System/Library/ /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/com.apple.cmio.registerassistantservice
+   138     1    88  59184   0.0 /System/Library/ /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+   139     1     0   7552   0.1 /usr/sbin/cfpref /usr/sbin/cfprefsd daemon
+   140     1     0  23600   0.0 /System/Library/ /System/Library/PrivateFrameworks/TCC.framework/Support/tccd system
+   141     1     0  17296   0.0 /usr/libexec/lsd /usr/libexec/lsd runAsRoot
+   142     1   501  39312   0.0 /System/Library/ /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow console
+ 
+
+ ===== BEGIN lsof =====
+ COMMAND PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+ launchd   1 root    7u  IPv6 0x200ccf67061743b3      0t0  TCP *:22 (LISTEN)
+ launchd   1 root    8u  IPv4 0x9e3e8b82a6691cb5      0t0  TCP *:22 (LISTEN)
+ launchd   1 root   11u  IPv6 0x200ccf67061743b3      0t0  TCP *:22 (LISTEN)
+ launchd   1 root   12u  IPv4 0x9e3e8b82a6691cb5      0t0  TCP *:22 (LISTEN)
+ 
+
+ ===== BEGIN ioreg-accelerator =====
+ +-o AppleParavirtGPU  <class AppleParavirtGPU, id 0x100000194, registered, matched, active, busy 0 (1 ms), retain 17>
+     {
+       "IOClass" = "AppleParavirtGPU"
+       "KDebugVersion" = 4294967296
+       "IOPersonalityPublisher" = "com.apple.driver.AppleParavirtGPUIOGPUFamily"
+       "IOMatchedAtBoot" = Yes
+       "IOReportLegendPublic" = Yes
+       "AGCInfo" = {"fLastSubmissionPID"=138,"fSubmissionsSinceLastCheck"=0,"fBusyCount"=0}
+       "IOProviderClass" = "AppleARMIODevice"
+       "MetalPluginName" = "AppleParavirtGPUMetalIOGPUFamily"
+       "IOProbeScore" = 0
+       "SurfaceList" = ()
+       "IONameMatch" = "paravirtualizedgraphics,gpu"
+       "MetalPluginClassName" = "AppleParavirtDevice"
+       "SchedulerState" = {"Stamps"=(),"BusyWorkQueues"=()}
+       "CFBundleIdentifierKernel" = "com.apple.driver.AppleParavirtGPUIOGPUFamily"
+       "IOMatchCategory" = "IOAcceleratorES"
+       "CFBundleIdentifier" = "com.apple.driver.AppleParavirtGPUIOGPUFamily"
+       "IONameMatched" = "paravirtualizedgraphics,gpu"
+       "PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936,"In use system memory (driver)"=50103936,"recoveryCount"=0}
+       "IOGeneralInterest" = "IOCommand is not serializable"
+       "IOReportLegend" = ({"IOReportChannels"=((1,6442450945,"Alloc system memory"),(2,6442450945,"In use system memory"),(3,6442450945,"GPU Restart Count"),(4,6442450945,"In use system memory (driver)")),"IOReportGroupName"="Internal Statistics","IOReportChannelInfo"={"IOReportChannelUnit"=0}})
+       "DisplayPortCount" = 1
+     }
+     
+ 
+ 
+
+ ===== BEGIN ioreg-perfstats =====
+     | |   |   |   "PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936,"In use system memory (driver)"=50103936,"recoveryCount"=0}
+     | |   |   |   "IOGeneralInterest" = "IOCommand is not serializable"
+     | |   |   |   "IOReportLegend" = ({"IOReportChannels"=((1,6442450945,"Alloc system memory"),(2,6442450945,"In use system memory"),(3,6442450945,"GPU Restart Count"),(4,6442450945,"In use system memory (driver)")),"IOReportGroupName"="Internal Statistics","IOReportChannelInfo"={"IOReportChannelUnit"=0}})
+     | |   |   |   "DisplayPortCount" = 1
+ --
+     | | |   "Entries" = ({"IOName"="display","IOClass"="IOPCIDevice","class-code"=<00000300>,"model"=<"Unknown Unknown">,"device-id"=<10680000>,"vendor-id"=<02100000>,"revision-id"=<00000000>,"subsystem-id"=<00000000>},{"IOClass"="IOFramebuffer","IOName"="IOFB","ParentIndex"=0},{"IOName"="IOAccelerator","CFBundleIdentifier"="com.unknown.bundle","ParentIndex"=0,"IOClass"="IOAccelerator","PerformanceStatistics"={"vramFreeBytes"=15728640},"IOGLBundleName"="AppleMetalGLRenderer","MetalPluginName"="AGXMetalA12","VRAM,totalMB"=16384},{"IOClass"="IOService","IOName"="platform","IOPath"="IODeviceTree:/efi/platform","system-id"=<dc31d7e0351aea58b1b44cfc314aa1e6>},{"IOClass"="IOService","IOName"="memory","compat-dimm-serial-number"=<"0x01234567","0x76543210">,"IOPath"="IODeviceTree:/memory"})
+     | | |   "IOProviderClass" = "IOResources"
+     | | |   "CFBundleIdentifierKernel" = "com.apple.iokit.IOKitRegistryCompatibility"
+     | | |   "IOMatchedAtBoot" = Yes
+ --
+     | | |       "IOCompatibilityProperties" = {"IOName"="IOAccelerator","CFBundleIdentifier"="com.unknown.bundle","ParentIndex"=0,"IOClass"="IOAccelerator","PerformanceStatistics"={"vramFreeBytes"=15728640},"IOGLBundleName"="AppleMetalGLRenderer","MetalPluginName"="AGXMetalA12","VRAM,totalMB"=16384}
+     | | |     }
+     | | |     
+     | | +-o platform  <class IOServiceCompatibility, id 0x1000001a4, registered, matched, active, busy 0 (0 ms), retain 5>
+ 
+
