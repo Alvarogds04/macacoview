@@ -43,6 +43,9 @@ GROUP_KEYS = tuple(entry.name for entry in Config().watch)
 class Sample:
     used_gib: float
     available_gib: float
+    # Siempre GROUP_KEYS completo y en el mismo orden: el historial mapea por
+    # posición, asi que ocultar una entrada NO acorta esta tupla (ver
+    # hidden_groups abajo).
     groups: tuple[float, ...]
 
 
@@ -55,6 +58,9 @@ class Snapshot:
     router_metrics: dict[str, Any] | None = None
     errors: tuple[str, ...] = ()
     history: tuple[Sample, ...] = ()
+    # Nombres de [[watch]] con visible = false. La UI los omite al dibujar;
+    # el historial sigue usando GROUP_KEYS completo para indexar.
+    hidden_groups: tuple[str, ...] = ()
 
     def memory(self) -> dict[str, Any]:
         return (self.stats or {}).get("memory", {})
@@ -168,6 +174,11 @@ class Collector:
                     f"{key}: {value}" for key, value in sorted(self._errors.items())
                 ),
                 history=tuple(self._history),
+                hidden_groups=tuple(
+                    entry.name
+                    for entry in self._config.watch
+                    if not entry.visible
+                ),
             )
 
     # -- worker -----------------------------------------------------------

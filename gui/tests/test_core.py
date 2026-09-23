@@ -18,7 +18,7 @@ from ipaddress import ip_address
 from pathlib import Path
 
 from pc_ai_monitor.datos import GROUP_KEYS, Sample, Snapshot
-from pc_ai_monitor.formato import count, gib, percent, safe, share, tokens, whole
+from pc_ai_monitor.formato import count, gib, gib_label, percent, safe, share, tokens, whole
 from pc_ai_monitor.puertos import (
     ALL,
     LOCAL,
@@ -235,6 +235,30 @@ class PageTests(unittest.TestCase):
                     }
                 ],
             },
+            "codex_cli": {
+                "status": "ok",
+                "input": 63_000_000,
+                "output": 541_840,
+                "cache_read": 5_000_000,
+                "cache_write": 1_200_000,
+                "reasoning": 107_456,
+                "total": 63_541_840,
+                "turns": 577,
+                "sessions": 8,
+                "models": [],
+            },
+            "claude_code": {
+                "status": "ok",
+                "input": 1_000_000,
+                "output": 100_000,
+                "cache_read": 300_000,
+                "cache_write": 40_000,
+                "reasoning": 20_000,
+                "total": 1_440_000,
+                "turns": 25,
+                "sessions": 1,
+                "models": [],
+            },
         }
         history = tuple(
             Sample(
@@ -261,6 +285,116 @@ class PageTests(unittest.TestCase):
                 page.update_snapshot(snapshot)
                 page.redraw()
                 self.assertGreater(len(page._blocks), 0)
+
+    def test_new_token_sections_render(self):
+        """codex_cli y claude_code del colector tienen que llegar a la página:
+        razonamiento y caché escrito son métricas que antes no se veían."""
+        from pc_ai_monitor.blocks.usage import ClaudeCodeKpiBlock, CodexCliKpiBlock
+        from pc_ai_monitor.pages.usage import TokensPage
+
+        page = TokensPage()
+        page.update_snapshot(self._snapshot())
+
+        codex = next(b for b in page._blocks if isinstance(b, CodexCliKpiBlock))
+        claude = next(b for b in page._blocks if isinstance(b, ClaudeCodeKpiBlock))
+        self.assertEqual(codex._tiles["total"]._value.get_text(), tokens(63_541_840))
+        self.assertEqual(codex._tiles["reasoning"]._value.get_text(), tokens(107_456))
+        self.assertEqual(
+            codex._tiles["cache_write"]._value.get_text(), tokens(1_200_000)
+        )
+        self.assertEqual(claude._tiles["total"]._value.get_text(), tokens(1_440_000))
+        self.assertEqual(claude._tiles["reasoning"]._value.get_text(), tokens(20_000))
+        self.assertEqual(
+            claude._tiles["cache_write"]._value.get_text(), tokens(40_000)
+        )
+        self.assertEqual(claude._tiles["cache_read"]._value.get_text(), tokens(300_000))
+
+
+class HiddenGroupTests(unittest.TestCase):
+    """Un grupo [[watch]] apagado no dibuja tile ni serie.
+
+    El historial mapea por posición sobre GROUP_KEYS completo: ocultar no
+    puede cambiar el largo de ``sample.groups`` ni correr los valores de las
+    demás entradas.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import gi
+
+            gi.require_version("Gtk", "4.0")
+            from gi.repository import Gtk
+
+            if not Gtk.init_check():
+                raise unittest.SkipTest("sin display (usá xvfb-run)")
+        except ImportError as error:  # pragma: no cover
+            raise unittest.SkipTest(f"PyGObject no disponible: {error}") from error
+
+    @staticmethod
+    def _snapshot(hidden: tuple[str, ...]) -> Snapshot:
+        values = dict(zip(GROUP_KEYS, (2.5, 9.0, 1.0, 12.0, 5.0)))
+        stats = {
+            "memory": {"used_gib": 50.0, "available_gib": 70.0},
+            "groups": {key: {"rss_gib": value} for key, value in values.items()},
+            "processes": [],
+        }
+        # Valor trampa 99.0 en la entrada oculta: si ocultar corriera los
+        # índices, firefox terminaría mostrando 99.0.
+        history = tuple(
+            Sample(
+                used_gib=50.0 + step,
+                available_gib=70.0 - step,
+                groups=(1.0 + step, 99.0, 2.0 + step, 3.0, 4.0),
+            )
+            for step in range(5)
+        )
+        return Snapshot(stats=stats, history=history, hidden_groups=hidden)
+
+    def test_collector_reports_hidden_watch_groups(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        self.assertEqual(Collector(cfg.Config()).snapshot().hidden_groups, ())
+        config = cfg.Config(
+            watch=(
+                cfg.WatchEntry(name="pi"),
+                cfg.WatchEntry(name="hermes", visible=False),
+            )
+        )
+        self.assertEqual(Collector(config).snapshot().hidden_groups, ("hermes",))
+
+    def test_hidden_watch_entry_draws_no_tile(self):
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        block = GroupsBlock()
+        block.update_snapshot(self._snapshot(hidden=("hermes",)))
+
+        self.assertFalse(block._rows["hermes"][0].get_visible())
+        self.assertTrue(block._rows["pi"][0].get_visible())
+        labels = [slice_.label for slice_ in block._donut._slices]
+        self.assertNotIn("🪽 Hermes", labels)
+        self.assertIn("🥧 Pi", labels)
+        # El total del donut no cuenta a la entrada oculta.
+        self.assertEqual(
+            block._donut._center_value, gib_label(2.5 + 1.0 + 12.0 + 5.0, 2)
+        )
+
+    def test_history_keeps_indices_aligned_with_hidden_entries(self):
+        from pc_ai_monitor.blocks.historial import HistoryBlock
+
+        # hermes no tiene fila de serie; pi sí. Ocultar pi no puede correr los
+        # índices: si lo hiciera, firefox leería la columna de hermes (99.0).
+        block = HistoryBlock()
+        block.update_snapshot(self._snapshot(hidden=("pi", "hermes")))
+
+        self.assertFalse(block._rows["pi"].get_visible())
+        self.assertTrue(block._rows["firefox"].get_visible())
+        # La serie oculta sigue acumulando por posición, sin huecos, para que
+        # al reactivar la entrada el gráfico retome donde estaba.
+        self.assertEqual(block._sparks["pi"]._values[-1], 5.0)
+        self.assertEqual(block._values["firefox"].get_text(), gib(6.0) + "G")
+        self.assertEqual(block._sparks["firefox"]._values[-1], 6.0)
 
 
 class ConfigTests(unittest.TestCase):
