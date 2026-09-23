@@ -466,6 +466,321 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(all(entry.visible for entry in collected.watch[1:]))
 
 
+class TokenParserTests(unittest.TestCase):
+    """Parsers de transcripts de otros CLIs (Codex, Claude Code), sobre
+    fixtures sinteticos con datos inventados: nunca un transcript real, que
+    traeria rutas y procesos de esta maquina.
+
+    Cada fuente autodetecta su esquema y una linea mal formada no baja la
+    lectura del resto del archivo.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+
+        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-tokens"
+        if not script.exists():
+            raise unittest.SkipTest("no se encontro scripts/pc-ai-tokens")
+        loader = SourceFileLoader("pc_ai_tokens", str(script))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        cls.tokens = importlib.util.module_from_spec(spec)
+        loader.exec_module(cls.tokens)
+
+    def setUp(self):
+        import tempfile
+        from unittest.mock import patch
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.codex_dir = root / "codex" / "sessions"
+        self.claude_dir = root / "claude" / "projects"
+        for name, value in (
+            ("CODEX_SESSIONS_DIR", self.codex_dir),
+            ("CLAUDE_PROJECTS_DIR", self.claude_dir),
+            ("CODEX_CLI_CACHE", root / "codex-cli.json"),
+            ("CLAUDE_CACHE", root / "claude-code.json"),
+        ):
+            patcher = patch.object(self.tokens, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    # -- fixtures -------------------------------------------------------
+
+    def _codex_turn(self, usage: dict) -> str:
+        return json.dumps(
+            {
+                "timestamp": "2026-01-01T00:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": usage["total"],
+                        "last_token_usage": usage["last"],
+                        "model_context_window": 272000,
+                    },
+                },
+            }
+        )
+
+    def _write_codex_fixture(self, path: Path) -> None:
+        turn_a = {
+            "total": {
+                "input_tokens": 1000,
+                "cached_input_tokens": 400,
+                "cache_write_input_tokens": 200,
+                "output_tokens": 300,
+                "reasoning_output_tokens": 150,
+                "total_tokens": 1900,
+            },
+            "last": {
+                "input_tokens": 1000,
+                "cached_input_tokens": 400,
+                "cache_write_input_tokens": 200,
+                "output_tokens": 300,
+                "reasoning_output_tokens": 150,
+                "total_tokens": 1900,
+            },
+        }
+        turn_b = {
+            "total": {
+                "input_tokens": 1500,
+                "cached_input_tokens": 500,
+                "cache_write_input_tokens": 250,
+                "output_tokens": 500,
+                "reasoning_output_tokens": 230,
+                "total_tokens": 2750,
+            },
+            "last": {
+                "input_tokens": 500,
+                "cached_input_tokens": 100,
+                "cache_write_input_tokens": 50,
+                "output_tokens": 200,
+                "reasoning_output_tokens": 80,
+                "total_tokens": 850,
+            },
+        }
+        lines = [
+            json.dumps(
+                {"type": "session_meta", "payload": {"type": "session_meta"}}
+            ),
+            json.dumps(
+                {
+                    "type": "turn_context",
+                    "payload": {"model": "modelo-fixture-a", "cwd": "/tmp"},
+                }
+            ),
+            self._codex_turn(turn_a),
+            '{"payload": roto',  # linea mal formada: se saltea, no aborta
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "token_count", "rate_limits": {}},
+                }
+            ),  # token_count sin info: se ignora
+            json.dumps(
+                {
+                    "type": "turn_context",
+                    "payload": {"model": "modelo-fixture-b", "cwd": "/tmp"},
+                }
+            ),
+            self._codex_turn(turn_b),
+            # Esquema ajeno (estilo Claude Code dentro de un rollout de Codex):
+            # el parser de Codex no tiene que contarla.
+            json.dumps(
+                {"type": "response_item", "message": {"usage": {"input_tokens": 99999}}}
+            ),
+        ]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+
+    def _claude_assistant(self, model: str, usage: dict) -> str:
+        return json.dumps(
+            {
+                "type": "assistant",
+                "message": {"model": model, "usage": usage},
+            }
+        )
+
+    def _write_claude_fixture(self, path: Path) -> None:
+        lines = [
+            json.dumps(
+                {"type": "user", "message": {"role": "user", "content": "hola"}}
+            ),  # sin usage: se ignora
+            self._claude_assistant(
+                "claude-fixture-a",
+                {
+                    "input_tokens": 800,
+                    "cache_creation_input_tokens": 300,
+                    "cache_read_input_tokens": 1200,
+                    "output_tokens": 450,
+                    "output_tokens_details": {"thinking_tokens": 175},
+                    "server_tool_use": {"web_search_requests": 0},
+                },
+            ),
+            '{linea rota',  # mal formada: se saltea
+            self._claude_assistant(
+                "claude-fixture-b",
+                {
+                    "input_tokens": 200,
+                    "cache_creation_input_tokens": 40,
+                    "cache_read_input_tokens": 500,
+                    "output_tokens": 100,
+                    "output_tokens_details": {"thinking_tokens": 30},
+                },
+            ),
+            # Esquema ajeno (estilo Pi, camelCase): el parser de Claude Code
+            # no tiene que contarla.
+            json.dumps(
+                {
+                    "message": {
+                        "model": "pi-no-debe-contar",
+                        "usage": {"input": 7, "cacheRead": 8, "totalTokens": 9},
+                    }
+                }
+            ),
+        ]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+
+    # -- casos ----------------------------------------------------------
+
+    def test_codex_cli_parses_rollout_transcripts(self):
+        self._write_codex_fixture(
+            self.codex_dir / "2026" / "01" / "01" / "rollout-fixture.jsonl"
+        )
+
+        payload = self.tokens.collect_codex_cli()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["input"], 1500)
+        self.assertEqual(payload["output"], 500)
+        self.assertEqual(payload["cache_read"], 500)  # cached_input_tokens
+        self.assertEqual(payload["cache_write"], 250)  # cache_write_input_tokens
+        self.assertEqual(payload["reasoning"], 230)  # reasoning_output_tokens
+        self.assertEqual(payload["total"], 2750)
+        self.assertEqual(payload["turns"], 2)
+        self.assertEqual(payload["sessions"], 1)
+        models = {row["name"]: row for row in payload["models"]}
+        self.assertEqual(set(models), {"modelo-fixture-a", "modelo-fixture-b"})
+        self.assertEqual(models["modelo-fixture-a"]["total"], 1900)
+        self.assertEqual(models["modelo-fixture-a"]["reasoning"], 150)
+        self.assertEqual(models["modelo-fixture-b"]["total"], 850)
+        self.assertEqual(models["modelo-fixture-b"]["cache_write"], 50)
+
+    def test_claude_code_parses_project_transcripts(self):
+        self._write_claude_fixture(
+            self.claude_dir / "proyecto-fixture" / "sesion-fixture.jsonl"
+        )
+
+        payload = self.tokens.collect_claude_code()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["input"], 1000)
+        self.assertEqual(payload["output"], 550)
+        self.assertEqual(payload["cache_read"], 1700)  # cache_read_input_tokens
+        self.assertEqual(
+            payload["cache_write"], 340
+        )  # cache_creation_input_tokens
+        self.assertEqual(payload["reasoning"], 205)  # thinking_tokens
+        self.assertEqual(payload["total"], 3590)
+        self.assertEqual(payload["turns"], 2)
+        self.assertEqual(payload["sessions"], 1)
+        models = {row["name"]: row for row in payload["models"]}
+        self.assertEqual(set(models), {"claude-fixture-a", "claude-fixture-b"})
+        self.assertEqual(models["claude-fixture-a"]["reasoning"], 175)
+        self.assertEqual(models["claude-fixture-a"]["cache_write"], 300)
+        self.assertEqual(models["claude-fixture-b"]["total"], 840)
+
+    def test_each_parser_autodetects_only_its_schema(self):
+        # Los fixtures ya mezclan lineas ajenas; si un parser se los comiera,
+        # los totales de arriba no darian. Esto lo pina explicitamente.
+        self._write_codex_fixture(
+            self.codex_dir / "2026" / "01" / "01" / "rollout-fixture.jsonl"
+        )
+        self._write_claude_fixture(
+            self.claude_dir / "proyecto-fixture" / "sesion-fixture.jsonl"
+        )
+
+        codex = self.tokens.collect_codex_cli()
+        claude = self.tokens.collect_claude_code()
+
+        self.assertNotIn(99999, [row["input"] for row in codex["models"]])
+        self.assertNotIn("pi-no-debe-contar", [row["name"] for row in claude["models"]])
+
+    def test_incremental_read_only_consumes_appended_bytes(self):
+        path = self.codex_dir / "2026" / "01" / "01" / "rollout-fixture.jsonl"
+        self._write_codex_fixture(path)
+        first = self.tokens.collect_codex_cli()
+        self.assertEqual(first["total"], 2750)
+
+        appended = {
+            "total": {
+                "input_tokens": 2000,
+                "cached_input_tokens": 600,
+                "cache_write_input_tokens": 300,
+                "output_tokens": 700,
+                "reasoning_output_tokens": 300,
+                "total_tokens": 3600,
+            },
+            "last": {
+                "input_tokens": 500,
+                "cached_input_tokens": 100,
+                "cache_write_input_tokens": 50,
+                "output_tokens": 200,
+                "reasoning_output_tokens": 70,
+                "total_tokens": 850,
+            },
+        }
+        with path.open("a") as handle:
+            handle.write(
+                self._codex_turn(appended) + "\n"
+            )
+
+        second = self.tokens.collect_codex_cli()
+        self.assertEqual(second["total"], first["total"] + 850)
+        self.assertEqual(second["turns"], first["turns"] + 1)
+        self.assertEqual(second["reasoning"], first["reasoning"] + 70)
+
+    def test_shrunk_file_is_reread_from_zero(self):
+        path = self.claude_dir / "proyecto-fixture" / "sesion-fixture.jsonl"
+        self._write_claude_fixture(path)
+        first = self.tokens.collect_claude_code()
+        self.assertEqual(first["total"], 3590)
+
+        # Truncamiento/rotacion: el archivo queda con un solo turno.
+        path.write_text(
+            self._claude_assistant(
+                "claude-fixture-a",
+                {
+                    "input_tokens": 800,
+                    "cache_creation_input_tokens": 300,
+                    "cache_read_input_tokens": 1200,
+                    "output_tokens": 450,
+                    "output_tokens_details": {"thinking_tokens": 175},
+                },
+            )
+            + "\n"
+        )
+
+        second = self.tokens.collect_claude_code()
+        self.assertEqual(second["total"], 2750)
+        self.assertEqual(second["turns"], 1)
+        self.assertEqual(
+            [row["name"] for row in second["models"]], ["claude-fixture-a"]
+        )
+
+    def test_missing_directory_reports_ok_with_zeros(self):
+        payload = self.tokens.collect_codex_cli()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["total"], 0)
+        self.assertEqual(payload["turns"], 0)
+        self.assertEqual(payload["models"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

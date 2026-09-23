@@ -1,23 +1,30 @@
 #!/usr/bin/python3
 """Token consumption collector for PC-AI Monitor.
 
-Aggregates four independent sources into one JSON document on stdout:
+Aggregates six independent sources into one JSON document on stdout:
 
-  remote  litellm proxy token counters, read through the local Prometheus that
-          already scrapes the proxy. No API key is needed or read here.
-  local   llama-server (llama.cpp) token counters, read from the /metrics
-          endpoint of every running server discovered in /proc.
-  pi      token usage recorded in the Pi session transcripts.
-  codex   Codex subscription window usage (percentages, not token counts).
+  remote       litellm proxy token counters, read through the local Prometheus
+               that already scrapes the proxy. No API key is needed or read
+               here.
+  local        llama-server (llama.cpp) token counters, read from the /metrics
+               endpoint of every running server discovered in /proc.
+  pi           token usage recorded in the Pi session transcripts.
+  codex_cli    token usage recorded in the Codex CLI rollout transcripts
+               (~/.codex/sessions).
+  claude_code  token usage recorded in the Claude Code project transcripts
+               (~/.claude/projects).
+  codex        Codex subscription window usage (percentages, not token
+               counts).
 
 Every source is isolated: one failing source is reported as unavailable and the
 others still return data, so the caller never loses the whole snapshot.
 
-The Pi transcripts are the only expensive source (hundreds of MB, append-only
-JSONL). They are read incrementally: a cache keeps the byte offset already
-consumed per file, so a poll parses only the bytes appended since the last one.
-A file that shrank is re-read from the start, which covers truncation and
-rotation.
+The transcript sources (pi, codex_cli, claude_code) are the expensive ones
+(hundreds of MB, append-only JSONL). They share one incremental reader: a cache
+keeps the byte offset already consumed per file, so a poll parses only the
+bytes appended since the last one. A file that shrank is re-read from the
+start, which covers truncation and rotation. Each parser autodetects its own
+schema and a malformed line is skipped, never fatal for the rest of the file.
 """
 
 from __future__ import annotations
@@ -29,19 +36,27 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 PROMETHEUS = "http://127.0.0.1:9090/api/v1/query"
 CODEXBAR = os.path.expanduser("~/.local/bin/codexbar")
 SESSIONS_DIR = Path.home() / ".pi/agent/sessions"
+CODEX_SESSIONS_DIR = Path.home() / ".codex/sessions"
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude/projects"
 CACHE_DIR = Path.home() / ".cache/pc-ai-tokens"
 PI_CACHE = CACHE_DIR / "pi-sessions.json"
+CODEX_CLI_CACHE = CACHE_DIR / "codex-cli-sessions.json"
+CLAUDE_CACHE = CACHE_DIR / "claude-code-sessions.json"
 CODEX_CACHE = CACHE_DIR / "codex.json"
 
 # Bump whenever the cached shape changes: an older cache is ignored and the
 # transcripts are re-read from the start, which self-heals without manual
-# cleanup. Version 2 added the per-model counters.
+# cleanup. Version 2 added the per-model counters. The Codex CLI and Claude
+# Code caches follow the same contract with their own version numbers.
 PI_CACHE_VERSION = 2
+CODEX_CLI_CACHE_VERSION = 1
+CLAUDE_CACHE_VERSION = 1
 
 HTTP_TIMEOUT = 3.0
 CODEX_TIMEOUT = 15.0
@@ -62,7 +77,7 @@ LOCAL_METRICS = {
     "output": "llamacpp:tokens_predicted_total",
 }
 
-PI_COUNTERS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
+USAGE_COUNTERS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +104,8 @@ def as_float(value: object) -> float:
         return 0.0
 
 
-def empty_pi_sums() -> dict[str, float]:
-    sums: dict[str, float] = {name: 0.0 for name in PI_COUNTERS}
+def empty_usage_sums() -> dict[str, float]:
+    sums: dict[str, float] = {name: 0.0 for name in USAGE_COUNTERS}
     sums["cost_usd"] = 0.0
     sums["turns"] = 0.0
     return sums
@@ -236,11 +251,18 @@ def store_cache(path: Path, payload: dict) -> None:
 def coerce_sums(raw: object) -> dict[str, float]:
     """Rebuild a counter map from cached JSON, tolerating missing keys."""
     source = raw if isinstance(raw, dict) else {}
-    return {name: as_float(source.get(name)) for name in empty_pi_sums()}
+    return {name: as_float(source.get(name)) for name in empty_usage_sums()}
+
+
+# A line parser maps one raw JSONL line to the shared counter schema. It
+# returns ``(usage, model, provider)``: ``usage`` is None when the line carries
+# no token usage; a non-empty ``model`` re-points the model that later usage
+# lines are attributed to (Codex announces it in a separate record).
+LineParser = Callable[[bytes], tuple[dict[str, float] | None, str, str]]
 
 
 def accumulate_usage(
-    usage: dict,
+    usage: dict[str, float],
     sums: dict[str, float],
     models: dict[str, dict],
     model: str,
@@ -248,39 +270,49 @@ def accumulate_usage(
 ) -> None:
     """Add one turn to the global counters and to its own model's counters.
 
-    The model name comes from the transcript record itself, so nothing has to be
-    configured or guessed here.
+    ``usage`` arrives already mapped to the shared schema; the model name comes
+    from the transcript record itself, so nothing has to be configured or
+    guessed here.
     """
     entry = models.get(model)
     if not isinstance(entry, dict):
-        entry = {"sums": empty_pi_sums(), "provider": provider}
+        entry = {"sums": empty_usage_sums(), "provider": provider}
         models[model] = entry
     if provider:
         entry["provider"] = provider
 
     for target in (sums, entry["sums"]):
-        target["input"] += as_float(usage.get("input"))
-        target["output"] += as_float(usage.get("output"))
-        target["cache_read"] += as_float(usage.get("cacheRead"))
-        target["cache_write"] += as_float(usage.get("cacheWrite"))
-        target["reasoning"] += as_float(usage.get("reasoning"))
-        target["total"] += as_float(usage.get("totalTokens"))
-        target["cost_usd"] += as_float((usage.get("cost") or {}).get("total"))
+        for counter in empty_usage_sums():
+            target[counter] += as_float(usage.get(counter))
         target["turns"] += 1
 
 
-def collect_pi() -> dict[str, object]:
-    cache = load_cache(PI_CACHE)
+def scan_transcripts(
+    root: Path,
+    cache_path: Path,
+    cache_version: int,
+    pattern: str,
+    parse_line: LineParser,
+) -> tuple[dict[str, float], dict[str, dict], int]:
+    """Incrementally scan JSONL transcripts under ``root``.
+
+    Returns ``(totals, per_model, sessions)`` in the shared counter schema.
+    The cache keeps the byte offset already consumed per file, so a poll
+    parses only the bytes appended since the last one; a file that shrank is
+    re-read from the start, which covers truncation and rotation. A malformed
+    line is skipped, never fatal for the rest of the file.
+    """
+    cache = load_cache(cache_path)
     files: dict[str, dict] = {}
-    if isinstance(cache, dict) and cache.get("version") == PI_CACHE_VERSION:
+    if isinstance(cache, dict) and cache.get("version") == cache_version:
         stored = cache.get("files")
         files = stored if isinstance(stored, dict) else {}
 
-    totals = empty_pi_sums()
+    totals = empty_usage_sums()
     per_model: dict[str, dict] = {}
     visited: set[str] = set()
     sessions = 0
-    for path in sorted(SESSIONS_DIR.rglob("*.jsonl")):
+    for path in sorted(root.rglob(pattern)) if root.is_dir() else []:
         key = str(path)
         try:
             size = path.stat().st_size
@@ -301,9 +333,10 @@ def collect_pi() -> dict[str, object]:
         }
         if offset > size:  # truncated or rotated: start over
             offset = 0
-            sums = empty_pi_sums()
+            sums = empty_usage_sums()
             models = {}
 
+        current_model = "sin-modelo"
         if size > offset:
             with path.open("rb") as handle:
                 handle.seek(offset)
@@ -312,34 +345,29 @@ def collect_pi() -> dict[str, object]:
             consumed = 0
             for line in appended.split(b"\n")[:-1]:  # keep the trailing partial line
                 consumed += len(line) + 1
-                if b'"usage"' not in line:
-                    continue
                 try:
-                    record = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                    usage, model, provider = parse_line(line)
+                except Exception:  # noqa: BLE001 — one bad line never stops the scan
                     continue
-                message = record.get("message") or {}
-                usage = message.get("usage")
-                if isinstance(usage, dict):
-                    accumulate_usage(
-                        usage,
-                        sums,
-                        models,
-                        str(message.get("model") or "sin-modelo"),
-                        str(message.get("provider") or ""),
-                    )
+                if model:
+                    current_model = model
+                if not usage:
+                    continue
+                accumulate_usage(usage, sums, models, current_model, provider)
 
             offset += consumed
 
         files[key] = {"offset": offset, "sums": sums, "models": models}
         if sums["turns"] > 0:
             sessions += 1
-        for name in empty_pi_sums():
+        for name in empty_usage_sums():
             totals[name] += sums[name]
 
         for name, entry in models.items():
-            acc = per_model.setdefault(name, {"sums": empty_pi_sums(), "provider": ""})
-            for counter in empty_pi_sums():
+            acc = per_model.setdefault(
+                name, {"sums": empty_usage_sums(), "provider": ""}
+            )
+            for counter in empty_usage_sums():
                 acc["sums"][counter] += as_float(entry["sums"].get(counter))
             if entry.get("provider"):
                 acc["provider"] = entry["provider"]
@@ -347,10 +375,19 @@ def collect_pi() -> dict[str, object]:
     # Forget transcripts that no longer exist, so a deleted session stops
     # counting instead of lingering in the cached totals.
     store_cache(
-        PI_CACHE,
-        {"version": PI_CACHE_VERSION, "files": {k: v for k, v in files.items() if k in visited}},
+        cache_path,
+        {
+            "version": cache_version,
+            "files": {k: v for k, v in files.items() if k in visited},
+        },
     )
 
+    return totals, per_model, sessions
+
+
+def transcript_payload(
+    totals: dict[str, float], per_model: dict[str, dict], sessions: int
+) -> dict[str, object]:
     model_rows = [
         {
             "name": name,
@@ -385,6 +422,153 @@ def collect_pi() -> dict[str, object]:
         "sessions": sessions,
         "models": model_rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# pi — incremental scan of the session transcripts
+# ---------------------------------------------------------------------------
+
+
+def pi_parse_line(raw: bytes) -> tuple[dict[str, float] | None, str, str]:
+    if b'"usage"' not in raw:
+        return None, "", ""
+    try:
+        record = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "", ""
+    message = record.get("message") or {}
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None, "", ""
+    mapped = {
+        "input": as_float(usage.get("input")),
+        "output": as_float(usage.get("output")),
+        "cache_read": as_float(usage.get("cacheRead")),
+        "cache_write": as_float(usage.get("cacheWrite")),
+        "reasoning": as_float(usage.get("reasoning")),
+        "total": as_float(usage.get("totalTokens")),
+        "cost_usd": as_float((usage.get("cost") or {}).get("total")),
+    }
+    return (
+        mapped,
+        str(message.get("model") or "sin-modelo"),
+        str(message.get("provider") or ""),
+    )
+
+
+def collect_pi() -> dict[str, object]:
+    totals, per_model, sessions = scan_transcripts(
+        SESSIONS_DIR, PI_CACHE, PI_CACHE_VERSION, "*.jsonl", pi_parse_line
+    )
+    return transcript_payload(totals, per_model, sessions)
+
+
+# ---------------------------------------------------------------------------
+# codex_cli — incremental scan of the Codex CLI rollout transcripts
+# ---------------------------------------------------------------------------
+
+
+def codex_parse_line(raw: bytes) -> tuple[dict[str, float] | None, str, str]:
+    if b'"token_count"' not in raw and b'"turn_context"' not in raw:
+        return None, "", ""
+    try:
+        record = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "", ""
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None, "", ""
+    if record.get("type") == "turn_context":
+        # The model is announced once per turn, before its token events; the
+        # record carries it at the top level, payload.type is null here.
+        return None, str(payload.get("model") or ""), ""
+    if payload.get("type") != "token_count":
+        return None, "", ""
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None, "", ""
+    # total_token_usage is cumulative per thread and resets to zero when a
+    # resumed thread is appended to the same rollout file; last_token_usage is
+    # the per-turn delta, so summing it survives both shapes.
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict):
+        return None, "", ""
+    mapped = {
+        "input": as_float(usage.get("input_tokens")),
+        "output": as_float(usage.get("output_tokens")),
+        "cache_read": as_float(usage.get("cached_input_tokens")),
+        "cache_write": as_float(usage.get("cache_write_input_tokens")),
+        "reasoning": as_float(usage.get("reasoning_output_tokens")),
+        "total": as_float(usage.get("total_tokens")),
+        "cost_usd": 0.0,
+    }
+    return mapped, "", ""
+
+
+def collect_codex_cli() -> dict[str, object]:
+    totals, per_model, sessions = scan_transcripts(
+        CODEX_SESSIONS_DIR,
+        CODEX_CLI_CACHE,
+        CODEX_CLI_CACHE_VERSION,
+        "rollout-*.jsonl",
+        codex_parse_line,
+    )
+    return transcript_payload(totals, per_model, sessions)
+
+
+# ---------------------------------------------------------------------------
+# claude_code — incremental scan of the Claude Code project transcripts
+# ---------------------------------------------------------------------------
+
+
+def claude_parse_line(raw: bytes) -> tuple[dict[str, float] | None, str, str]:
+    if b'"usage"' not in raw:
+        return None, "", ""
+    try:
+        record = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, "", ""
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None, "", ""
+    usage = message.get("usage")
+    # Schema autodetection: Claude Code writes snake_case keys and the Pi
+    # transcripts camelCase, so one never claims the other's records.
+    if not isinstance(usage, dict) or not (
+        "input_tokens" in usage or "output_tokens" in usage
+    ):
+        return None, "", ""
+    input_tokens = as_float(usage.get("input_tokens"))
+    cache_read = as_float(usage.get("cache_read_input_tokens"))
+    cache_write = as_float(usage.get("cache_creation_input_tokens"))
+    output = as_float(usage.get("output_tokens"))
+    details = usage.get("output_tokens_details")
+    mapped = {
+        "input": input_tokens,
+        "output": output,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "reasoning": (
+            as_float(details.get("thinking_tokens"))
+            if isinstance(details, dict)
+            else 0.0
+        ),
+        # The API reports no total: it is the sum of every billed component.
+        "total": input_tokens + cache_read + cache_write + output,
+        "cost_usd": 0.0,
+    }
+    return mapped, str(message.get("model") or "sin-modelo"), ""
+
+
+def collect_claude_code() -> dict[str, object]:
+    totals, per_model, sessions = scan_transcripts(
+        CLAUDE_PROJECTS_DIR,
+        CLAUDE_CACHE,
+        CLAUDE_CACHE_VERSION,
+        "*.jsonl",
+        claude_parse_line,
+    )
+    return transcript_payload(totals, per_model, sessions)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +650,8 @@ def main() -> int:
         "remote": source("remote", collect_remote),
         "local": source("local", collect_local),
         "pi": source("pi", collect_pi),
+        "codex_cli": source("codex_cli", collect_codex_cli),
+        "claude_code": source("claude_code", collect_claude_code),
         "codex": source("codex", collect_codex),
     }
     print(json.dumps(document, separators=(",", ":"), sort_keys=True))
