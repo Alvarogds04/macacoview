@@ -134,15 +134,122 @@ for line in gem_data.splitlines():
 
 
 # --------------------------------------------------
-# Categorías
+# Grupos vigilados ([[watch]] del config de la app)
 # --------------------------------------------------
 
+# El comportamiento de siempre, tal como estaba hardcodeado: cada patrón es
+# una expresión regular buscada sobre el nombre del proceso (comm) y sobre su
+# línea completa. "system" (uid 0) y "other" (el resto) son reglas fijas.
+WATCH_DEFAULTS = (
+    {
+        "name": "pi",
+        "match": (r"^pi$", r"/\.pi-lens/", r"/\.pi/agent/"),
+        "icon": "\U0001f967",
+        "visible": True,
+    },
+    {
+        "name": "hermes",
+        "match": (r"^hermes$", r"/\.hermes/", "hermes_cli"),
+        "icon": "\U0001fab6",
+        "visible": True,
+    },
+    {
+        "name": "firefox",
+        "match": (r"^firefox$", r"/firefox/"),
+        "icon": "\U0001f98a",
+        "visible": True,
+    },
+    {"name": "system", "match": (), "icon": "\u2699\ufe0f", "visible": True},
+    {"name": "other", "match": (), "icon": "\U0001f4e6", "visible": True},
+)
+
+WATCH_CONFIG = Path.home() / ".config/pc-ai-monitor/config.toml"
+
+
+def _load_watch():
+    """Entradas [[watch]] del config de la app.
+
+    Sin sección (o con TOML roto) valen los defaults, que reproducen el
+    comportamiento hardcodeado: un config roto nunca cambia lo que se
+    monitorea. Con al menos una entrada válida, el usuario eligió qué
+    vigilar y esas reemplazan a todas las de siempre.
+    """
+    try:
+        import tomllib
+
+        raw = tomllib.loads(WATCH_CONFIG.read_text()).get("watch")
+    except Exception:
+        return [dict(entry) for entry in WATCH_DEFAULTS]
+
+    if not isinstance(raw, list):
+        return [dict(entry) for entry in WATCH_DEFAULTS]
+
+    entries = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip().lower()
+        if not name:
+            continue
+        match_raw = item.get("match")
+        if match_raw is None:
+            match_raw = ()
+        if not isinstance(match_raw, list):
+            continue
+        visible = item.get("visible")
+        entries.append({
+            "name": name,
+            "match": tuple(str(p) for p in match_raw if str(p).strip()),
+            "icon": str(item.get("icon") or ""),
+            "visible": visible if isinstance(visible, bool) else True,
+        })
+
+    return entries or [dict(entry) for entry in WATCH_DEFAULTS]
+
+
+watch = _load_watch()
+
+
+def _matches(entry, comm, args):
+    """Un patrón alcanza con que aparezca en el nombre o en la línea completa.
+
+    Una regex rota no tira el colector: el patrón se ignora y listo.
+    """
+    for pattern in entry["match"]:
+        try:
+            if re.search(pattern, comm) or re.search(pattern, args):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+# Los patrones deciden primero (en el orden del config), después la regla fija
+# de root y por último el grupo del resto. Una entrada invisible no se monitorea:
+# ni arma grupo ni aparece en la barra.
+_pattern_entries = [entry for entry in watch if entry["match"] and entry["visible"]]
+_system_entry = next(
+    (
+        entry
+        for entry in watch
+        if not entry["match"] and entry["name"] == "system" and entry["visible"]
+    ),
+    None,
+)
+_fallback_entry = next(
+    (
+        entry
+        for entry in watch
+        if not entry["match"] and entry["name"] != "system" and entry["visible"]
+    ),
+    None,
+)
+
+
 groups = {
-    "pi": {"rss_kb": 0, "cpu": 0, "pids": []},
-    "hermes": {"rss_kb": 0, "cpu": 0, "pids": []},
-    "firefox": {"rss_kb": 0, "cpu": 0, "pids": []},
-    "system": {"rss_kb": 0, "cpu": 0, "pids": []},
-    "other": {"rss_kb": 0, "cpu": 0, "pids": []},
+    entry["name"]: {"rss_kb": 0, "cpu": 0, "pids": []}
+    for entry in watch
+    if entry["visible"]
 }
 
 models = []
@@ -193,41 +300,21 @@ for p in processes:
 
         continue
 
-    # PI
-    is_pi = (
-        comm == "pi"
-        or "/.pi-lens/" in args
-        or "/.pi/agent/" in args
-    )
+    group = None
 
-    # Hermes
-    is_hermes = (
-        comm == "hermes"
-        or "/.hermes/" in args
-        or "hermes_cli" in args
-    )
+    for entry in _pattern_entries:
+        if _matches(entry, comm, args):
+            group = entry["name"]
+            break
 
-    # Firefox
-    is_firefox = (
-        comm == "firefox"
-        or "/firefox/" in args
-        or "/snap/firefox/" in args
-    )
+    if group is None and _system_entry is not None and p["uid"] == 0:
+        group = _system_entry["name"]
 
-    if is_pi:
-        group = "pi"
+    if group is None and _fallback_entry is not None:
+        group = _fallback_entry["name"]
 
-    elif is_hermes:
-        group = "hermes"
-
-    elif is_firefox:
-        group = "firefox"
-
-    elif p["uid"] == 0:
-        group = "system"
-
-    else:
-        group = "other"
+    if group is None:
+        continue
 
     groups[group]["rss_kb"] += p["rss_kb"]
     groups[group]["cpu"] += p["cpu"]
@@ -256,7 +343,7 @@ data = {
 # Chip builder
 # --------------------------------------------------
 
-BAR_CONFIG = Path.home() / ".config/pc-ai-monitor/config.toml"
+BAR_CONFIG = WATCH_CONFIG
 BAR_DEFAULTS = {"hide_zero": True, "always_show": [], "only": [], "units": "gb", "models": "separate"}
 
 
@@ -342,13 +429,18 @@ def _build_chips(models, groups, memory=None):
                     f'{icon}{_fmt(value, config, mem_total)}'
                 )
 
-    for key, icon in (("pi", "\U0001f967"), ("hermes", "\U0001fab6"), ("firefox", "\U0001f98a")):
+    for entry in watch:
 
-        value = float((groups.get(key) or {}).get("rss_gib") or 0.0)
+        # Los grupos de regla fija (system, other) no van al pill: así era
+        # antes y así queda para quien no configura nada.
+        if not entry["match"] or not entry["visible"]:
+            continue
 
-        if _wanted(key, value, config):
+        value = float((groups.get(entry["name"]) or {}).get("rss_gib") or 0.0)
+
+        if _wanted(entry["name"], value, config):
             parts.append(
-                f'{icon}{_fmt(value, config, mem_total)}'
+                f'{entry["icon"] or "\U0001f9e9"}{_fmt(value, config, mem_total)}'
             )
 
     return "  ".join(parts) if parts else "\u2014"

@@ -9,6 +9,7 @@ recolección en cada tecla.
 # pyright: reportAttributeAccessIssue=false
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from gi.repository import Adw, GLib, Gtk
@@ -168,6 +169,32 @@ class SettingsSection(Gtk.ScrolledWindow):
         self._router_indicators.connect("notify::active", self._on_change)
         panel.add(self._router_indicators)
 
+        # -- monitoreo ---------------------------------------------------------
+        watching = Adw.PreferencesGroup(
+            title="Monitoreo",
+            description=(
+                "Grupos de procesos que arma el colector (sección [[watch]] del "
+                "TOML). Apagá el que no quieras ver en la barra ni en la app."
+            ),
+        )
+        page.add(watching)
+
+        # Una casilla por entrada: visible = se monitorea; apagado = el grupo
+        # no se arma ni aparece, en el pill y en la app.
+        self._watch_switches: list[Adw.SwitchRow] = []
+        for entry in current.watch:
+            row = Adw.SwitchRow(title=f"{entry.icon} {entry.name}".strip())
+            if entry.match:
+                row.set_subtitle("Coincide con: " + ", ".join(entry.match))
+            elif entry.name == "system":
+                row.set_subtitle("Regla fija del colector: procesos de root")
+            else:
+                row.set_subtitle("Regla fija del colector: el resto de los procesos")
+            row.set_active(entry.visible)
+            row.connect("notify::active", self._on_change)
+            watching.add(row)
+            self._watch_switches.append(row)
+
         self._building = False
 
     # -- filas ----------------------------------------------------------------
@@ -220,6 +247,10 @@ class SettingsSection(Gtk.ScrolledWindow):
             bar_units="percent" if self._units.get_selected() == 1 else "gb",
             bar_models="combined" if self._models.get_selected() == 1 else "separate",
             bar_router_indicators=self._router_indicators.get_active(),
+            watch=tuple(
+                replace(entry, visible=self._watch_switches[index].get_active())
+                for index, entry in enumerate(self._config.watch)
+            ),
         )
 
     def _on_change(self, *_args) -> None:

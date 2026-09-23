@@ -17,7 +17,7 @@ import unittest
 from ipaddress import ip_address
 from pathlib import Path
 
-from pc_ai_monitor.datos import Sample, Snapshot
+from pc_ai_monitor.datos import GROUP_KEYS, Sample, Snapshot
 from pc_ai_monitor.formato import count, gib, percent, safe, share, tokens, whole
 from pc_ai_monitor.puertos import (
     ALL,
@@ -308,6 +308,111 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.theme, cfg.Config().theme)
         self.assertTrue(loaded.bar_hide_zero)
 
+    def test_watch_defaults_reproduce_the_old_groups(self):
+        from pc_ai_monitor import config as cfg
+
+        watch = cfg.Config().watch
+        self.assertEqual(
+            tuple(entry.name for entry in watch),
+            ("pi", "hermes", "firefox", "system", "other"),
+        )
+        self.assertTrue(all(entry.visible for entry in watch))
+        # Los grupos con regla de patrones traen sus patrones; system/other son
+        # reglas fijas del colector (uid 0 y resto).
+        self.assertTrue(watch[0].match)
+        self.assertFalse(watch[3].match)
+
+    def test_watch_round_trip(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        original = cfg.Config(
+            watch=(
+                cfg.WatchEntry(name="chrome", match=(r"^chrome$", "/chrome/"), icon="🌐"),
+                cfg.WatchEntry(name="system", visible=False),
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            self.assertTrue(cfg.save(original, path))
+            loaded = cfg.load(path)
+
+        self.assertEqual(loaded.watch, original.watch)
+        self.assertFalse(loaded.watch[1].visible)
+
+    def test_watch_missing_section_falls_back_to_defaults(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            path.write_text('[bar]\nhide_zero = false\n')
+            loaded = cfg.load(path)
+
+        self.assertEqual(loaded.watch, cfg.Config().watch)
+
+    def test_watch_invalid_entries_fall_back_to_defaults(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        # Entrada sin nombre y entrada con match roto: no vale ninguna.
+        broken = (
+            "[[watch]]\n"
+            'match = ["x"]\n'
+            "[[watch]]\n"
+            'name = "chrome"\n'
+            "match = 5\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            path.write_text(broken)
+            loaded = cfg.load(path)
+
+        self.assertEqual(loaded.watch, cfg.Config().watch)
+
+    def test_watch_keeps_the_valid_entries_and_drops_the_broken_ones(self):
+        import pathlib
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        mixed = (
+            "[[watch]]\n"
+            'name = "Chrome"\n'
+            'match = ["^chrome$", "/chrome/"]\n'
+            'icon = "🌐"\n'
+            "visible = false\n"
+            "[[watch]]\n"
+            'match = ["sin nombre"]\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "config.toml"
+            path.write_text(mixed)
+            loaded = cfg.load(path)
+
+        self.assertEqual(len(loaded.watch), 1)
+        self.assertEqual(loaded.watch[0].name, "chrome")
+        self.assertEqual(loaded.watch[0].match, ("^chrome$", "/chrome/"))
+        self.assertFalse(loaded.watch[0].visible)
+
+
+class WatchKeysTests(unittest.TestCase):
+    """La capa de datos ordena el historial segun los grupos vigilados: las
+    claves tienen que salir del mismo lugar que [[watch]], no de otra lista."""
+
+    def test_group_keys_follow_the_watch_defaults(self):
+        from pc_ai_monitor import config as cfg
+
+        self.assertEqual(
+            GROUP_KEYS, tuple(entry.name for entry in cfg.Config().watch)
+        )
+
 
 class SettingsTests(unittest.TestCase):
     """El diálogo de configuración tiene que abrir y devolver la config actual.
@@ -349,6 +454,16 @@ class SettingsTests(unittest.TestCase):
         # Y el ícono se elige por nombre.
         window._icon_row.set_text("computer")
         self.assertEqual(window._collect().icon, "computer")
+
+        # Cada entrada [[watch]] tiene su casilla, y apagarla se refleja en la
+        # config recolectada sin tocar a las demás.
+        self.assertEqual(
+            len(window._watch_switches), len(current.watch)
+        )
+        window._watch_switches[0].set_active(False)
+        collected = window._collect()
+        self.assertFalse(collected.watch[0].visible)
+        self.assertTrue(all(entry.visible for entry in collected.watch[1:]))
 
 
 if __name__ == "__main__":

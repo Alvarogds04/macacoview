@@ -33,8 +33,10 @@ ROUTER_TIMEOUT_S = 3.0
 ROUTER_STATUS_URL = "http://127.0.0.1:11009/status"
 ROUTER_METRICS_URL = "http://127.0.0.1:11009/metrics"
 
-# Ordered like the collectors: pi, hermes, firefox, system, other.
-GROUP_KEYS = ("pi", "hermes", "firefox", "system", "other")
+# Ordered like the watch entries: pi, hermes, firefox, system, other. Single
+# source of truth: the [[watch]] defaults in config, so a renamed default entry
+# renames the history columns with it.
+GROUP_KEYS = tuple(entry.name for entry in Config().watch)
 
 
 @dataclass(frozen=True)
