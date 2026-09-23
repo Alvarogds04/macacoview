@@ -26,8 +26,6 @@ use std::collections::HashMap;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
-/// `vm_stat` reports pages, not bytes, so every figure needs hw.pagesize.
-pub struct PageSize(pub u64);
 
 /// Parses `sysctl -n hw.memsize hw.pagesize` (one value per line).
 pub fn parse_sysctl_u64s(text: &str) -> Result<(u64, u64), String> {
