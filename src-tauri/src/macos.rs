@@ -17,8 +17,10 @@
 // macOS, where the parsers are reachable from `collect_*`.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
+use crate::config::WatchEntry;
 use crate::ports::parse_ss_output;
 use crate::stats::{Group, GpuMemory, Memory, Model, Process};
+use regex::Regex;
 #[cfg(target_os = "macos")]
 use crate::stats::Stats;
 use std::collections::{HashMap, HashSet};
@@ -179,30 +181,74 @@ pub fn parse_ps(text: &str) -> Vec<Process> {
     rows
 }
 
-/// Groups processes by the caller's own patterns. Nothing here is hard-coded: the
-/// groups come from configuration, which is what lets a user pick what shows up.
-pub fn group_by(rows: &[Process], patterns: &[(String, Vec<String>)]) -> HashMap<String, Group> {
-    let mut groups: HashMap<String, Group> = HashMap::new();
-    for (name, needles) in patterns {
-        for row in rows {
-            let command = row.comm.to_lowercase();
-            if !needles
-                .iter()
-                .any(|needle| command.contains(&needle.to_lowercase()))
-            {
-                continue;
-            }
-            let group = groups.entry(name.clone()).or_insert_with(|| Group {
-                rss_gib: 0.0,
-                cpu: 0.0,
-                pids: Vec::new(),
-            });
-            group.rss_gib += row.rss_kb as f64 * 1024.0 / GIB;
-            group.cpu += row.cpu;
-            group.pids.push(row.pid);
+/// Groups processes exactly the way the Linux collector does
+/// (`scripts/pc-ai-stats`): pattern entries are matched first, in config
+/// order, as regular expressions searched against the process name (comm)
+/// and its full command line; a `system` entry without patterns then catches
+/// root (uid 0) processes; any other visible entry without patterns catches
+/// everything no pattern claimed. A process lands in exactly one group. The
+/// regexes come from `config.toml`, which is what lets a user pick what
+/// shows up; a broken pattern is skipped, never fatal.
+pub fn group_by(rows: &[Process], watch: &[WatchEntry]) -> HashMap<String, Group> {
+    // Pattern entries decide first (config order), then the fixed root rule
+    // and finally the catch-all entry, mirroring the Linux collector. Every
+    // visible entry keeps its group even at zero, so "system" and "other"
+    // show up empty instead of vanishing.
+    let pattern_entries: Vec<&WatchEntry> = watch
+        .iter()
+        .filter(|entry| entry.visible && !entry.patterns.is_empty())
+        .collect();
+    let system_entry = watch
+        .iter()
+        .find(|entry| entry.visible && entry.patterns.is_empty() && entry.name == "system");
+    let fallback_entry = watch
+        .iter()
+        .find(|entry| entry.visible && entry.patterns.is_empty() && entry.name != "system");
+
+    let mut groups: HashMap<String, Group> = watch
+        .iter()
+        .filter(|entry| entry.visible)
+        .map(|entry| {
+            (
+                entry.name.clone(),
+                Group {
+                    rss_gib: 0.0,
+                    cpu: 0.0,
+                    pids: Vec::new(),
+                },
+            )
+        })
+        .collect();
+
+    for row in rows {
+        let mut target = pattern_entries
+            .iter()
+            .find(|entry| row_matches(entry.patterns.as_slice(), row))
+            .map(|entry| entry.name.as_str());
+        if target.is_none() && row.uid == 0 {
+            target = system_entry.map(|entry| entry.name.as_str());
         }
+        if target.is_none() {
+            target = fallback_entry.map(|entry| entry.name.as_str());
+        }
+        let Some(name) = target else { continue };
+        let group = groups.get_mut(name).expect("el grupo viene de las entradas visibles");
+        group.rss_gib += row.rss_kb as f64 * 1024.0 / GIB;
+        group.cpu += row.cpu;
+        group.pids.push(row.pid);
     }
     groups
+}
+
+/// Whether any pattern claims the row. A pattern is a regular expression
+/// searched against the process name and its full command line, exactly like
+/// `_matches` in `scripts/pc-ai-stats`; a broken regex is skipped, never
+/// fatal.
+fn row_matches(patterns: &[String], row: &Process) -> bool {
+    patterns.iter().any(|pattern| {
+        let Ok(re) = Regex::new(pattern) else { return false };
+        re.is_match(&row.comm) || re.is_match(&row.args)
+    })
 }
 
 /// Parses `lsof -nP -iTCP -sTCP:LISTEN` into the `ss`-shaped text the existing
@@ -637,31 +683,16 @@ pub fn collect_processes() -> Vec<Process> {
     .unwrap_or_default()
 }
 
-/// Local model servers: discovered from `ps` argv (`-ww` keeps long model
-/// flags and paths visible) plus the listening-socket table for servers that
-/// do not print their port. Ollama stays absent on purpose — its models live
-/// in a child `ollama runner` whose argv says nothing, and discovering them
-/// needs `ollama ps` / `GET /api/ps` with their own captured output.
-#[cfg(target_os = "macos")]
-pub fn collect_models() -> Vec<Model> {
-    let ps_text = run(&[
-        "/bin/ps",
-        "-ww",
-        "-axo",
-        "pid=,ppid=,uid=,rss=,%cpu=,args=",
-    ])
-    .unwrap_or_default();
-    let rows = parse_ps_args(&ps_text);
-    let listen = run(&["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN"])
-        .map(|text| listen_ports(&text))
-        .unwrap_or_default();
-    detect_models(&rows, &listen)
-}
-
 /// Full snapshot: memory, GPU, process table and locally served models.
+///
+/// The process groups come from the shared `config.toml` (`[[watch]]`
+/// blocks), matched against the same `ps` rows that feed model detection —
+/// those carry the full argv, which the anchored patterns need; a missing or
+/// broken config falls back to the five usual groups.
 #[cfg(target_os = "macos")]
 pub fn collect_stats() -> Stats {
-    let processes = collect_processes();
+    let rows = collect_process_args();
+    let listen = collect_listen_ports();
     Stats {
         memory: collect_memory().unwrap_or(Memory {
             total_gib: 0.0,
@@ -670,11 +701,33 @@ pub fn collect_stats() -> Stats {
             swap_total_gib: 0.0,
             swap_used_gib: 0.0,
         }),
-        models: collect_models(),
+        models: detect_models(&rows, &listen),
         gpu: collect_gpu(),
-        groups: HashMap::new(),
-        processes,
+        groups: group_by(&rows, &crate::config::load_watch()),
+        processes: collect_processes(),
     }
+}
+
+/// `ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,args=` rows: the ones whose argv
+/// the watch patterns are matched against.
+#[cfg(target_os = "macos")]
+fn collect_process_args() -> Vec<Process> {
+    run(&[
+        "/bin/ps",
+        "-ww",
+        "-axo",
+        "pid=,ppid=,uid=,rss=,%cpu=,args=",
+    ])
+    .map(|text| parse_ps_args(&text))
+    .unwrap_or_default()
+}
+
+/// pid -> listening port, read from `lsof` at capture time.
+#[cfg(target_os = "macos")]
+fn collect_listen_ports() -> HashMap<i64, u16> {
+    run(&["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN"])
+        .map(|text| listen_ports(&text))
+        .unwrap_or_default()
 }
 
 // -- smoke contra el sistema real (solo macOS) ---------------------------------
@@ -920,18 +973,82 @@ mod tests {
     }
 
     #[test]
-    fn agrupar_usa_solo_los_patrones_que_pone_el_usuario() {
+    fn agrupar_usa_los_patrones_regex_del_config() {
         let rows = parse_ps(" 1 0 501 1024 10.0 firefox\n 2 0 501 2048 5.0 Google Chrome\n 3 0 501 4096 1.0 ollama\n");
-        let groups = group_by(
-            &rows,
-            &[
-                ("navegadores".into(), vec!["firefox".into(), "chrome".into()]),
-                ("local".into(), vec!["ollama".into()]),
-            ],
-        );
+        let watch = vec![
+            entry("navegadores", &["^firefox$", "[Cc]hrome"], true),
+            entry("local", &["ollama"], true),
+        ];
+        let groups = group_by(&rows, &watch);
         assert_eq!(groups["navegadores"].pids, vec![1, 2]);
         assert_eq!(groups["local"].cpu, 1.0);
         assert!(!groups.contains_key("modelos"), "un patron sin coincidencia no crea el grupo");
+    }
+
+    #[test]
+    fn entrada_invisible_no_arma_grupo_y_sus_procesos_caen_al_fallback() {
+        let rows = parse_ps(
+            " 1 0 501 1024 10.0 firefox\n 2 1 0 2048 5.0 systemd\n 3 1 501 4096 1.0 otrocosa\n",
+        );
+        let watch = vec![
+            entry("firefox", &["^firefox$"], false),
+            entry("system", &[], true),
+            entry("other", &[], true),
+        ];
+        let groups = group_by(&rows, &watch);
+        assert!(!groups.contains_key("firefox"), "una entrada oculta no aparece");
+        assert_eq!(groups["system"].pids, vec![2], "system sigue siendo la regla fija de uid 0");
+        assert_eq!(
+            groups["other"].pids,
+            vec![1, 3],
+            "lo que el grupo oculto hubiera tomado cae al resto"
+        );
+    }
+
+    #[test]
+    fn regex_rota_se_ignora_sin_bajar_al_panic() {
+        let rows = parse_ps(" 1 0 501 1024 10.0 firefox\n");
+        let watch = vec![
+            entry("roto", &["("], true),
+            entry("firefox", &["^firefox$"], true),
+        ];
+        let groups = group_by(&rows, &watch);
+        assert!(groups["roto"].pids.is_empty(), "un patron roto no matchea nada");
+        assert_eq!(groups["firefox"].pids, vec![1], "los demas patrones siguen vivos");
+    }
+
+    #[test]
+    fn los_defaults_reproducen_el_camino_de_linux() {
+        let rows = parse_ps(
+            " 1 0 0 1024 1.0 systemd\n 2 1 501 2048 2.0 pi\n 3 1 501 4096 3.0 firefox\n 4 1 501 8192 4.0 halliballo\n",
+        );
+        let groups = group_by(&rows, &crate::config::default_watch());
+        assert_eq!(groups["pi"].pids, vec![2]);
+        assert_eq!(groups["firefox"].pids, vec![3]);
+        assert_eq!(groups["system"].pids, vec![1]);
+        assert_eq!(groups["other"].pids, vec![4]);
+    }
+
+    #[test]
+    fn un_proceso_cae_en_un_solo_grupo_el_primero_del_config() {
+        let rows = parse_ps(" 1 0 501 1024 1.0 firefox\n");
+        let watch = vec![
+            entry("navegadores", &["firefox"], true),
+            entry("todos", &["fire"], true),
+        ];
+        let groups = group_by(&rows, &watch);
+        assert_eq!(groups["navegadores"].pids, vec![1]);
+        assert!(groups["todos"].pids.is_empty(), "el primer patron que coincide se queda el proceso");
+    }
+
+    /// Construye una entrada [[watch]] como las que produce `config.rs`.
+    fn entry(name: &str, patterns: &[&str], visible: bool) -> WatchEntry {
+        WatchEntry {
+            name: name.into(),
+            patterns: patterns.iter().map(|p| p.to_string()).collect(),
+            icon: String::new(),
+            visible,
+        }
     }
 
     #[test]
