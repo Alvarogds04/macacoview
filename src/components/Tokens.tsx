@@ -7,6 +7,7 @@ import type {
   PiTokens,
   RemoteModel,
   RemoteTokens,
+  TranscriptTokens,
 } from "../types";
 import { ChartLegend, Columns, Donut, Treemap, type Slice } from "./Charts";
 import { fmtTokens } from "./Meter";
@@ -504,6 +505,111 @@ function ConsumersPanel({ pi }: { pi: PiTokens }) {
 }
 
 // ---------------------------------------------------------------------------
+// CLI agents — Codex CLI and Claude Code transcripts (same payload as pi)
+// ---------------------------------------------------------------------------
+
+interface ProviderRollup {
+  label: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+  cost: number;
+  turns: number;
+  models: number;
+}
+
+/// The transcripts record the provider per model; an empty provider (the CLI
+/// agents write "") still has to be legible in the per-provider list.
+function providerLabel(provider: string): string {
+  const trimmed = provider.trim();
+  return trimmed === "" ? "sin proveedor" : trimmed;
+}
+
+function providerRollups(tokens: TranscriptTokens): ProviderRollup[] {
+  const rollups = new Map<string, ProviderRollup>();
+  for (const model of tokens.models) {
+    const label = providerLabel(model.provider);
+    const rollup = rollups.get(label) ?? {
+      label,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      total: 0,
+      cost: 0,
+      turns: 0,
+      models: 0,
+    };
+
+    rollup.input += safe(model.input);
+    rollup.output += safe(model.output);
+    rollup.cacheRead += safe(model.cache_read);
+    rollup.cacheWrite += safe(model.cache_write);
+    rollup.reasoning += safe(model.reasoning);
+    rollup.total += safe(model.total);
+    rollup.cost += safe(model.cost_usd);
+    rollup.turns += safe(model.turns);
+    rollup.models += 1;
+    rollups.set(label, rollup);
+  }
+
+  return [...rollups.values()].sort((a, b) => b.total - a.total);
+}
+
+/// KPI strip + per-provider list for one CLI agent. `reasoning` and
+/// `cache_write` are the metrics these sources carry that the rest of the tab
+/// does not surface yet, so they get their own KPIs here.
+function TranscriptPanel({ tokens }: { tokens: TranscriptTokens }) {
+  if (tokens.models.length === 0) {
+    return <p className="model-empty">Sin turnos registrados todavía.</p>;
+  }
+
+  const rollups = providerRollups(tokens);
+
+  return (
+    <div className="server-panel">
+      <KpiStrip
+        items={[
+          { label: "tokens", value: fmtTokens(safe(tokens.total)) },
+          { label: "turnos", value: fmtCount(tokens.turns) },
+          { label: "sesiones", value: fmtCount(tokens.sessions) },
+          { label: "razonamiento", value: fmtTokens(safe(tokens.reasoning)) },
+          { label: "caché escrita", value: fmtTokens(safe(tokens.cache_write)) },
+          { label: "costo", value: fmtMoney(tokens.cost_usd) },
+        ]}
+      />
+
+      <h3 className="sub-title">POR PROVEEDOR</h3>
+      <ul className="stat-list">
+        {rollups.map((rollup) => (
+          <li key={rollup.label}>
+            <span className="legend-label">
+              {rollup.label}
+              {rollup.models > 1 ? ` · ${rollup.models} modelos` : ""}
+            </span>
+            <span className="stat-line">
+              ENT {fmtTokens(rollup.input)} · SAL {fmtTokens(rollup.output)} · CACHÉ LEÍDA{" "}
+              {fmtTokens(rollup.cacheRead)} · CACHÉ ESCRITA {fmtTokens(rollup.cacheWrite)} · RAZ{" "}
+              {fmtTokens(rollup.reasoning)}
+              {rollup.cost > 0 ? ` · ${fmtMoney(rollup.cost)}` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="scale-note">
+        Tokens leídos de las transcripciones locales del agente. La caché escrita es contexto
+        nuevo que se guarda en caché; el razonamiento son los tokens de pensamiento del modelo.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Servers — what each service counted on its own side
 // ---------------------------------------------------------------------------
 
@@ -686,7 +792,7 @@ export function Tokens({
     );
   }
 
-  const { remote, local, pi, codex } = tokens;
+  const { remote, local, pi, codex_cli, claude_code, codex } = tokens;
 
   return (
     <div className="tokens-content">
@@ -706,6 +812,22 @@ export function Tokens({
         <ServersPanel remote={remote} local={local} />
       </Section>
 
+      <Section title="AGENTE · CODEX CLI">
+        {codex_cli.status !== "ok" ? (
+          <MissingChip label="codex_cli" />
+        ) : (
+          <TranscriptPanel tokens={codex_cli} />
+        )}
+      </Section>
+
+      <Section title="AGENTE · CLAUDE CODE">
+        {claude_code.status !== "ok" ? (
+          <MissingChip label="claude_code" />
+        ) : (
+          <TranscriptPanel tokens={claude_code} />
+        )}
+      </Section>
+
       <Section title="SUSCRIPCIÓN CODEX">
         {codex.status !== "ok" ? (
           <MissingChip label="codexbar" />
@@ -716,8 +838,9 @@ export function Tokens({
 
       <p className="scale-note">
         Pi cuenta lo que sale del cliente; litellm y llama.cpp cuentan lo que entra a cada
-        servidor. Los alcances no son excluyentes (un mismo pedido puede aparecer en los dos),
-        por eso no se suman en un total único.
+        servidor; codex_cli y claude_code agregan las transcripciones locales de cada agente. Los
+        alcances no son excluyentes (un mismo pedido puede aparecer en más de una sección), por
+        eso no se suman en un total único.
       </p>
     </div>
   );
