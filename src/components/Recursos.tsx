@@ -114,7 +114,11 @@ function GroupPanel({ groups }: { groups: Record<string, Group> }) {
   if (!measured.some(Boolean)) {
     return (
       <div className="group-panel">
-        <p className="model-empty">Sin grupos medidos en esta máquina.</p>
+        <p className="model-empty">Ningún grupo se monitorea en esta máquina.</p>
+        <p className="scale-note">
+          Los grupos se configuran en ~/.config/pc-ai-monitor/config.toml: cada
+          bloque [[watch]] elige que monitorear.
+        </p>
       </div>
     );
   }
@@ -335,7 +339,13 @@ function HistoryRow({
 
 const MAX_SAMPLES = 300;
 
-function HistorySection({ history }: { history: HistorySample[] }) {
+function HistorySection({
+  history,
+  groups,
+}: {
+  history: HistorySample[];
+  groups: Record<string, Group>;
+}) {
   const sampleCount = history.length;
 
   if (sampleCount === 0) {
@@ -352,6 +362,14 @@ function HistorySection({ history }: { history: HistorySample[] }) {
 
   const latest = history[sampleCount - 1];
 
+  // Same distinction GroupPanel uses: a key present in the snapshot's groups
+  // map is a measured group (zero included); an absent key was never
+  // measured. The backend fills the absent slots of `group_rss_gib` with
+  // 0.0, so drawing them would plot five flat lines that falsely claim
+  // "measured zero all along" — there is no series to draw for a group the
+  // snapshot does not report.
+  const measured = GROUP_KEYS.map((key) => groups[key] !== undefined);
+
   const rows: Array<{ key: string; label: string; value: string; series: number[] }> =
     [
       {
@@ -366,13 +384,25 @@ function HistorySection({ history }: { history: HistorySample[] }) {
         value: fmtOneDecimal(latest.available_gib),
         series: history.map((s) => s.available_gib),
       },
-      ...GROUP_KEYS.map((key, idx) => ({
-        key,
-        label: GROUP_LABELS[key],
-        value: fmtTwoDecimals(latest.group_rss_gib[idx]),
-        series: history.map((s) => s.group_rss_gib[idx]),
-      })),
+      ...GROUP_KEYS.flatMap((key, idx) =>
+        measured[idx]
+          ? [
+              {
+                key,
+                label: GROUP_LABELS[key],
+                value: fmtTwoDecimals(latest.group_rss_gib[idx]),
+                series: history.map((s) => s.group_rss_gib[idx]),
+              },
+            ]
+          : []
+      ),
     ];
+
+  // The unmeasured groups are said, not drawn: their slots hold fabricated
+  // zeros, so any line for them would be a claim, not a measurement.
+  const unmeasuredLabels = GROUP_KEYS.filter((_, idx) => !measured[idx]).map(
+    (key) => GROUP_LABELS[key]
+  );
 
   return (
     <Section title="HISTORIAL (5 MIN)">
@@ -389,6 +419,12 @@ function HistorySection({ history }: { history: HistorySample[] }) {
             series={row.series}
           />
         ))}
+        {unmeasuredLabels.length > 0 && (
+          <p className="scale-note">
+            {unmeasuredLabels.join(", ")} no se miden en esta máquina: no hay
+            serie que dibujar.
+          </p>
+        )}
       </div>
     </Section>
   );
@@ -443,7 +479,17 @@ export function Recursos({
       {/* Models */}
       <Section title="MODELOS LOCALES">
         {models.length === 0 ? (
-          <p className="model-empty">Sin modelos locales cargados.</p>
+          // An empty list is the normal state on a fresh machine, not a
+          // failure: say what is missing and how it gets filled.
+          <>
+            <p className="model-empty">
+              No hay modelos locales corriendo en esta máquina.
+            </p>
+            <p className="scale-note">
+              Si levantas un servidor de modelos (por ejemplo Ollama), aparece
+              aca.
+            </p>
+          </>
         ) : (
           <>
             <p className="scale-note">
@@ -465,7 +511,7 @@ export function Recursos({
       </Section>
 
       {/* History sparklines — always present, fills as samples accumulate */}
-      <HistorySection history={history} />
+      <HistorySection history={history} groups={groups} />
 
       <p className="footnote">
         Nota: los modelos usan GTT/AMDGPU; Pi, Hermes y Firefox muestran RSS. RAM y SWAP
