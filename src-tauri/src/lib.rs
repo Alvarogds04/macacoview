@@ -1,5 +1,11 @@
 mod macos;
 
+// The `[[watch]]` config is consumed by the macOS collector; on Linux the
+// Python collector (`scripts/pc-ai-stats`) reads the same file itself, so
+// outside macOS the module exists to run its tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod config;
+
 mod stats;
 mod ports;
 mod ring_buffer;
