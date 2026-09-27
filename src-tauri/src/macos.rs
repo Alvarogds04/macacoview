@@ -130,7 +130,6 @@ pub fn parse_swap(text: &str) -> Option<(f64, f64)> {
     for (label, slot) in [("total =", &mut total), ("used =", &mut used)] {
         let (_, tail) = rest.split_once(label)?;
         let value: f64 = tail
-            .trim_start()
             .split_whitespace()
             .next()?
             .trim_end_matches('M')
