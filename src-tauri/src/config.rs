@@ -13,7 +13,8 @@
 //! never change what gets monitored, it must fall back to the defaults.
 
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use toml_edit::RawString;
 
 /// One `[[watch]]` entry: a process group the collector builds.
 ///
@@ -168,9 +169,192 @@ fn parse_watch_entries(raw: Option<&toml::Value>) -> Vec<WatchEntry> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Writing the watch list (daemon POST /api/config)
+// ---------------------------------------------------------------------------
+
+/// Replaces the `[[watch]]` blocks of the config file, leaving everything
+/// else — other sections, their values, their comments — byte-for-byte
+/// intact. Implemented with `toml_edit` for exactly that guarantee; a plain
+/// `toml` round-trip would silently drop the user's comments.
+///
+/// A file that is not valid TOML is refused instead of overwritten: this
+/// module can never be the thing that destroys a config it cannot parse.
+/// The write is atomic (sibling temp file + rename, both inside the config
+/// directory) so a collector sampling mid-write never sees a half file.
+/// Writes stay strictly inside the config path: nothing here resolves
+/// anywhere else.
+pub fn write_watch(path: &Path, entries: &[WatchEntry]) -> std::io::Result<()> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc = match text.parse::<toml_edit::DocumentMut>() {
+        Ok(doc) => doc,
+        Err(err) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{} is not valid TOML, refusing to edit it: {err}", path.display()),
+            ));
+        }
+    };
+
+    // Drop the old watch blocks and append the new ones at the end; every
+    // other table keeps its position, format and comments untouched.
+    //
+    // Comments written directly above the old `[[watch]]` headers are decor
+    // of those blocks in `toml_edit`; they are carried over to the new first
+    // block so replacing watch does not silently eat the user's notes.
+    let old_prefix = match doc.get("watch") {
+        Some(toml_edit::Item::ArrayOfTables(old)) => old
+            .iter()
+            .next()
+            .and_then(|table| table.decor().prefix().and_then(RawString::as_str).map(str::to_string)),
+        _ => None,
+    };
+    doc.remove("watch");
+    if !entries.is_empty() {
+        let mut watch = toml_edit::ArrayOfTables::new();
+        for entry in entries {
+            let mut table = toml_edit::Table::new();
+            table["name"] = toml_edit::value(entry.name.trim().to_string());
+            let mut patterns = toml_edit::Array::new();
+            for pattern in &entry.patterns {
+                patterns.push(pattern.as_str());
+            }
+            table["match"] = toml_edit::value(patterns);
+            table["icon"] = toml_edit::value(entry.icon.as_str());
+            table["visible"] = toml_edit::value(entry.visible);
+            watch.push(table);
+        }
+        if let Some(prefix) = old_prefix {
+            if let Some(first) = watch.iter_mut().next() {
+                first.decor_mut().set_prefix(prefix);
+            }
+        }
+        doc.insert("watch", toml_edit::Item::ArrayOfTables(watch));
+    }
+
+    // Atomic swap: write the sibling temp file first, then rename over the
+    // real config. Both live in the config directory, never anywhere else.
+    let serialized = doc.to_string();
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} has no parent directory", path.display()),
+        )
+    })?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(".config.toml.watch.tmp");
+    let write_result = std::fs::write(&tmp, &serialized);
+    match write_result {
+        Ok(()) => {}
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp); // no temp file left behind
+            return Err(err);
+        }
+    }
+    if let Err(err) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Writes the watch list to the user's shared config (the one every reader
+/// resolves from `XDG_CONFIG_HOME`). An error means nothing was written.
+pub fn save_watch(entries: &[WatchEntry]) -> std::io::Result<()> {
+    let Some(path) = config_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no config directory could be resolved from XDG_CONFIG_HOME or HOME",
+        ));
+    };
+    write_watch(&path, entries)
+}
+
+/// Validates a `POST /api/config` body and turns it into watch entries.
+///
+/// The shape is the same the daemon serves: `{"watch": [{"name", "match",
+/// "icon", "visible"}]}`. Only `name` is mandatory (`match` defaults to no
+/// patterns, `icon` to empty, `visible` to true); anything present must have
+/// the right type. Any validation failure is a hard error — the daemon turns
+/// it into a 400 and the file is never touched.
+pub fn watch_from_json(body: &serde_json::Value) -> Result<Vec<WatchEntry>, String> {
+    let Some(list) = body
+        .as_object()
+        .ok_or("the body must be a JSON object with a \"watch\" array")?
+        .get("watch")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err("the body must be a JSON object with a \"watch\" array".into());
+    };
+    let mut entries = Vec::new();
+    for item in list {
+        let Some(dict) = item.as_object() else {
+            return Err("every entry of \"watch\" must be a JSON object".into());
+        };
+        let name = match dict.get("name") {
+            Some(serde_json::Value::String(name)) => name.trim().to_string(),
+            _ => return Err("every watch entry needs a non-empty \"name\" string".into()),
+        };
+        if name.is_empty() {
+            return Err("every watch entry needs a non-empty \"name\" string".into());
+        }
+        let patterns = match dict.get("match") {
+            None => Vec::new(),
+            Some(serde_json::Value::Array(items)) => {
+                let mut patterns = Vec::with_capacity(items.len());
+                for item in items {
+                    match item.as_str() {
+                        // Blank patterns would match every process; the
+                        // reader (`parse_watch`) filters them silently, so
+                        // the writer mirrors that instead of erroring.
+                        Some(pattern) if !pattern.trim().is_empty() => {
+                            patterns.push(pattern.to_string())
+                        }
+                        Some(_) => {}
+                        None => return Err("\"match\" must be a list of strings".into()),
+                    }
+                }
+                patterns
+            }
+            Some(_) => return Err("\"match\" must be a list of strings".into()),
+        };
+        let icon = match dict.get("icon") {
+            None => String::new(),
+            Some(serde_json::Value::String(icon)) => icon.clone(),
+            Some(_) => return Err("\"icon\" must be a string".into()),
+        };
+        let visible = match dict.get("visible") {
+            None => true,
+            Some(serde_json::Value::Bool(visible)) => *visible,
+            Some(_) => return Err("\"visible\" must be a boolean".into()),
+        };
+        entries.push(WatchEntry { name, patterns, icon, visible });
+    }
+    Ok(entries)
+}
+
+/// Serializes watch entries into the JSON shape the daemon serves for
+/// `GET /api/config` (note `match`, the config-file spelling, not `patterns`).
+pub fn watch_json(entries: &[WatchEntry]) -> serde_json::Value {
+    serde_json::Value::Array(
+        entries
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "name": entry.name,
+                    "match": entry.patterns,
+                    "icon": entry.icon,
+                    "visible": entry.visible,
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn defaults_son_los_cinco_grupos_de_siempre() {
@@ -257,5 +441,183 @@ name = "system"
     fn sin_ninguna_base_no_hay_ruta_inventada() {
         assert_eq!(config_dir(None, None), None);
         assert_eq!(config_dir(Some("".as_ref()), Some("".as_ref())), None);
+    }
+
+    // -------------------------------------------------------------------
+    // Escritura de [[watch]] (API de configuración del daemon)
+    // -------------------------------------------------------------------
+
+    /// Un directorio temporal único por prueba: la config de pruebas nunca
+    /// toca la del usuario. El directorio se reutiliza (no se borra) porque
+    /// las pruebas no tienen permiso para hacer limpieza destructiva.
+    fn temp_config_dir(tag: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("el reloj del sistema deberia avanzar")
+            .as_nanos();
+        std::env::temp_dir().join(format!("pc-ai-monitor-cfg-{tag}-{unique}"))
+    }
+
+    fn write_config_file(dir: &Path, text: &str) -> PathBuf {
+        let dir = dir.join("pc-ai-monitor");
+        std::fs::create_dir_all(&dir).expect("deberia poder crear el directorio temporal");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).expect("deberia poder escribir la config de prueba");
+        path
+    }
+
+    #[test]
+    fn escribir_watch_conserva_las_otras_secciones_y_los_comentarios() {
+        let dir = temp_config_dir("conserva");
+        let original = "# Configuracion del usuario\n\n[bar]\nheight = 34\n\n[refresh]\ninterval = 2\n# un comentario que debe sobrevivir\n\n[[watch]]\nname = \"firefox\"\nmatch = ['firefox']\n";
+        let path = write_config_file(&dir, original);
+
+        let entries = vec![WatchEntry {
+            name: "chrome".into(),
+            patterns: vec!["^chrome$".into()],
+            icon: "🌐".into(),
+            visible: true,
+        }];
+        write_watch(&path, &entries).expect("la escritura deberia funcionar");
+
+        let written = std::fs::read_to_string(&path).expect("la config deberia existir");
+        assert!(written.contains("[bar]"), "la seccion [bar] debe sobrevivir");
+        assert!(written.contains("[refresh]"), "la seccion [refresh] debe sobrevivir");
+        assert!(written.contains("height = 34"), "el contenido de [bar] debe sobrevivir");
+        assert!(written.contains("interval = 2"), "el contenido de [refresh] debe sobrevivir");
+        assert!(
+            written.contains("# un comentario que debe sobrevivir"),
+            "los comentarios ajenos a watch deben sobrevivir"
+        );
+        assert!(written.contains("chrome"), "el watch nuevo debe estar");
+        assert!(!written.contains("firefox"), "el watch viejo debe ser reemplazado");
+        // Y el archivo sigue siendo una config valida para el lector.
+        let watch = parse_watch(&written);
+        assert_eq!(watch.len(), 1);
+        assert_eq!(watch[0].name, "chrome");
+    }
+
+    #[test]
+    fn escribir_watch_reemplaza_solo_los_bloques_watch() {
+        let dir = temp_config_dir("reemplaza");
+        let original = "[ui]\ntheme = \"gentle\"\n\n[[watch]]\nname = \"viejo\"\nmatch = ['viejo']\nicon = \"old\"\n\n[[watch]]\nname = \"otro\"\n";
+        let path = write_config_file(&dir, original);
+
+        let entries = vec![
+            WatchEntry { name: "uno".into(), patterns: vec!["^uno$".into()], icon: "1".into(), visible: true },
+            WatchEntry { name: "dos".into(), patterns: vec![], icon: "".into(), visible: false },
+        ];
+        write_watch(&path, &entries).expect("la escritura deberia funcionar");
+
+        let written = std::fs::read_to_string(&path).expect("la config deberia existir");
+        assert!(written.contains("[ui]"), "la seccion [ui] debe sobrevivir");
+        let watch = parse_watch(&written);
+        assert_eq!(watch.len(), 2, "los bloques viejos se reemplazan");
+        assert_eq!(watch[0].name, "uno");
+        assert_eq!(watch[0].patterns, vec!["^uno$"]);
+        assert_eq!(watch[0].icon, "1");
+        assert!(watch[1].patterns.is_empty());
+        assert!(!watch[1].visible);
+    }
+
+    #[test]
+    fn escribir_watch_crea_el_archivo_si_no_existe() {
+        let dir = temp_config_dir("crea");
+        let path = dir.join("pc-ai-monitor").join("config.toml");
+        let entries = vec![WatchEntry {
+            name: "ollama".into(),
+            patterns: vec!["ollama".into()],
+            icon: "".into(),
+            visible: true,
+        }];
+        write_watch(&path, &entries).expect("deberia crear directorio y archivo");
+        let written = std::fs::read_to_string(&path).expect("la config deberia existir");
+        assert_eq!(parse_watch(&written), entries);
+    }
+
+    #[test]
+    fn escribir_watch_rehusa_un_archivo_toml_roto_sin_destruirlo() {
+        let dir = temp_config_dir("roto");
+        let original = "esto no es toml [[";
+        let path = write_config_file(&dir, original);
+        let entries = vec![WatchEntry {
+            name: "chrome".into(),
+            patterns: vec![],
+            icon: "".into(),
+            visible: true,
+        }];
+        let result = write_watch(&path, &entries);
+        assert!(result.is_err(), "un archivo roto no se puede editar con seguridad");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("el archivo deberia seguir ahi"),
+            original,
+            "el contenido roto debe quedar intacto"
+        );
+    }
+
+    #[test]
+    fn watch_from_json_valida_el_cuerpo_del_post() {
+        // Cuerpo bien formado.
+        let body: serde_json::Value = serde_json::from_str(
+            r#"{"watch": [{"name": "Chrome", "match": ["^chrome$", ""], "icon": "🌐", "visible": false}]}"#,
+        )
+        .expect("el cuerpo de prueba deberia ser JSON valido");
+        let entries = watch_from_json(&body).expect("un cuerpo valido deberia aceptarse");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Chrome");
+        assert_eq!(entries[0].patterns, vec!["^chrome$"], "los patrones vacios se descartan");
+        assert_eq!(entries[0].icon, "🌐");
+        assert!(!entries[0].visible);
+
+        // Campos opcionales con defaults.
+        let minimal: serde_json::Value =
+            serde_json::from_str(r#"{"watch": [{"name": "pi"}]}"#).unwrap();
+        let entries = watch_from_json(&minimal).expect("solo el nombre es obligatorio");
+        assert_eq!(entries[0].patterns, Vec::<String>::new());
+        assert_eq!(entries[0].icon, "");
+        assert!(entries[0].visible);
+
+        // Malformados: todos 400 en el daemon.
+        let bad_cases: Vec<(&str, serde_json::Value)> = vec![
+            ("no es un objeto", serde_json::json!("nope")),
+            ("sin watch", serde_json::json!({"other": []})),
+            ("watch no es lista", serde_json::json!({"watch": "nope"})),
+            ("entrada no es objeto", serde_json::json!({"watch": ["nope"]})),
+            ("sin nombre", serde_json::json!({"watch": [{"match": ["x"]}]})),
+            ("nombre no es string", serde_json::json!({"watch": [{"name": 3}]})),
+            ("nombre vacio", serde_json::json!({"watch": [{"name": "   "}]})),
+            ("match no es lista", serde_json::json!({"watch": [{"name": "x", "match": "nope"}]})),
+            ("match con no-strings", serde_json::json!({"watch": [{"name": "x", "match": ["ok", 3]}]})),
+            ("icono no es string", serde_json::json!({"watch": [{"name": "x", "icon": 3}]})),
+            ("visible no es bool", serde_json::json!({"watch": [{"name": "x", "visible": "si"}]})),
+        ];
+        for (why, value) in bad_cases {
+            assert!(watch_from_json(&value).is_err(), "{why} deberia rechazarse");
+        }
+    }
+
+    #[test]
+    fn watch_json_tiene_la_forma_del_contrato() {
+        let entries = vec![WatchEntry {
+            name: "pi".into(),
+            patterns: vec!["^pi$".into()],
+            icon: "🍎".into(),
+            visible: true,
+        }];
+        let json = watch_json(&entries);
+        let list = json.as_array().expect("watch debe ser una lista");
+        assert_eq!(list.len(), 1);
+        let dict = list[0].as_object().expect("cada entrada debe ser un objeto");
+        // Exactamente las claves del contrato (el orden no esta fijado: el
+        // mapa JSON de serde ordena alfabeticamente por defecto).
+        assert_eq!(dict.len(), 4);
+        assert!(dict.contains_key("name"));
+        assert!(dict.contains_key("match"));
+        assert!(dict.contains_key("icon"));
+        assert!(dict.contains_key("visible"));
+        assert_eq!(
+            json,
+            serde_json::json!([{ "name": "pi", "match": ["^pi$"], "icon": "🍎", "visible": true }])
+        );
     }
 }

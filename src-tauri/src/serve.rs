@@ -147,10 +147,18 @@ fn handle_connection(stream: TcpStream, state: Arc<Mutex<CollectorState>>) -> st
         return Ok(()); // client closed before sending anything
     }
     let request = parse_request_line(&line);
-    drain_headers(&mut reader)?;
+    let headers = read_headers(&mut reader)?;
+    // Read the body (if any) before answering, so keep-alive clients do not
+    // get a reset while they are still sending.
+    let body = match read_body(&mut reader, &headers) {
+        Ok(body) => body,
+        // Too large or unsupported framing: nothing to answer with but 400.
+        Err(_) => return Response::bad_request().write_to(reader.get_mut()),
+    };
 
     let response = match request {
         Some(("GET", path)) => handle_get(&state, &path),
+        Some(("POST", path)) if path == "/api/config" => handle_post_config(&body),
         Some(_) => Response::method_not_allowed(),
         None => Response::bad_request(),
     };
@@ -175,21 +183,61 @@ fn path_only(target: &str) -> String {
     path.to_string()
 }
 
-/// Consume the rest of the headers so the client does not get a connection
-/// reset while we still owe it bytes.
-fn drain_headers<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
-    let mut line = String::new();
+/// Consume the rest of the headers, keeping them so the request body can be
+/// sized correctly. Header names are lowercased; values are trimmed.
+fn read_headers<R: BufRead>(reader: &mut R) -> std::io::Result<Vec<(String, String)>> {
+    let mut headers = Vec::new();
     loop {
-        line.clear();
+        let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
-            return Ok(());
+            return Ok(headers);
         }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+        }
+    }
+}
+
+/// Largest accepted request body. A watch list is tiny; anything bigger is
+/// rejected before it can be used to exhaust memory.
+const MAX_BODY_BYTES: usize = 64 * 1024;
+
+/// Read exactly `Content-Length` bytes as the request body. No body (GET, or
+/// a POST without a length) is an empty body. Chunked transfer encoding is
+/// deliberately not supported: an error here becomes a 400, never a hang.
+fn read_body<R: BufRead>(
+    reader: &mut R,
+    headers: &[(String, String)],
+) -> std::io::Result<Vec<u8>> {
+    if headers.iter().any(|(name, _)| name == "transfer-encoding") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "chunked request bodies are not supported",
+        ));
+    }
+    let length = headers
+        .iter()
+        .find(|(name, _)| name == "content-length")
+        .and_then(|(_, value)| value.parse::<usize>().ok());
+    match length {
+        Some(len) if len <= MAX_BODY_BYTES => {
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body)?;
+            Ok(body)
+        }
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "request body too large",
+        )),
+        None => Ok(Vec::new()),
     }
 }
 
 fn handle_get(state: &Arc<Mutex<CollectorState>>, path: &str) -> Response {
     if path == "/api/state" {
         Response::json(&state_payload(state))
+    } else if path == "/api/config" {
+        config_response()
     } else if let Some(asset) = lookup_asset(path) {
         Response::asset(asset)
     } else if path == "/" || path == "/index.html" {
@@ -203,6 +251,40 @@ fn handle_get(state: &Arc<Mutex<CollectorState>>, path: &str) -> Response {
 /// The exact `get_state` payload, serialized once per request.
 fn state_payload(state: &Arc<Mutex<CollectorState>>) -> GetState {
     read_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Config API (read and write the shared config.toml watch list)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/config`: the watch list as it is on disk right now.
+fn config_response() -> Response {
+    let watch = crate::config::watch_json(&crate::config::load_watch());
+    Response::json_value(&serde_json::json!({ "watch": watch }))
+}
+
+/// `POST /api/config`: validate the body, replace the `[[watch]]` blocks of
+/// the user's config (nothing else in the file is touched), and answer with
+/// the config as re-read from disk. A malformed body is a 400 that writes
+/// nothing; a storage failure is a 500 that also writes nothing.
+fn handle_post_config(body: &[u8]) -> Response {
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(err) => {
+            return Response::bad_request_message(&format!("invalid JSON body: {err}"));
+        }
+    };
+    let entries = match crate::config::watch_from_json(&parsed) {
+        Ok(entries) => entries,
+        Err(message) => return Response::bad_request_message(&message),
+    };
+    if let Err(err) = crate::config::save_watch(&entries) {
+        return Response::server_error(&format!("could not write the config: {err}"));
+    }
+    // Re-read from disk: what the next sampling cycle will see is exactly
+    // what the client gets back (`collect_stats` calls `load_watch` every
+    // cycle, so the change is live without restarting anything).
+    config_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +308,14 @@ impl Response {
         }
     }
 
+    fn json_value(body: &serde_json::Value) -> Self {
+        Self {
+            status: "200 OK",
+            content_type: "application/json",
+            body: serde_json::to_vec(body).unwrap_or_else(|_| b"{}".to_vec()),
+        }
+    }
+
     fn not_found() -> Self {
         Self::text("404 Not Found", "not found\n")
     }
@@ -244,6 +334,15 @@ impl Response {
 
     fn bad_request() -> Self {
         Self::text("400 Bad Request", "malformed request\n")
+    }
+
+    /// A 400 that explains itself: the client sent a body we refuse.
+    fn bad_request_message(message: &str) -> Self {
+        Self::text("400 Bad Request", &format!("{message}\n"))
+    }
+
+    fn server_error(message: &str) -> Self {
+        Self::text("500 Internal Server Error", &format!("{message}\n"))
     }
 
     fn text(status: &'static str, body: &str) -> Self {
@@ -274,7 +373,7 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
+    use std::io::Read as _;
     use std::net::TcpStream;
     use std::time::Duration;
 
@@ -425,5 +524,185 @@ mod tests {
 
         std::env::remove_var("PC_AI_PORT");
         assert_eq!(port_from_env(), DEFAULT_PORT);
+    }
+
+    // -------------------------------------------------------------------
+    // POST /api/config (round-trip real contra un servidor vivo)
+    // -------------------------------------------------------------------
+
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    /// Serializa las pruebas que tocan `XDG_CONFIG_HOME`: es process-global.
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Guarda/restaura `XDG_CONFIG_HOME` alrededor de una prueba que necesita
+    /// una config temporal. Nunca toca la config real del usuario.
+    struct TempConfigHome {
+        _guard: parking_lot::MutexGuard<'static, ()>,
+        previous: Option<OsString>,
+        dir: PathBuf,
+    }
+
+    impl TempConfigHome {
+        fn new(tag: &str) -> Self {
+            let guard = CONFIG_ENV_LOCK.lock();
+            let previous = std::env::var_os("XDG_CONFIG_HOME");
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("el reloj del sistema deberia avanzar")
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("pc-ai-monitor-serve-{tag}-{unique}"));
+            let config_dir = dir.join("pc-ai-monitor");
+            std::fs::create_dir_all(&config_dir)
+                .expect("deberia poder crear el directorio temporal");
+            std::env::set_var("XDG_CONFIG_HOME", &dir);
+            Self { _guard: guard, previous, dir }
+        }
+
+        fn config_file(&self) -> PathBuf {
+            self.dir.join("pc-ai-monitor").join("config.toml")
+        }
+    }
+
+    impl Drop for TempConfigHome {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    fn post(addr: SocketAddr, path: &str, body: &str) -> String {
+        send_request(
+            addr,
+            &format!(
+                "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\
+                 \nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    }
+
+    fn body_of(response: &str) -> &str {
+        response
+            .split_once("\r\n\r\n")
+            .expect("headers should be separated from the body")
+            .1
+    }
+
+    #[test]
+    fn post_config_escribe_y_get_lo_reelee() {
+        let home = TempConfigHome::new("roundtrip");
+        let addr = spawn_test_server();
+
+        // POST de un cambio visible: chrome entra, pi sale.
+        let post_body = r#"{"watch": [{"name": "Chrome", "match": ["^chrome$"], "icon": "🌐", "visible": true}]}"#;
+        let response = post(addr, "/api/config", post_body);
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "got: {response}");
+        let json: serde_json::Value =
+            serde_json::from_str(body_of(&response)).expect("la respuesta debe ser JSON");
+        let watch = json["watch"].as_array().expect("la respuesta debe traer watch");
+        assert_eq!(watch.len(), 1);
+        assert_eq!(watch[0]["name"], "chrome", "la respuesta re-lee del disco");
+
+        // GET ve lo mismo que la respuesta del POST.
+        let response = get(addr, "/api/config");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "got: {response}");
+        let json: serde_json::Value =
+            serde_json::from_str(body_of(&response)).expect("la respuesta debe ser JSON");
+        assert_eq!(json["watch"][0]["name"], "chrome");
+        assert_eq!(json["watch"][0]["match"], serde_json::json!(["^chrome$"]));
+
+        // Y quedo escrito en la config del directorio temporal, no en la real.
+        let written = std::fs::read_to_string(home.config_file())
+            .expect("el POST deberia haber creado la config");
+        assert!(written.contains("chrome"), "got: {written}");
+    }
+
+    #[test]
+    fn post_config_conserva_las_secciones_ajenas() {
+        let home = TempConfigHome::new("secciones");
+        std::fs::write(
+            home.config_file(),
+            "[bar]\nheight = 34\n\n[refresh]\ninterval = 2\n\n# comentario ajeno\n[[watch]]\nname = \"pi\"\nmatch = ['^pi$']\n",
+        )
+        .expect("deberia poder pre-crear la config");
+        let addr = spawn_test_server();
+
+        let response = post(
+            addr,
+            "/api/config",
+            r#"{"watch": [{"name": "ollama", "match": ["ollama"], "icon": "", "visible": true}]}"#,
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "got: {response}");
+
+        let written = std::fs::read_to_string(home.config_file()).expect("la config deberia existir");
+        assert!(written.contains("[bar]"), "[bar] debe sobrevivir, got: {written}");
+        assert!(written.contains("[refresh]"), "[refresh] debe sobrevivir");
+        assert!(written.contains("height = 34"));
+        assert!(written.contains("interval = 2"));
+        assert!(written.contains("# comentario ajeno"), "los comentarios ajenos sobreviven");
+        assert!(written.contains("ollama"));
+        assert!(!written.contains("\"pi\""), "el watch viejo se reemplaza");
+    }
+
+    #[test]
+    fn post_config_malformado_da_400_y_no_toca_el_archivo() {
+        let home = TempConfigHome::new("malformado");
+        let original = b"[bar]\nheight = 34\n";
+        std::fs::write(home.config_file(), original)
+            .expect("deberia poder pre-crear la config");
+        let addr = spawn_test_server();
+
+        for bad_body in ["esto no es json", "{\"watch\": \"nope\"}"] {
+            let response = post(addr, "/api/config", bad_body);
+            assert!(
+                response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+                "{bad_body} deberia ser 400, got: {response}"
+            );
+        }
+
+        // Byte a byte: un 400 no escribe nada.
+        let after = std::fs::read(home.config_file()).expect("la config deberia existir");
+        assert_eq!(after, original, "el archivo debe quedar identico tras un 400");
+    }
+
+    #[test]
+    fn post_config_con_entrada_invalida_da_400_y_no_toca_el_archivo() {
+        let home = TempConfigHome::new("entrada-invalida");
+        let original = b"[refresh]\ninterval = 2\n\n[[watch]]\nname = \"pi\"\n";
+        std::fs::write(home.config_file(), original)
+            .expect("deberia poder pre-crear la config");
+        let addr = spawn_test_server();
+
+        for bad_body in [
+            r#"{"watch": [{"name": "", "match": ["x"]}]}"#,
+            r#"{"watch": [{"name": "ok", "match": "no-es-lista"}]}"#,
+            r#"{"watch": [{"name": "ok", "match": ["ok", 3]}]}"#,
+        ] {
+            let response = post(addr, "/api/config", bad_body);
+            assert!(
+                response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+                "{bad_body} deberia ser 400, got: {response}"
+            );
+        }
+
+        let after = std::fs::read(home.config_file()).expect("la config deberia existir");
+        assert_eq!(after, original, "el archivo debe quedar identico tras un 400");
+    }
+
+    #[test]
+    fn get_config_sin_archivo_devuelve_defaults() {
+        let _home = TempConfigHome::new("defaults");
+        let addr = spawn_test_server();
+        let response = get(addr, "/api/config");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "got: {response}");
+        let json: serde_json::Value =
+            serde_json::from_str(body_of(&response)).expect("la respuesta debe ser JSON");
+        let watch = json["watch"].as_array().expect("debe traer watch");
+        let names: Vec<&str> = watch.iter().map(|entry| entry["name"].as_str().expect("cada entrada trae name")).collect();
+        assert_eq!(names, vec!["pi", "hermes", "firefox", "system", "other"]);
     }
 }
