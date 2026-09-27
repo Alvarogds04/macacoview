@@ -32,15 +32,11 @@ dependencias y avisa cual falta (la instalacion igual sigue).
 
 ### Opcion A: bajar una release (recomendado)
 
-El repositorio es privado, asi que el download pide un token de GitHub de solo
-lectura. El token se pasa por **variable de entorno**, nunca como argumento de
-linea de comandos (quedaria en el historico de la shell):
+El repositorio es publico, asi que no hace falta ninguna credencial para bajar
+ni la release de macOS ni el instalador:
 
 ```bash
-# fine-grained PAT con Contents: read, o classic con scope repo
-export PC_AI_GITHUB_TOKEN="github_pat_xxx"
-
-curl -fsSL -H "Authorization: Bearer $PC_AI_GITHUB_TOKEN" \
+curl -fsSL \
   https://raw.githubusercontent.com/Alvarogds04/pc-ai-monitor/main/gui/install.sh \
   -o install.sh
 

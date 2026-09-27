@@ -56,14 +56,13 @@ MAC
 
   repo="${PC_AI_RELEASE_REPO:-Alvarogds04/pc-ai-monitor}"
   token="${PC_AI_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
-  if [ -z "$token" ]; then
-    cat >&2 <<'TOK'
-Este repositorio es privado: hace falta un token de GitHub de solo lectura.
-Exportalo antes de instalar (nunca como argumento en la linea de comandos):
-  export PC_AI_GITHUB_TOKEN=github_pat_xxx
-TOK
-    exit 1
-  fi
+  # El repositorio es PUBLICO, asi que la descarga funciona sin credenciales.
+  # El token queda opcional: sube el limite de la API y sigue sirviendo si
+  # apuntas PC_AI_RELEASE_REPO a un fork privado.
+  auth=()
+  [ -n "$token" ] && auth=("${auth[@]}")
+  wgetauth=()
+  [ -n "$token" ] && wgetauth=("${wgetauth[@]}")
 
   if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     echo "necesito curl o wget para bajar la release" >&2
@@ -77,10 +76,10 @@ TOK
   gh_get() {
     if command -v curl >/dev/null 2>&1; then
       curl -fsSL \
-        -H "Authorization: Bearer $token" \
+        "${auth[@]}" \
         -H "Accept: application/vnd.github+json" "$1"
     else
-      wget -q --header="Authorization: Bearer $token" \
+      wget -q "${wgetauth[@]}" \
         --header="Accept: application/vnd.github+json" -O - "$1"
     fi
   }
@@ -89,10 +88,10 @@ TOK
   # API, que exige el id del asset y Accept: application/octet-stream.
   gh_download() {
     if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -H "Authorization: Bearer $token" \
+      curl -fsSL "${auth[@]}" \
         -H "Accept: application/octet-stream" -o "$2" "$1"
     else
-      wget -q --header="Authorization: Bearer $token" \
+      wget -q "${wgetauth[@]}" \
         --header="Accept: application/octet-stream" -O "$2" "$1"
     fi
   }
