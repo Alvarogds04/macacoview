@@ -40,8 +40,11 @@ export interface Model {
   model: string;
   rss_gib: number;
   cpu: number;
-  gtt_gib: number;
-  vram_gib: number;
+  /// GPU memory per model: `null` when it cannot be measured (macOS has no
+  /// public API for it). A number, including 0, is a real measurement — the
+  /// Linux collector always reports one.
+  gtt_gib: number | null;
+  vram_gib: number | null;
 }
 
 export interface Group {

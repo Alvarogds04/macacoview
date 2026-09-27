@@ -154,6 +154,11 @@ function GroupPanel({ groups }: { groups: Record<string, Group> }) {
 // Models — one card per loaded model, with GTT/RSS/CPU meters
 // ---------------------------------------------------------------------------
 
+/// GTT meter for one model. On macOS the value is `null` ("not measurable"),
+/// which is rendered as "—" with NO bar at all — never as `0.0G`, which would
+/// falsely claim the model uses no GPU memory. A `Some(0.0)` from Linux is a
+/// real measurement and keeps the normal `0.0G` + empty-bar rendering.
+
 function ModelCard({
   model,
   gttMax,
@@ -163,7 +168,7 @@ function ModelCard({
   gttMax: number;
   rssMax: number;
 }) {
-  const gtt = safe(model.gtt_gib);
+  const gtt = model.gtt_gib;
   const rss = safe(model.rss_gib);
   const cpu = safe(model.cpu);
   const icon = modelIcon(model.alias);
@@ -183,12 +188,24 @@ function ModelCard({
       </p>
 
       <div className="model-meters">
-        <Meter
-          label="GTT"
-          display={`${fmtOneDecimal(gtt)}G`}
-          share={pctOf(gtt, gttMax)}
-          color={SERIES_COLORS.gtt}
-        />
+        {gtt === null ? (
+          // "No measurable" (macOS): "—" and no bar, not a zero bar. The
+          // empty middle cell keeps the 3-column meter grid aligned with the
+          // measurable rows (label / bar / value) without drawing a track.
+          <div className="meter" role="img" aria-label="GTT: no medible">
+            <span className="meter-label">GTT</span>
+            <span aria-hidden="true" />
+            <span className="meter-value">—</span>
+          </div>
+        ) : (
+          // Real measurement from the Linux collector: 0.0G is legitimate.
+          <Meter
+            label="GTT"
+            display={`${fmtOneDecimal(safe(gtt))}G`}
+            share={pctOf(safe(gtt), gttMax)}
+            color={SERIES_COLORS.gtt}
+          />
+        )}
         <Meter
           label="RSS"
           display={`${fmtOneDecimal(rss)}G`}
@@ -377,7 +394,12 @@ export function Recursos({
   const { memory, models, groups } = snapshot;
 
   // Shared scales so meters are comparable inside their own metric.
-  const gttMax = Math.max(0, ...models.map((m) => safe(m.gtt_gib)));
+  // "Not measurable" models (gtt_gib === null) are excluded from the scale:
+  // they contribute no measurement, so the max is taken over the measured
+  // values only, exactly as if those models were absent. `?? 0` makes that
+  // explicit — a bare Math.max over the raw array would coerce null to 0
+  // (same numeric result today, but silent and fragile).
+  const gttMax = Math.max(0, ...models.map((m) => m.gtt_gib ?? 0));
   const rssMax = Math.max(0, ...models.map((m) => safe(m.rss_gib)));
 
   return (
