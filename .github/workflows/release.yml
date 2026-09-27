@@ -4,12 +4,16 @@ name: release
 # Pushing a tag `v*` packages the installable tree and attaches it to the GitHub
 # release with a SHA256 checksum.
 #
-# What ships is NOT a binary. On Linux the product is Python + GTK4 source plus
-# gui/install.sh, so the tarball is exactly that tree: gui/ (the app, the GNOME
-# extension, the systemd unit) and scripts/ (the three collectors the app shells
-# out to). There is no macOS artifact and none is promised: the Rust collector
-# and the React frontend build, but there is no served UI and no models yet
-# (ci.yml's check-macos job tracks that gap).
+# What ships on Linux is NOT a binary. The product there is Python + GTK4
+# source plus gui/install.sh, so the tarball is exactly that tree: gui/ (the
+# app, the GNOME extension, the systemd unit) and scripts/ (the three
+# collectors the app shells out to).
+#
+# On macOS the product IS a binary: the self-contained daemon
+# `pc-ai-monitor-serve` (no Node, no Python, no GTK; frontend embedded at
+# compile time). It is packaged per architecture (aarch64/x86_64-apple-darwin)
+# and attached to the same release. See the package-macos job for why the
+# build order there is load-bearing.
 #
 # The repo is private, so machines download the artifact with a read-only GitHub
 # token: gui/install.sh --from-release does that, verifying the SHA256 before it
@@ -67,3 +71,84 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" --verify-tag --generate-notes \
             "$tarball" "$tarball.sha256"
+
+  # The macOS product is the self-contained daemon: one unsigned binary that
+  # serves the embedded frontend on http://127.0.0.1:8787 (PC_AI_PORT to
+  # change it). One job per real architecture: macos-14 runners are Apple
+  # Silicon, macos-13 runners are Intel, so each builds its native target and
+  # the names in the release match what the binary actually is.
+  #
+  # ORDER IS LOAD-BEARING. build.rs embeds dist/ at compile time, so the
+  # frontend must be built BEFORE cargo runs: npm ci -> npm run build ->
+  # cargo build. A daemon compiled without dist/ builds clean and serves a
+  # "frontend not built" placeholder page that is indistinguishable from a
+  # good binary from the outside -- so the build step asserts the
+  # "embedded ... frontend asset" message and fails the job without it (the
+  # same gate ci.yml runs on every push).
+  #
+  # needs: package is deliberate: the Linux job creates the GitHub release
+  # with `gh release create`, so by the time these jobs run it exists and
+  # `gh release upload` cannot race against it.
+  package-macos:
+    needs: package
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Rust target for this runner
+        run: rustup target add ${{ matrix.target }}
+
+      # Steps 1 and 2 of the build order: dist/ must exist before cargo does.
+      - name: Build the frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      # Steps 3 and 4: build the daemon and PROVE it embedded the frontend.
+      # The green build alone proves nothing (see the job comment). `touch
+      # build.rs` forces the build script to re-run so the warning is emitted
+      # even if cargo would consider the whole build cached.
+      - name: Build the daemon and assert the frontend was embedded
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          touch build.rs
+          cargo build --release --target ${{ matrix.target }} --bin pc-ai-monitor-serve \
+            2>&1 | tee /tmp/embed.log
+          grep -q "embedded .* frontend asset" /tmp/embed.log || {
+            echo "FALLO: el daemon no incrusto el frontend; serviria el placeholder"
+            exit 1
+          }
+
+      - name: Package the binary with its checksum
+        run: |
+          set -euo pipefail
+          tarball="pc-ai-monitor-serve-${{ matrix.target }}.tar.gz"
+          tar -czf "$tarball" \
+            -C "src-tauri/target/${{ matrix.target }}/release" pc-ai-monitor-serve
+          shasum -a 256 "$tarball" > "$tarball.sha256"
+          echo "tarball=$tarball" >> "$GITHUB_ENV"
+
+      - name: Attach the macOS binary to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --clobber "$tarball" "$tarball.sha256"
