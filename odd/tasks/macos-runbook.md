@@ -118,6 +118,19 @@ xattr -d com.apple.quarantine /ruta/al/binario
 Si el daemon está corriendo, el script sondea `/api/state` en el puerto que
 tenga en escucha (o en `--api URL`) y reporta si responde.
 
+El daemon se compila y se arranca así (el binario es `pc-ai-monitor-serve`):
+
+```sh
+cd <repo>/src-tauri && cargo build --release --bin pc-ai-monitor-serve
+PC_AI_PORT=8787 ./target/release/pc-ai-monitor-serve
+```
+
+El puerto por defecto es **8787** y escucha **sólo en `127.0.0.1`**: no queda
+expuesto a la red. Ojo con un caso que ya nos mordió: si el frontend no fue
+compilado, el servidor **igual responde 200** con una página que avisa que falta.
+Por eso el informe tiene que decir si ves la interfaz de verdad o ese aviso, y no
+dar por bueno un 200 pelado.
+
 ## 3. Pegar el informe de vuelta
 
 Copiá los bloques `=== INFORME ===` y `=== LO QUE TODAVÍA NO SABEMOS ===` a la
