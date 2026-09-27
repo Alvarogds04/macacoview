@@ -94,6 +94,20 @@ jobs:
           npm ci
           npm run build
 
+      # The daemon embeds the frontend at build time. When that path breaks, the
+      # binary still compiles and the server still answers 200 -- it just serves a
+      # placeholder page instead of the app. A green build proves nothing here, so
+      # assert that the assets were actually embedded.
+      - name: The daemon must embed the frontend, not serve the placeholder
+        run: |
+          cd src-tauri
+          touch build.rs          # force the build script to re-run now dist/ exists
+          cargo build 2>&1 | tee /tmp/embed.log
+          grep -q "embedded .* frontend asset" /tmp/embed.log || {
+            echo "FALLO: el daemon no incrusto el frontend; serviria el placeholder"
+            exit 1
+          }
+
       - name: Extension syntax
         run: node --check gui/gnome-extension/extension.js
 

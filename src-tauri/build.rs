@@ -18,7 +18,10 @@ fn generate_asset_table() {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
     );
-    let dist = manifest_dir.join("dist");
+    // Vite builds into the REPOSITORY ROOT, one level above this crate, not into
+    // src-tauri/. Pointing this at the crate directory made the embedding branch
+    // dead: the daemon always served the placeholder even with a built frontend.
+    let dist = manifest_dir.join("..").join("dist");
     let out_dir =
         PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let generated = out_dir.join("asset_table.rs");

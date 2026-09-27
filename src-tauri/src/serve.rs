@@ -77,14 +77,12 @@ pub fn spawn_server(
 /// Accept connections until the listener fails. One thread per connection.
 fn accept_loop(listener: TcpListener, state: Arc<Mutex<CollectorState>>) -> std::io::Result<()> {
     for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let state = Arc::clone(&state);
-                std::thread::spawn(move || {
-                    let _ = handle_connection(stream, state);
-                });
-            }
-            Err(error) => return Err(error),
+        {
+            let stream = stream?;
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                let _ = handle_connection(stream, state);
+            });
         }
     }
     Ok(())
