@@ -7,6 +7,10 @@ mod collector;
 mod commands;
 mod tokens;
 
+/// Standalone HTTP daemon that serves `/api/state` (and, with a compiled
+/// frontend, the dashboard assets) over `127.0.0.1`. See [`serve`].
+pub mod serve;
+
 use collector::start_sampling_loop;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
