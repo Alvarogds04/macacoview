@@ -8,10 +8,11 @@ de tokens, puertos y procesos.
 - **Linux — producto instalable.** La app GNOME es Python + GTK4/libadwaita: lo
   distribuible es el arbol de fuentes + `gui/install.sh`. No hay binario, y no
   hace falta: el instalador deja todo andando en `~/.local` sin sudo.
-- **macOS — todavia no hay producto instalable.** El colector Rust (`src-tauri/`)
-  compila y el frontend React tambien, pero no hay UI servida ni modelos. Los
-  colectores leen `/proc`, que no existe en Mac. No prometemos instalacion en
-  macOS hasta que eso cambie.
+- **macOS — daemon descargable.** El producto es el binario `pc-ai-monitor-serve`:
+  un solo archivo sin dependencias (no Node, no Python, no GTK) que sirve el
+  mismo tablero en `http://127.0.0.1:8787` con el frontend React incrustado.
+  Va sin firmar: Gatekeeper lo frena la primera vez (ver la seccion de macOS).
+  No hay app GNOME ni instalacion en `~/.local` de ese lado.
 
 ## Requisitos (Linux)
 
@@ -76,15 +77,90 @@ extension, sin sesion systemd la unidad queda instalada pero no arrancada, y sin
 el helper root de AMD (`scripts/root/amdgpu-gem-info-read`, opcional) la memoria
 de GPU sale en 0 con un aviso en vez de un cero mudo.
 
-## Nota para macOS (preparada, no vigente)
+## macOS: bajar y correr el daemon
 
-Todavia **no** hay binario para macOS; esta nota queda escrita para cuando lo
-haya. Un binario sin firmar que se baja de internet llega con el atributo de
-cuarentena de Gatekeeper y macOS lo bloquea en la primera corrida. Se libera asi:
+En Mac el producto es **un solo binario**: `pc-ai-monitor-serve`. No necesita
+Node, ni Python, ni GTK, ni instalacion: se baja, se corre, y sirve el mismo
+tablero en el navegador. Esta seccion esta escrita para alguien que no
+programa.
+
+### Paso 1: saber que Mac tenes
+
+Menu Apple (la manzanita arriba a la izquierda) -> **Acerca de este Mac**:
+
+- Si dice **Chip: Apple M1 / M2 / M3 / M4** -> es Apple Silicon. Bajate el
+  archivo que termina en **`aarch64-apple-darwin`**.
+- Si dice **Procesador: Intel ...** -> es Intel. Bajate el que termina en
+  **`x86_64-apple-darwin`**.
+
+No son intercambiables: el archivo equivocado no arranca (macOS lo rechaza con
+un error de "CPU type"). Si no estas seguro, casi seguro es Apple Silicon: las
+Mac con Intel se dejaron de vender en 2020.
+
+### Paso 2: bajar, descomprimir y verificar
+
+En la pagina de **Releases** del repositorio, de la ultima version baja de la
+seccion Assets dos archivos: el `pc-ai-monitor-serve-<tu-arquitectura>.tar.gz`
+y su `.sha256` (el repositorio es privado: necesitas acceso al repo, o que te
+pase los archivos quien te lo compartio).
+
+Despues, en Terminal (la abris con Spotlight: Command + Espacio, escribis
+"Terminal"):
 
 ```bash
-xattr -d com.apple.quarantine <binario>
+cd ~/Downloads
+shasum -a 256 -c pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz
 ```
+
+(la version Intel usa `x86_64-apple-darwin` en el nombre). El primer comando
+tiene que responder `OK`: si el checksum no coincide, no sigas -- el archivo
+se corrompio al bajar o no es el que crees.
+
+### Paso 3: la primera vez, macOS lo va a frenar
+
+El binario **va sin firmar** (no hay certificado de desarrollador de Apple
+atras), asi que Gatekeeper lo bloquea en la primera corrida con un cartel de
+"no se puede verificar el desarrollador". Es lo esperado, no un virus. Dos
+salidas, cualquiera alcanza:
+
+- En Terminal, quitarle la cuarentena:
+
+  ```bash
+  xattr -d com.apple.quarantine ./pc-ai-monitor-serve
+  ```
+
+- O en Finder, clic derecho sobre `pc-ai-monitor-serve` -> **Abrir** ->
+  **Abrir** de nuevo en el dialogo que aparece.
+
+Despues de esa primera vez arranca sin volver a preguntar.
+
+### Paso 4: correrlo
+
+```bash
+./pc-ai-monitor-serve
+```
+
+Y abrir **http://127.0.0.1:8787** en el navegador (Safari, Chrome, el que
+uses). Se corta con Ctrl-C en la Terminal. Si el puerto esta ocupado, se
+cambia asi: `PC_AI_PORT=9000 ./pc-ai-monitor-serve`.
+
+### Que vas a ver (y que NO vas a ver)
+
+Expectativas honestas: en una Mac recien instalada, el tablero queda **casi
+vacio**, y eso es correcto, no un error.
+
+- **Tokens**: aparecen los de **Claude Code** y **Codex** si esas herramientas
+  estan instaladas y se usaron (el daemon lee sus transcripts locales). Cualquier
+  otro proveedor no aparece si no lo configuraste.
+- **Modelos locales**: la lista queda **vacia** si no hay un servidor de
+  modelos corriendo (por ejemplo Ollama). Si no hay nada corriendo, no hay nada
+  que detectar.
+- **Grupos de procesos**: quedan vacios hasta que configures que queres
+  monitorear.
+
+Lo que si aparece sin configurar nada: memoria, CPU, GPU y puertos de la
+maquina.
 
 ## Releases
 
@@ -92,3 +168,11 @@ Empujar un tag `v*` dispara el workflow `release`, que empaqueta el arbol
 instalable (`gui/` + `scripts/`), lo verifica instalando en un HOME limpio del
 runner, y lo adjunta a la release de GitHub como
 `pc-ai-monitor-<tag>-linux.tar.gz` + `.sha256`.
+
+La misma release lleva los binarios del daemon para Mac:
+`pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz` (Apple Silicon) y
+`pc-ai-monitor-serve-x86_64-apple-darwin.tar.gz` (Intel), cada uno con su
+`.sha256`. El workflow los compila DESPUES de compilar el frontend (que queda
+incrustado en el binario) y falla si el build no confirma que los assets
+fueron incrustados: un daemon sin frontend compila igual y sirve un
+placeholder indistinguible desde afuera.
