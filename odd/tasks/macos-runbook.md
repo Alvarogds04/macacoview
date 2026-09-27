@@ -4,104 +4,134 @@ Todo lo que el CI sabe hoy viene del runner `macos-14`, que es una **VM**
 (`VirtualMac2,1`, "Apple M1 (Virtual)"): la GPU que vio es `AppleParavirtGPU`,
 el swap reporta `0.00M` en todo y no hay servidores de modelos. El fixture
 `src-tauri/tests/fixtures/macos-capture.txt` es salida auténtica de esa VM.
-Este runbook es lo que queda por confirmar en **silicio real**, con los
-comandos exactos y qué anotar de cada uno.
+Este runbook es lo que queda por confirmar en **silicio real**.
 
-Llevar: un Mac Apple Silicon, el binario sin firmar (§5), acceso al repo, y
+## 0. Estado del script (leer antes de correr)
+
+La verificación es ahora **un comando**: `scripts/mac-verify.sh`, que se corre
+en el Mac y escupe un informe listo para copiar y pegar de vuelta. El script
+es **sólo lectura** (sysctl, sw_vers, vm_stat, ps, lsof, ioreg,
+system_profiler, xattr, y un GET a /api/state): no escribe, no modifica, no
+borra nada, y si falta una herramienta o un permiso lo dice y sigue.
+
+**El script no se pudo probar en macOS: se escribió en Linux.** La primera vez
+que corra va a ser en la máquina real; si algo truena o una sección sale
+vacía de forma sospechosa, anotalo en el informe de vuelta — ese es justamente
+el dato que falta.
+
+Llevar: un Mac Apple Silicon, el binario sin firmar (§2.6), acceso al repo, y
 (opcional, para re-capturar) `gh` autenticado.
 
-## 1. Confirmar la GPU real
-
-En la VM el nodo es `AppleParavirtGPU`. En silicio real se espera
-`AGXAccelerator`, y puede exponer claves que en la captura no existen.
+## 1. Corré el script
 
 ```sh
-ioreg -r -d 1 -w 0 -c AGXAccelerator
-ioreg -l -w 0 | grep -i -B2 -A3 PerformanceStatistics
+./scripts/mac-verify.sh
 ```
 
-Anotar:
+Si `bash` se queja de permisos: `chmod +x scripts/mac-verify.sh` (una vez).
+Opciones:
 
-- **Nombre exacto del nodo/clase** que expone el diccionario (¿es
-  `AGXAccelerator`? ¿cambia por chip M1/M2/M3/M4?). El parser
-  (`parse_ioreg_gpu` en `src-tauri/src/macos.rs`) no matchea nombres de
-  dispositivo, sólo la clave `"PerformanceStatistics"`, pero el nombre hay que
-  dejarlo anotado para el runbook siguiente.
-- **Cuántos nodos IOAccelerator aparecen** y cuántos diccionarios
-  *distintos* hay. M Pro/Max/Ultra pueden exponer más de uno; el parser suma
-  diccionarios únicos y deduplica los repetidos verbatim.
-- **Todas las claves del diccionario.** La VM muestra `"Alloc system memory"`,
-  `"In use system memory"`, `"In use system memory (driver)"` y
-  `"recoveryCount"`. Silicio real puede traer más; verificar que la pareja de
-  bytes sigue presente y con qué claves extra convive.
-- **Valores y unidades** (se esperan bytes; contrastar con el gráfico GPU de
-  Activity Monitor en el mismo momento).
+- `--with-sudo`: además corre `sudo lsof -nP -iTCP -sTCP:LISTEN` para comparar
+  cuántas filas recorta TCC sin sudo. Sigue siendo sólo lectura, pero pide tu
+  contraseña.
+- `--api URL`: sondea esa URL para `/api/state` en vez de autodetectar el
+  puerto en escucha del daemon.
+- Una ruta al final: el binario compilado del proyecto (`pc-ai-monitor`). Sin
+  ruta busca en `src-tauri/target/release|debug`, `~/Downloads` y
+  `/Applications/pc-ai-monitor.app`.
 
-## 2. La contradicción alloc vs in_use (decidir semántica)
+Al final imprime un bloque `=== INFORME ===` y otro `=== LO QUE TODAVÍA NO
+SABEMOS ===`: **copiá ambos de vuelta** al repo (issue, PR o este runbook).
 
-En la captura del runner:
+## 2. Leé cada parte del informe
 
-```
-"PerformanceStatistics" = {"Alloc system memory"=39108608,"In use system memory"=50103936,...}
-alloc = 39.108.608   in_use = 50.103.936   ->  in_use > alloc
-```
+### 2.1 Identidad
 
-Eso **contradice la intuición**: uno esperaría que lo "en uso" quepa dentro de
-lo "asignado". Por eso ni el parser ni el smoke test de `mod smoke` afirman
-orden entre los dos contadores. En silicio real hay que decidir cuál es la
-semántica correcta de cada contador:
+`hw.model`, `hw.memsize`, `hw.pagesize`, marca de CPU, `sw_vers`. Confirmá:
+`hw.model` **no** dice `Virtual...`, y `hw.pagesize` es **16384** (4096 en
+Intel). El smoke test (`mod smoke` en `src-tauri/src/macos.rs`) afirma la
+propiedad (potencia de dos, >= 4096), no el número.
 
-```sh
-ioreg -l -w 0 | grep -o '"Alloc system memory"=[0-9]*' | head
-ioreg -l -w 0 | grep -o '"In use system memory"=[0-9]*' | head
-```
+### 2.2 GPU: AGXAccelerator vs AppleParavirtGPU
 
-Capturar los pares en reposo y bajo carga Metal real (por ejemplo, un modelo
-en Ollama o el gráfico GPU de Activity Monitor corriendo algo pesado), y
-anotar si la relación se mantiene o se invierte. Con eso se decide si el
-nombre que muestra la UI es "asignado" o "en uso", y si `(driver)` suma o no.
+En la VM el nodo es `AppleParavirtGPU`; en silicio real se espera
+`AGXAccelerator` (¿cambia por chip M1/M2/M3/M4? — anotalo). El informe imprime
+el nodo, los diccionarios `PerformanceStatistics` deduplicados verbatim, y la
+**comparación explícita `alloc` vs `in_use`**. Mirar:
 
-## 3. Tamaño de página y vm_stat
+- **Cuántos diccionarios distintos** hay (M Pro/Max/Ultra pueden exponer más
+  de uno; el parser `parse_ioreg_gpu` suma los únicos y deduplica los
+  repetidos verbatim, y no matchea nombres de dispositivo, sólo la clave
+  `"PerformanceStatistics"`).
+- **Claves**: la VM muestra `"Alloc system memory"`, `"In use system memory"`,
+  `"In use system memory (driver)"` y `"recoveryCount"`. El script marca en
+  "lo que todavía no sabemos" las que falten; fijate también si hay claves
+  **nuevas** y contrastá valores con el gráfico GPU de Activity Monitor en el
+  mismo momento.
 
-```sh
-sysctl -n hw.memsize hw.pagesize
-vm_stat
-```
+### 2.3 La contradicción alloc vs in_use (decidir semántica)
 
-- `hw.pagesize` esperado: **16384** en Apple Silicon (4096 en Intel). El
-  assert del smoke es la propiedad (potencia de dos, >= 4096), no el número.
-- Comparar el volcado de `vm_stat` contra el formato del fixture
-  (`src-tauri/tests/fixtures/macos-capture.txt`): encabezado
-  `Mach Virtual Memory Statistics: (page size of ... bytes)` y contadores con
-  punto final. El parser no debe depender del encabezado para el tamaño de
-  página (prefiere `vm_stat` sólo si imprime el suyo, si no `hw.pagesize`).
-- Correr `cargo test --lib` en el Mac: los tests de `mod smoke`
-  (`src-tauri/src/macos.rs`) ejecutan `collect_*` contra esta máquina, no
-  contra texto capturado.
+En la captura del runner: `alloc = 39.108.608`, `in_use = 50.103.936` →
+`in_use > alloc`, lo que contradice la intuición. Por eso ni el parser ni el
+smoke afirman orden entre los dos. El informe compara los dos números y deja
+la relación anotada. Para decidir la semántica de verdad, capturá los pares en
+reposo **y bajo carga Metal real** (un modelo en Ollama, o Activity Monitor
+corriendo algo pesado) — re-corre el script en ambos momentos y compará los
+dos informes. Con eso se decide si la UI muestra "asignado" o "en uso", y si
+`(driver)` suma o no.
 
-## 4. Permisos: lsof y TCC
+### 2.4 vm_stat y tamaño de página
 
-```sh
-lsof -nP -iTCP -sTCP:LISTEN
-sudo lsof -nP -iTCP -sTCP:LISTEN
-```
+El informe incluye el volcado completo, el tamaño de página del encabezado
+(`page size of ... bytes`) y `hw.pagesize`. En el fixture el encabezado dice
+16384; el parser prefiere el del encabezado y cae a `hw.pagesize` si no está.
+Si el número efectivo no es 16384, el script lo marca. También imprime
+`sysctl vm.swapusage`: en la VM era todo `0.00M` y `parse_swap` nunca vio swap
+ocupado de verdad.
 
-Con TCC restrictivo o sin sudo, `lsof` puede **devolver menos filas sin
-fallar**. Eso no es un bug del colector: anotar cuántas filas da cada
-invocación y en qué condiciones. El colector nunca debe entrar en panic por
-esto; la tabla de puertos puede quedar más corta.
+### 2.5 Motores de modelos
 
-## 5. Binario sin firmar
+El script busca en `ps -ww -axo pid=,args=` procesos de `llama-server`,
+`vllm`, `mlx` y `ollama`, y dice qué encontró y qué no. Ojo: Ollama corre el
+modelo en un hijo **`ollama runner`** — si `ollama` aparece, fijate si el hijo
+está en la lista: el colector debe ver ambos. Si aparece un motor hoy ausente
+en el runner, capturale fixture propio (`ollama ps` incluido).
 
-El binario va **sin firmar ni notarizar**. Si Gatekeeper lo bloquea al abrirlo:
+### 2.6 Puertos en escucha (lsof y TCC)
+
+El informe imprime `lsof -nP -iTCP -sTCP:LISTEN` **sin sudo** y anota cuántas
+filas dio. Con TCC restrictivo o sin sudo, `lsof` puede devolver **menos filas
+sin fallar**: eso no es un bug del colector. Con `--with-sudo` el script corre
+también la versión con sudo y marca si recortó filas. El colector nunca debe
+entrar en panic por esto; la tabla de puertos puede quedar más corta.
+
+### 2.7 Binario sin firmar y daemon
+
+Si encuentra el binario, imprime `xattr -l`. Si `com.apple.quarantine` está
+presente y Gatekeeper lo bloquea al abrirlo: clic derecho sobre el binario ->
+**Abrir** (la primera vez), o quitá la cuarentena a mano:
 
 ```sh
 xattr -d com.apple.quarantine /ruta/al/binario
 ```
 
-o, sin terminal: clic derecho sobre el binario -> **Abrir** (la primera vez).
+Si el daemon está corriendo, el script sondea `/api/state` en el puerto que
+tenga en escucha (o en `--api URL`) y reporta si responde.
 
-## 6. Volver a capturar la salida del runner
+## 3. Pegar el informe de vuelta
+
+Copiá los bloques `=== INFORME ===` y `=== LO QUE TODAVÍA NO SABEMOS ===` a la
+issue/PR de verificación. Con el informe en el repo:
+
+1. Compará cada sección contra `src-tauri/tests/fixtures/macos-capture.txt`.
+2. Si una sección cambió de formato o muestra claves nuevas, escribir/ajustar
+   el parser **contra ese texto** y pegar las líneas relevantes en el fixture
+   antes de tocar código. El fixture es la fuente de verdad de los parsers.
+3. Correr `cargo test --lib` en el Mac: los tests de `mod smoke`
+   (`src-tauri/src/macos.rs`) ejecutan `collect_*` contra esta máquina, no
+   contra texto capturado.
+
+Extra (opcional, para re-capturar la salida del runner):
 
 ```sh
 gh workflow run macos-capture.yml
@@ -109,21 +139,12 @@ gh run list --workflow=macos-capture.yml --limit 1   # tomar el id
 gh run view --log <id> > nueva-captura.txt
 ```
 
-Qué hacer con la salida:
-
-1. Comparar cada sección contra `src-tauri/tests/fixtures/macos-capture.txt`.
-2. Si una sección cambió de formato o muestra claves nuevas, escribir/ajustar
-   el parser **contra ese texto** y pegar las líneas relevantes en el fixture
-   antes de tocar código. El fixture es la fuente de verdad de los parsers.
-3. Si aparece un servidor de modelos en el runner (hoy no hay ninguno),
-   capturar `ollama ps` y dedicarle fixture propio.
-
-## 7. Qué NO está verificado todavía
+## 4. Qué NO está verificado todavía
 
 No dar por hecho nada de esta lista:
 
 - **Semántica de `Alloc system memory` vs `In use system memory`** en silicio
-  real (§2): el parser no afirma orden entre ellos, y en la VM `in_use >
+  real (§2.3): el parser no afirma orden entre ellos, y en la VM `in_use >
   alloc`.
 - **Claves del diccionario en silicio real**: todo lo sabido de GPU viene de
   `AppleParavirtGPU`; `AGXAccelerator` puede exponer más (o menos) claves.
@@ -137,3 +158,6 @@ No dar por hecho nada de esta lista:
   están ausentes en el runner; su salida real no tiene fixture.
 - **`phys_footprint` vs `rss` bajo carga Metal**: sin medir en hardware, no se
   sabe cuánto subestima `rss` la memoria de GPU por proceso.
+- **El propio `scripts/mac-verify.sh`**: escrito en Linux, sin probar nunca en
+  macOS. La primera corrida real es también su prueba; cualquier sección
+  vacía, mensaje raro o crash es un hallazgo que reportar.
