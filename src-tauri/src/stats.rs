@@ -9,6 +9,11 @@ pub struct Memory {
     pub swap_used_gib: f64,
 }
 
+/// `gtt_gib` / `vram_gib` are `None` when per-model GPU memory cannot be
+/// measured (macOS has no public API for it); the Linux collector (Python
+/// script) always sends numbers, so its values deserialize as `Some(...)`,
+/// including the real measurement `Some(0.0)` for "this model uses no GTT".
+/// A `None` is "not measurable", never zero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
     pub alias: String,
@@ -17,8 +22,8 @@ pub struct Model {
     pub model: String,
     pub rss_gib: f64,
     pub cpu: f64,
-    pub gtt_gib: f64,
-    pub vram_gib: f64,
+    pub gtt_gib: Option<f64>,
+    pub vram_gib: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +70,36 @@ pub type Groups = std::collections::HashMap<String, Group>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_manda_numeros_y_entran_como_some() {
+        // El colector de Linux (script Python) siempre manda números para
+        // gtt_gib/vram_gib, incluido el 0.0 real de "este modelo no usa GTT".
+        let json = r#"{"memory": {"total_gib": 1.0, "used_gib": 0.5, "available_gib": 0.5,
+            "swap_total_gib": 0.0, "swap_used_gib": 0.0},
+            "models": [{"alias": "a", "pid": 1, "port": 8080, "model": "m",
+            "rss_gib": 1.5, "cpu": 2.0, "gtt_gib": 40.6, "vram_gib": 0.0}],
+            "groups": {}, "processes": []}"#;
+        let stats: Stats = serde_json::from_str(json).unwrap();
+        assert_eq!(stats.models.len(), 1);
+        assert_eq!(stats.models[0].gtt_gib, Some(40.6));
+        assert_eq!(stats.models[0].vram_gib, Some(0.0));
+    }
+
+    #[test]
+    fn macos_sin_valor_deja_gtt_y_vram_en_none() {
+        // En macOS no hay API pública de memoria GPU por proceso: el campo no
+        // lleva valor (va vacío) y debe entrar como None, no como 0.0.
+        let json = r#"{"memory": {"total_gib": 1.0, "used_gib": 0.5, "available_gib": 0.5,
+            "swap_total_gib": 0.0, "swap_used_gib": 0.0},
+            "models": [{"alias": "a", "pid": 1, "port": null, "model": "m",
+            "rss_gib": 1.5, "cpu": 2.0}],
+            "groups": {}, "processes": []}"#;
+        let stats: Stats = serde_json::from_str(json).unwrap();
+        assert_eq!(stats.models.len(), 1);
+        assert_eq!(stats.models[0].gtt_gib, None);
+        assert_eq!(stats.models[0].vram_gib, None);
+    }
 
     #[test]
     fn gpu_ausente_en_el_json_de_linux_no_rompe_la_deserializacion() {
