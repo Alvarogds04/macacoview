@@ -457,6 +457,147 @@ pub fn collect_stats() -> Stats {
     }
 }
 
+// -- smoke contra el sistema real (solo macOS) ---------------------------------
+//
+// El modulo `tests` de abajo alimenta los parsers con texto capturado: no
+// prueba nada del limite de procesos. Estos tests EJECUTAN las funciones
+// collect_* sobre la maquina donde corre cargo, para que un binario con mala
+// ruta o un formato de herramienta que cambio se ponga rojo aca en vez de
+// quedar verde detras de un parser que nunca se ejecuta. Por eso el gate es
+// target_os = "macos": en Linux los binarios no existen y el CI no debe ponerse
+// rojo por la razon equivocada.
+#[cfg(all(test, target_os = "macos"))]
+mod smoke {
+    use super::*;
+
+    #[test]
+    fn collect_memory_mide_la_maquina_real() {
+        let mem =
+            collect_memory().expect("collect_memory fallo en un macOS real: binario, ruta o formato de sysctl/vm_stat roto");
+
+        assert!(
+            mem.total_gib > 0.0,
+            "total_gib={} <= 0: hw.memsize no llego o no se parseo",
+            mem.total_gib
+        );
+
+        // Tamano de pagina: propiedad, no constante. 16384 en Apple Silicon,
+        // 4096 en Intel; el valor capturado no debe terminar hardcodeado en un
+        // assert.
+        let sizes = run(&["/usr/sbin/sysctl", "-n", "hw.memsize", "hw.pagesize"])
+            .expect("sysctl hw.memsize hw.pagesize fallo en un macOS real");
+        let (total_bytes, page_size) =
+            parse_sysctl_u64s(&sizes).expect("sysctl devolvio algo que el parser no entiende");
+        assert!(page_size >= 4096, "page_size={} < 4096", page_size);
+        assert!(
+            page_size.is_power_of_two(),
+            "page_size={} no es potencia de dos",
+            page_size
+        );
+        assert_eq!(
+            total_bytes as f64 / GIB,
+            mem.total_gib,
+            "el total de sysctl no coincide con el de collect_memory"
+        );
+
+        assert!(
+            mem.used_gib >= 0.0,
+            "used_gib={} es negativo o NaN",
+            mem.used_gib
+        );
+        assert!(
+            mem.available_gib >= 0.0,
+            "available_gib={} es negativo o NaN",
+            mem.available_gib
+        );
+        assert!(
+            mem.used_gib <= mem.total_gib,
+            "used_gib={} > total_gib={}: unidades rotas o parsing de vm_stat roto",
+            mem.used_gib,
+            mem.total_gib
+        );
+        assert!(
+            mem.available_gib <= mem.total_gib,
+            "available_gib={} > total_gib={}: unidades rotas o parsing de vm_stat roto",
+            mem.available_gib,
+            mem.total_gib
+        );
+
+        // NO se afirma `used + available <= total` a proposito: las categorias
+        // de vm_stat son disjuntas por nombre, pero esa disjuncion no se pudo
+        // verificar en hardware real (el runner macos-14 es una VM), y un assert
+        // inestable en CI es peor que uno mas debil que siempre vale.
+    }
+
+    #[test]
+    fn collect_gpu_cuando_mide_no_excede_la_ram() {
+        // None es un resultado legitimo: la captura del runner demuestra que una
+        // maquina puede no reportar la pareja de contadores completa.
+        let Some(gpu) = collect_gpu() else { return };
+        let mem = collect_memory()
+            .expect("collect_memory fallo en un macOS real mientras se verificaba collect_gpu");
+
+        assert!(
+            gpu.alloc_gib.is_finite() && gpu.alloc_gib >= 0.0,
+            "alloc_gib={} no es finito o es negativo",
+            gpu.alloc_gib
+        );
+        assert!(
+            gpu.in_use_gib.is_finite() && gpu.in_use_gib >= 0.0,
+            "in_use_gib={} no es finito o es negativo",
+            gpu.in_use_gib
+        );
+
+        // NO se afirma orden entre los dos contadores a proposito: la captura del
+        // propio runner (paravirtualizado) reporta lo inverso a la intuicion --
+        //   "Alloc system memory"=39108608 < "In use system memory"=50103936
+        // -- asi que cualquiera de los dos puede superar al otro. Cual semantica
+        // es la correcta queda por decidir en silicio real (odd/tasks/macos-runbook.md).
+        //
+        // Lo que SI vale: memoria unificada, una reserva de GPU no puede exceder
+        // la RAM del sistema. Esto agarra el error realista de unidades
+        // (bytes-vs-GiB): 39 MB reportados como 39 GiB revientan contra total.
+        assert!(
+            gpu.alloc_gib <= mem.total_gib,
+            "alloc_gib={} > total_gib={}: error de unidades (bytes vs GiB) o de suma",
+            gpu.alloc_gib,
+            mem.total_gib
+        );
+        assert!(
+            gpu.in_use_gib <= mem.total_gib,
+            "in_use_gib={} > total_gib={}: error de unidades (bytes vs GiB) o de suma",
+            gpu.in_use_gib,
+            mem.total_gib
+        );
+    }
+
+    #[test]
+    fn collect_processes_ve_procesos_reales() {
+        let rows = collect_processes();
+        assert!(
+            !rows.is_empty(),
+            "ps -axo pid=,ppid=,uid=,rss=,%cpu=,comm= no devolvio filas: ruta, flags o formato de ps rotos"
+        );
+        for row in &rows {
+            assert!(
+                row.pid != 0,
+                "pid 0 en la salida (pid no parseable por parse_ps, o pid 0 real filtrado donde no debia): comm={:?}",
+                row.comm
+            );
+            assert!(!row.comm.is_empty(), "comm vacio para pid {}", row.pid);
+        }
+    }
+
+    #[test]
+    fn collect_stats_arma_un_snapshot_sin_panic() {
+        let stats = collect_stats();
+        assert!(
+            stats.memory.total_gib > 0.0,
+            "collect_stats devolvio memoria en ceros: collect_memory fallo adentro y se uso el fallback"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

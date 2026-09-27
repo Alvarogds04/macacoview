@@ -74,6 +74,21 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Test count floor (tests must not silently vanish)
+        working-directory: src-tauri
+        run: |
+          # `cargo test` staying green says nothing about HOW MANY tests ran: a
+          # module stranded behind a wrong cfg gate compiles to zero tests and
+          # the suite stays green. 91 is the floor of the current suite (92 at
+          # the time this was written), not an exact count: tests may be added
+          # freely, they may never disappear.
+          count=$(cargo test --lib -- --list | grep -c ': test$' || true)
+          echo "lib tests on Linux: $count (floor 91)"
+          if [ "$count" -lt 91 ]; then
+            echo "FALLO: $count lib tests < 91: tests disappeared silently"
+            exit 1
+          fi
+
       - name: Frontend typecheck and build
         run: |
           npm ci
@@ -106,6 +121,34 @@ jobs:
       - name: Rust tests (parsers only -- collection is not portable yet)
         working-directory: src-tauri
         run: cargo test
+
+      - name: macOS must run more tests than Linux (gated smoke, not silently excluded)
+        working-directory: src-tauri
+        run: |
+          # History: "ungate the pure macOS parsers" shipped with the gated
+          # tests silently excluded and `cargo test` stayed green. The parser
+          # tests are platform-independent, so the Linux job runs exactly
+          # (total - smoke) of them. macOS must run strictly MORE than that
+          # platform-independent baseline, which holds if and only if the
+          # macOS-only smoke module actually compiled in. The count is derived
+          # by subtraction from `--list`, so no constant is shared between jobs
+          # and the bar grows on its own as tests are added anywhere.
+          #
+          # Known fragility: this greps the test list for the module path
+          # (`macos::smoke::`). If someone renames the module, the grep drops
+          # to 0 and this step fails loudly -- correct, if noisy. The weaker
+          # direction is the dangerous one: macOS-only tests gated OUTSIDE the
+          # smoke module are invisible to the subtraction, and the comparison
+          # silently loses force without failing. Keep platform-gated tests in
+          # the smoke module.
+          total=$(cargo test --lib -- --list | grep -c ': test$' || true)
+          smoke=$(cargo test --lib -- --list | grep -c 'macos::smoke::' || true)
+          baseline=$((total - smoke))
+          echo "lib tests on macOS: $total (macOS-only smoke: $smoke, Linux-equivalent baseline: $baseline)"
+          if [ "$total" -le "$baseline" ]; then
+            echo "FALLO: macOS runs $total tests, not more than the platform-independent baseline ($baseline): the macOS-only tests did not compile in"
+            exit 1
+          fi
 
       - name: Frontend typecheck and build
         run: |
