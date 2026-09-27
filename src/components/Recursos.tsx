@@ -105,6 +105,21 @@ function MemoryPanel({ memory }: { memory: Memory }) {
 // ---------------------------------------------------------------------------
 
 function GroupPanel({ groups }: { groups: Record<string, Group> }) {
+  // "Not measured" (the key is absent from the map, or the map is empty — the
+  // macOS collector reports no groups at all) is NOT the same as "measured
+  // zero": on Linux a 0 is a real measurement and keeps rendering as 0.0G.
+  // An absent key gets "—", never a fabricated zero.
+  const measured = GROUP_KEYS.map((key) => groups[key] !== undefined);
+
+  if (!measured.some(Boolean)) {
+    return (
+      <div className="group-panel">
+        <p className="model-empty">Sin grupos medidos en esta máquina.</p>
+      </div>
+    );
+  }
+
+  // A key that IS present contributes a real measurement, zero included.
   const values = GROUP_KEYS.map((key) => safe(groups[key]?.rss_gib ?? 0));
   const total = values.reduce((acc, v) => acc + v, 0);
 
@@ -138,14 +153,24 @@ function GroupPanel({ groups }: { groups: Record<string, Group> }) {
               aria-hidden="true"
             />
             <span className="legend-label">{GROUP_LABELS[key]}</span>
-            <span className="legend-value">{fmtTwoDecimals(values[i])}G</span>
-            <span className="legend-pct">{Math.round(pctOf(values[i], total))}%</span>
+            <span className="legend-value">
+              {measured[i] ? `${fmtTwoDecimals(values[i])}G` : "—"}
+            </span>
+            <span className="legend-pct">
+              {measured[i] ? `${Math.round(pctOf(values[i], total))}%` : "—"}
+            </span>
             <span className="legend-procs">
-              {groups[key]?.pids.length ?? 0} proc
+              {measured[i] ? `${groups[key]?.pids.length ?? 0} proc` : "—"}
             </span>
           </li>
         ))}
       </ul>
+
+      {measured.some((isMeasured) => !isMeasured) && (
+        <p className="scale-note">
+          «—» = grupo no medido en esta máquina; un 0.0G sí es una medición real.
+        </p>
+      )}
     </div>
   );
 }

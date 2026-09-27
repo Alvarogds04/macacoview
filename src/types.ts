@@ -124,8 +124,8 @@ export interface LocalTokens {
   total: number;
 }
 
-/// One model's share of the Pi transcripts. The name is read from the record
-/// itself.
+/// One model's share of a transcript source (pi, codex_cli, claude_code). The
+/// name is read from the record itself.
 export interface PiModel {
   name: string;
   provider: string;
@@ -157,6 +157,7 @@ export interface PiTokens {
   models: PiModel[];
 }
 
+/// Codex subscription windows: percentages, not token counts.
 export interface CodexWindow {
   label: string;
   used_percent: number;
@@ -171,10 +172,32 @@ export interface CodexTokens {
   windows: CodexWindow[];
 }
 
+/// Transcript totals for the CLI agents, mirroring Rust `TranscriptTokens`
+/// (the same payload `pi` carries, `sessions` included). On macOS these are
+/// the sections that actually have data: the native collectors scan the Codex
+/// CLI rollouts and the Claude Code projects directly, with no Python needed.
+export interface TranscriptTokens {
+  status: SourceStatus;
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  reasoning: number;
+  total: number;
+  cost_usd: number;
+  turns: number;
+  sessions: number;
+  models: PiModel[];
+}
+
 export interface Tokens {
   remote: RemoteTokens;
   local: LocalTokens;
   pi: PiTokens;
+  /// Codex CLI rollout transcripts, scanned natively from `~/.codex/sessions`.
+  codex_cli: TranscriptTokens;
+  /// Claude Code project transcripts, scanned natively from `~/.claude/projects`.
+  claude_code: TranscriptTokens;
   codex: CodexTokens;
 }
 
