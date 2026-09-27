@@ -17,7 +17,8 @@
 // macOS, where the parsers are reachable from `collect_*`.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use crate::stats::{Group, GpuMemory, Memory, Process};
+use crate::ports::parse_ss_output;
+use crate::stats::{Group, GpuMemory, Memory, Model, Process};
 #[cfg(target_os = "macos")]
 use crate::stats::Stats;
 use std::collections::{HashMap, HashSet};
@@ -206,7 +207,10 @@ pub fn group_by(rows: &[Process], patterns: &[(String, Vec<String>)]) -> HashMap
 
 /// Parses `lsof -nP -iTCP -sTCP:LISTEN` into the `ss`-shaped text the existing
 /// portable parser already understands. Keeping one downstream parser means the
-/// port table, its tests and the UI do not fork per platform.
+/// port table, its tests and the UI do not fork per platform. The `users:(...)`
+/// field is emitted exactly as `ss` writes it — quoted command name — because
+/// `parse_ss_output` extracts the pid with a regex that requires the quotes;
+/// an unquoted bridge would drop every pid downstream.
 pub fn lsof_to_ss(text: &str) -> String {
     let mut out = String::from("Netid  State  Recv-Q Send-Q Local Address:Port  Peer Address:Port\n");
     for line in text.lines().skip(1) {
@@ -220,10 +224,208 @@ pub fn lsof_to_ss(text: &str) -> String {
             None => (addr, "*:*"),
         };
         out.push_str(&format!(
-            "tcp    LISTEN 0      0      {local}  {peer} users:(({command},pid={pid}))\n"
+            "tcp    LISTEN 0      0      {local}  {peer} users:((\"{command}\",pid={pid}))\n"
         ));
     }
     out
+}
+
+// -- deteccion de modelos locales ---------------------------------------------
+//
+// En Darwin no hay /proc ni config del colector de Linux: los modelos locales
+// se descubren desde el argv de `ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,args=`
+// (`-ww` evita truncar los flags largos con las rutas de los modelos). Ollama
+// queda deliberadamente fuera: sus modelos corren en un proceso hijo `ollama
+// runner` cuyo argv no dice nada, y descubrirlos necesita su propia captura
+// (`ollama ps` y `GET /api/ps`), no un formato inventado.
+
+/// Parses `ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,args=`.
+///
+/// Five fixed numeric columns and then `args` as the free remainder of the
+/// line, spaces included. `comm=` is never requested together with `args=`:
+/// macOS truncates it to MAXCOMLEN (16 chars) exactly when `args` is also
+/// asked for, as the real capture in `tests/fixtures/macos-capture.txt`
+/// (section `ps-args`) shows. The `comm` field is filled best-effort from the
+/// first argv token so the `Process` shape stays intact.
+pub fn parse_ps_args(text: &str) -> Vec<Process> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.is_empty() {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut fields = [""; 5];
+        let mut i = 0usize;
+        let mut taken = 0usize;
+        while i < bytes.len() && taken < 5 {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i == start {
+                break;
+            }
+            fields[taken] = &line[start..i];
+            taken += 1;
+        }
+        if taken < 5 {
+            continue;
+        }
+        // i sits just past the 5th column: everything after it is `args`.
+        let args = line[i..].trim_start();
+        if args.is_empty() {
+            continue;
+        }
+        let comm = basename(args.split_whitespace().next().unwrap_or(args)).to_string();
+        rows.push(Process {
+            pid: fields[0].parse().unwrap_or(0),
+            ppid: fields[1].parse().unwrap_or(0),
+            uid: fields[2].parse().unwrap_or(0),
+            // ps reports rss in kilobytes, same unit the Linux collector uses.
+            rss_kb: fields[3].parse().unwrap_or(0),
+            cpu: fields[4].parse().unwrap_or(0.0),
+            comm,
+            args: args.to_string(),
+        });
+    }
+    rows
+}
+
+/// Detects a known local model server from argv tokens. Identity goes by how
+/// the process was invoked, never by one exact binary path. Returns the model
+/// identifier and the explicit `--alias` when the server supports one.
+fn detect_server(tokens: &[&str]) -> Option<(String, Option<String>)> {
+    let program = basename(tokens.first()?);
+
+    // llama.cpp: `llama-server --alias X -m Y --port N` (short forms `-a`, `-m`).
+    if program == "llama-server" {
+        let model = flag_value(tokens, "--model", Some("-m"))?;
+        return Some((
+            model.to_string(),
+            flag_value(tokens, "--alias", Some("-a")).map(str::to_string),
+        ));
+    }
+
+    // Module loaders: `-m vllm...` / `-m mlx_lm...` behind any interpreter.
+    if let Some(module) = python_module(tokens) {
+        if module.starts_with("vllm") {
+            // `python -m vllm serve MODEL` keeps the positional model; older
+            // entry points take `--model` instead.
+            let model = tokens
+                .iter()
+                .position(|t| *t == "serve")
+                .and_then(|i| tokens.get(i + 1).copied())
+                .or_else(|| flag_value(tokens, "--model", None))?;
+            return Some((model.to_string(), None));
+        }
+        if module.starts_with("mlx_lm") {
+            let model = flag_value(tokens, "--model", None)?;
+            return Some((model.to_string(), None));
+        }
+    }
+
+    // vLLM: `vllm serve MODEL --port N`.
+    if program == "vllm" && tokens.get(1) == Some(&"serve") {
+        return Some((tokens.get(2)?.to_string(), None));
+    }
+
+    // mlx-lm: `mlx_lm.server --model X --port N`.
+    if program.starts_with("mlx_lm") {
+        let model = flag_value(tokens, "--model", None)?;
+        return Some((model.to_string(), None));
+    }
+
+    None
+}
+
+/// Value of a CLI flag given either as `--flag value` / `-f value` or
+/// `--flag=value` / `-f=value`.
+fn flag_value<'a>(tokens: &[&'a str], long: &str, short: Option<&str>) -> Option<&'a str> {
+    for (i, tok) in tokens.iter().enumerate() {
+        if *tok == long || Some(*tok) == short {
+            return tokens.get(i + 1).copied();
+        }
+        if let Some(value) = tok.strip_prefix(long).filter(|rest| rest.starts_with('=')) {
+            return Some(&value[1..]);
+        }
+        if let Some(s) = short {
+            if let Some(value) = tok.strip_prefix(s).filter(|rest| rest.starts_with('=')) {
+                return Some(&value[1..]);
+            }
+        }
+    }
+    None
+}
+
+/// The module name after a bare `-m` token, the way `python -m ...` carries it.
+fn python_module<'a>(tokens: &[&'a str]) -> Option<&'a str> {
+    tokens
+        .iter()
+        .position(|t| *t == "-m")
+        .and_then(|i| tokens.get(i + 1).copied())
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn strip_gguf(name: &str) -> &str {
+    name.strip_suffix(".gguf").unwrap_or(name)
+}
+
+/// pid -> listening port, cross-referenced from `lsof -nP -iTCP
+/// -sTCP:LISTEN` output through the existing `lsof_to_ss` bridge and the
+/// portable `ss` parser. Servers that print their port in argv never need
+/// this; the rest would otherwise stay portless.
+pub fn listen_ports(lsof_text: &str) -> HashMap<i64, u16> {
+    let ss = lsof_to_ss(lsof_text);
+    let mut map: HashMap<i64, u16> = HashMap::new();
+    for row in parse_ss_output(&ss) {
+        if row.state != "LISTEN" || row.pid == 0 {
+            continue;
+        }
+        map.entry(i64::from(row.pid)).or_insert(row.port);
+    }
+    map
+}
+
+/// Local model servers found in one `ps` snapshot, with listening-socket
+/// fallback for their ports.
+///
+/// Field rules: `alias` is `--alias` when the server supports it, otherwise
+/// the basename of the model path without its `.gguf` suffix; `port` comes
+/// from argv first, from the listening sockets otherwise; `rss_gib`/`cpu`
+/// come from the ps row. `gtt_gib` and `vram_gib` stay `None` on purpose:
+/// macOS has no public per-process GPU memory API, and `None` means "not
+/// measurable", never zero.
+pub fn detect_models(rows: &[Process], listen: &HashMap<i64, u16>) -> Vec<Model> {
+    let mut models = Vec::new();
+    for row in rows {
+        let tokens: Vec<&str> = row.args.split_whitespace().collect();
+        let Some((model, alias_flag)) = detect_server(&tokens) else {
+            continue;
+        };
+        let alias = alias_flag
+            .unwrap_or_else(|| strip_gguf(basename(&model)).to_string());
+        let port = flag_value(&tokens, "--port", None)
+            .and_then(|p| p.parse::<i64>().ok())
+            .or_else(|| listen.get(&row.pid).copied().map(i64::from));
+        models.push(Model {
+            alias,
+            pid: row.pid,
+            port,
+            model,
+            rss_gib: row.rss_kb as f64 * 1024.0 / GIB,
+            cpu: row.cpu,
+            gtt_gib: None,
+            vram_gib: None,
+        });
+    }
+    models
 }
 
 /// Parses `ioreg -l -w 0` into machine-level GPU memory.
@@ -435,9 +637,28 @@ pub fn collect_processes() -> Vec<Process> {
     .unwrap_or_default()
 }
 
-/// Full snapshot without models: model discovery on macOS still needs the config
-/// reader that lives on the Python side, so it is reported as an empty list rather
-/// than guessed at from process names.
+/// Local model servers: discovered from `ps` argv (`-ww` keeps long model
+/// flags and paths visible) plus the listening-socket table for servers that
+/// do not print their port. Ollama stays absent on purpose — its models live
+/// in a child `ollama runner` whose argv says nothing, and discovering them
+/// needs `ollama ps` / `GET /api/ps` with their own captured output.
+#[cfg(target_os = "macos")]
+pub fn collect_models() -> Vec<Model> {
+    let ps_text = run(&[
+        "/bin/ps",
+        "-ww",
+        "-axo",
+        "pid=,ppid=,uid=,rss=,%cpu=,args=",
+    ])
+    .unwrap_or_default();
+    let rows = parse_ps_args(&ps_text);
+    let listen = run(&["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN"])
+        .map(|text| listen_ports(&text))
+        .unwrap_or_default();
+    detect_models(&rows, &listen)
+}
+
+/// Full snapshot: memory, GPU, process table and locally served models.
 #[cfg(target_os = "macos")]
 pub fn collect_stats() -> Stats {
     let processes = collect_processes();
@@ -449,7 +670,7 @@ pub fn collect_stats() -> Stats {
             swap_total_gib: 0.0,
             swap_used_gib: 0.0,
         }),
-        models: Vec::new(),
+        models: collect_models(),
         gpu: collect_gpu(),
         groups: HashMap::new(),
         processes,
@@ -716,12 +937,146 @@ mod tests {
     #[test]
     fn lsof_se_traduce_al_formato_ss() {
         let lsof = "COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n\
-                    ollama  4242 alvaro   14u  IPv4 0xa111      0t0  TCP 127.0.0.1:11434 (LISTEN)\n\
-                    Chrome  9313 alvaro   33u  IPv6 0xb222      0t0  TCP [::1]:9222 (LISTEN)\n";
+                    ollama  4242 user   14u  IPv4 0xa111      0t0  TCP 127.0.0.1:11434 (LISTEN)\n\
+                    Chrome  9313 user   33u  IPv6 0xb222      0t0  TCP [::1]:9222 (LISTEN)\n";
         let ss = lsof_to_ss(lsof);
         assert!(ss.contains("127.0.0.1:11434"), "{ss}");
         assert!(ss.contains("pid=4242"), "{ss}");
         assert_eq!(ss.lines().count(), 3, "una fila por socket, mas la cabecera");
+        // El puente alimenta al parser portable de ss: los pids deben sobrevivir
+        // (con comillas, como en una linea ss real) para poder cruzar modelos
+        // con sockets en escucha.
+        let rows = parse_ss_output(&ss);
+        let ollama = rows.iter().find(|r| r.port == 11434).expect("socket de ollama");
+        assert_eq!(ollama.pid, 4242, "parse_ss_output debe recuperar el pid del puente lsof");
+        let chrome = rows.iter().find(|r| r.port == 9222).expect("socket de chrome");
+        assert_eq!(chrome.pid, 9313);
+    }
+
+    // -- deteccion de modelos locales (argv de ps) -----------------------------
+
+    // Layout real del comando de produccion `ps -ww -axo pid=,ppid=,uid=,rss=,
+    // %cpu=,args=`: cinco columnas numericas y despues args como resto libre de
+    // la linea (puede contener espacios). NUNCA se pide `comm=` junto a `args=`:
+    // macOS lo trunca a MAXCOMLEN (16 chars) exactamente cuando tambien se pide
+    // args, como prueba la captura real (seccion ps-args de
+    // tests/fixtures/macos-capture.txt).
+
+    #[test]
+    fn llama_server_con_alias_y_puerto_de_argv() {
+        let ps = " 4200     1   501 8388608  12.5 /opt/homebrew/bin/llama-server --host 127.0.0.1 --port 11002 --alias abito-gpt -m /Users/runner/models/qwen2.5-7b-instruct-q4_k_m.gguf\n";
+        let models = detect_models(&parse_ps_args(ps), &HashMap::new());
+        assert_eq!(models.len(), 1);
+        let m = &models[0];
+        assert_eq!(m.alias, "abito-gpt", "el --alias manda sobre el basename");
+        assert_eq!(m.model, "/Users/runner/models/qwen2.5-7b-instruct-q4_k_m.gguf");
+        assert_eq!(m.port, Some(11002));
+        assert_eq!(m.pid, 4200);
+        assert!((m.rss_gib - 8.0).abs() < 1e-9, "rss_gib={}", m.rss_gib);
+        assert!((m.cpu - 12.5).abs() < 1e-9, "cpu={}", m.cpu);
+        assert_eq!(m.gtt_gib, None, "macOS no mide GPU por proceso: None, nunca 0.0");
+        assert_eq!(m.vram_gib, None, "macOS no mide GPU por proceso: None, nunca 0.0");
+    }
+
+    #[test]
+    fn vllm_serve_con_puerto_de_argv() {
+        let ps = " 4300     1   501 16777216   3.2 /usr/local/bin/vllm serve meta-llama/Llama-3-8B-Instruct --port 8000\n";
+        let models = detect_models(&parse_ps_args(ps), &HashMap::new());
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].alias, "Llama-3-8B-Instruct", "sin --alias, el basename del modelo");
+        assert_eq!(models[0].model, "meta-llama/Llama-3-8B-Instruct");
+        assert_eq!(models[0].port, Some(8000));
+    }
+
+    #[test]
+    fn vllm_por_modulo_python_no_depende_del_binario() {
+        let ps = " 4400     1   501  8388608   1.1 python -m vllm.entrypoints.openai.api_server --model mistralai/Mistral-7B-v0.1 --port 8001\n";
+        let models = detect_models(&parse_ps_args(ps), &HashMap::new());
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].alias, "Mistral-7B-v0.1");
+        assert_eq!(models[0].model, "mistralai/Mistral-7B-v0.1");
+        assert_eq!(models[0].port, Some(8001));
+    }
+
+    #[test]
+    fn mlx_lm_por_modulo_y_flag_de_puerto_con_igual() {
+        let ps = " 4700     1   501  2097152   0.7 python -m mlx_lm.server --model /models/tiny-llama-1.1b-chat.gguf --port=8080\n";
+        let models = detect_models(&parse_ps_args(ps), &HashMap::new());
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].alias, "tiny-llama-1.1b-chat", "basename sin .gguf");
+        assert_eq!(models[0].port, Some(8080), "--port=8080 con igual tambien se lee");
+    }
+
+    #[test]
+    fn un_navegador_no_es_un_modelo() {
+        let ps = " 9313     1   501 4194304   0.0 /Applications/Safari.app/Contents/MacOS/Safari\n\
+                  9314     1   501  524288   0.1 /usr/libexec/UserEventAgent (System)\n";
+        let rows = parse_ps_args(ps);
+        assert_eq!(rows.len(), 2);
+        assert!(detect_models(&rows, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn args_con_espacios_no_rompen_el_resto_libre() {
+        let ps = " 9313     1   501 4194304   0.0 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer\n";
+        let rows = parse_ps_args(ps);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].args,
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer",
+            "args es el resto libre completo de la linea, espacios incluidos"
+        );
+        assert!(detect_models(&rows, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn puerto_faltante_sale_del_cruce_con_lsof() {
+        let ps = " 4600     1   501 10485760   2.2 /opt/homebrew/bin/llama-server -m /Users/runner/models/mixtral-8x7b-instruct.gguf\n\
+                  4601     1   501 10485760   2.2 /opt/homebrew/bin/llama-server -m /Users/runner/models/otro-servidor.gguf\n";
+        let lsof = "COMMAND        PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n\
+                    llama-server  4600 runner   14u  IPv4 0xa111      0t0  TCP 127.0.0.1:11434 (LISTEN)\n\
+                    llama-server  4600 runner   15u  IPv6 0xb222      0t0  TCP [::1]:11434 (LISTEN)\n";
+        let listen = listen_ports(lsof);
+        let models = detect_models(&parse_ps_args(ps), &listen);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].alias, "mixtral-8x7b-instruct", "basename sin .gguf");
+        assert_eq!(models[0].port, Some(11434), "el puerto viene del socket en escucha");
+        assert_eq!(models[1].port, None, "sin puerto en argv ni socket: None, nunca 0");
+    }
+
+    #[test]
+    fn la_captura_real_ps_args_no_tiene_modelos() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("macos-capture.txt");
+        let text = std::fs::read_to_string(&path).expect("la captura comprometida debe leerse");
+        let section = fixture_section(&text, "ps-args");
+        let rows = parse_ps_args(&section);
+        assert!(!rows.is_empty(), "la captura real tiene procesos");
+        assert!(
+            detect_models(&rows, &HashMap::new()).is_empty(),
+            "la captura real del runner no corre servidores de modelos"
+        );
+    }
+
+    /// Extrae una seccion `===== BEGIN name =====` de la captura comprometida.
+    fn fixture_section(text: &str, name: &str) -> String {
+        let marker = format!("===== BEGIN {name} =====");
+        let mut out = String::new();
+        let mut inside = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("===== BEGIN ") {
+                inside = trimmed == marker;
+                continue;
+            }
+            if inside {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
     }
 
     // -- GPU (ioreg) -----------------------------------------------------------
