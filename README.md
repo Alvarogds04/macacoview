@@ -37,7 +37,7 @@ ni la release de macOS ni el instalador:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/Alvarogds04/pc-ai-monitor/main/gui/install.sh \
+  https://raw.githubusercontent.com/Alvarogds04/macacoview/main/gui/install.sh \
   -o install.sh
 
 bash install.sh --from-release          # ultima release
@@ -51,7 +51,7 @@ entonces corre el instalador. Si el checksum no coincide, aborta.
 ### Opcion B: desde el codigo fuente
 
 ```bash
-git clone https://github.com/Alvarogds04/pc-ai-monitor.git
+git clone https://github.com/Alvarogds04/macacoview.git
 cd pc-ai-monitor
 bash gui/install.sh
 ```

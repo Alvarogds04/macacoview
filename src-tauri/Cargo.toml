@@ -1,11 +1,11 @@
 [package]
-name = "pc-ai-monitor"
+name = "macacoview"
 version = "0.1.0"
 description = "PC-AI Monitor"
 edition = "2021"
 
 [lib]
-name = "pc_ai_monitor_lib"
+name = "macacoview_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # Standalone single-binary daemon: serves the dashboard over HTTP on

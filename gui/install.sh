@@ -54,7 +54,7 @@ MAC
       ;;
   esac
 
-  repo="${PC_AI_RELEASE_REPO:-Alvarogds04/pc-ai-monitor}"
+  repo="${PC_AI_RELEASE_REPO:-Alvarogds04/macacoview}"
   token="${PC_AI_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
   # El repositorio es PUBLICO, asi que la descarga funciona sin credenciales.
   # El token queda opcional: sube el limite de la API y sigue sirviendo si

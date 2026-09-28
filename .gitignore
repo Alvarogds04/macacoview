@@ -31,3 +31,7 @@ __pycache__/
 
 # Estado local del agente (preflight de SDD, caches de sesion)
 .pi/
+
+# Any target directory, at any depth. An anchored rule misses a nested one --
+# which is how 2 GB of build artifacts almost got pushed from src-tauri/src-tauri.
+**/target/
