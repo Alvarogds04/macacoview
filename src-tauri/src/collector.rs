@@ -147,7 +147,7 @@ fn collect_ports() -> Result<Vec<PortRow>, String> {
         return Err(format!("lsof salio con {}", output.status));
     }
     let text = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(crate::ports::parse_ss_output(&crate::macos::lsof_to_ss(&text)))
+    Ok(parse_ss_output(&crate::macos::lsof_to_ss(&text)))
 }
 
 #[cfg(not(target_os = "macos"))]
