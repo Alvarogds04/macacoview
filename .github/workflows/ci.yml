@@ -15,7 +15,7 @@ name: ci
 #     strings (`ports.rs` parses `ss` output and never reads /proc), so a green
 #     macos test suite does NOT mean port collection works on macOS.
 #   - Collection is the part that does not port: `ports.rs` shells out to `ss`
-#     (Linux-only) and `collector.rs` shells out to the pc-ai-* scripts, which
+#     (Linux-only) and `collector.rs` shells out to the macacoview-* scripts, which
 #     read /proc. Those need a macOS implementation before they can be gated.
 #
 # Deliberately absent: an npm publish / release job. There is no portable binary
@@ -123,13 +123,13 @@ jobs:
           touch build.rs          # dist/ appeared since the last build: re-embed
           cargo build --bin pc-ai-monitor-serve
 
-          # Linux collection shells out to $HOME/.local/bin/pc-ai-stats, which
+          # Linux collection shells out to $HOME/.local/bin/macacoview-stats, which
           # only exists on an installed machine. Ship it there, or snapshot
           # stays null and this smoke would report a missing collector as a
           # broken daemon. No home literal: the daemon itself resolves $HOME.
           mkdir -p "$HOME/.local/bin"
-          cp "$GITHUB_WORKSPACE/scripts/pc-ai-stats" "$HOME/.local/bin/pc-ai-stats"
-          chmod +x "$HOME/.local/bin/pc-ai-stats"
+          cp "$GITHUB_WORKSPACE/scripts/macacoview-stats" "$HOME/.local/bin/macacoview-stats"
+          chmod +x "$HOME/.local/bin/macacoview-stats"
 
           port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
           log=$(mktemp)
@@ -367,10 +367,10 @@ jobs:
           import pathlib
           import sys
 
-          stats = pathlib.Path("scripts/pc-ai-stats").read_text()
+          stats = pathlib.Path("scripts/macacoview-stats").read_text()
           if "/proc" not in stats:
-              sys.exit("pc-ai-stats no longer reads /proc: update this")
-          print("expected: pc-ai-stats is Linux-only and needs a macOS sibling")
+              sys.exit("macacoview-stats no longer reads /proc: update this")
+          print("expected: macacoview-stats is Linux-only and needs a macOS sibling")
           PY
 
   # A machine that is not mine: install into a fresh user and require real data.
@@ -406,8 +406,8 @@ jobs:
               xvfb-run -a python3 -m pc_ai_monitor --self-test 2>&1)
           echo "$out"
           echo "$out" | grep -q "errores ninguno" || { echo "FALLO: la app no consiguio datos"; exit 1; }
-          echo "$out" | grep -q "stats True" || { echo "FALLO: pc-ai-stats no encontrado"; exit 1; }
-          pill=$(sudo -u friend -H /home/friend/.local/bin/pc-ai-bar --pill 2>&1 || true)
+          echo "$out" | grep -q "stats True" || { echo "FALLO: macacoview-stats no encontrado"; exit 1; }
+          pill=$(sudo -u friend -H /home/friend/.local/bin/macacoview-bar --pill 2>&1 || true)
           echo "pill: $pill"
 
       - name: Config must not contain the runner's home path

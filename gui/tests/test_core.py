@@ -614,10 +614,10 @@ class TokenParserTests(unittest.TestCase):
         import importlib.util
         from importlib.machinery import SourceFileLoader
 
-        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-tokens"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "macacoview-tokens"
         if not script.exists():
-            raise unittest.SkipTest("no se encontro scripts/pc-ai-tokens")
-        loader = SourceFileLoader("pc_ai_tokens", str(script))
+            raise unittest.SkipTest("no se encontro scripts/macacoview-tokens")
+        loader = SourceFileLoader("macacoview_tokens", str(script))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         cls.tokens = importlib.util.module_from_spec(spec)
         loader.exec_module(cls.tokens)
@@ -1095,13 +1095,13 @@ class ConfigMigrationTests(unittest.TestCase):
 
 
 class StatsConfigPathTests(unittest.TestCase):
-    """El colector pc-ai-stats lee la ruta nueva de la config."""
+    """El colector macacoview-stats lee la ruta nueva de la config."""
 
     def test_stats_reads_the_renamed_config_path(self):
         import os
         import tempfile
 
-        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-stats"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "macacoview-stats"
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / ".config" / "macacoview" / "config.toml"
             config.parent.mkdir(parents=True)

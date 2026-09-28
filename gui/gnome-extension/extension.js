@@ -9,7 +9,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BAR = GLib.getenv('HOME') + '/.local/bin/pc-ai-bar';
+const BAR = GLib.getenv('HOME') + '/.local/bin/macacoview-bar';
 const SERVICE = 'pc-ai-monitor-gnome.service';
 const LAUNCHER =
     GLib.getenv('HOME') + '/.local/bin/pc-ai-monitor-gnome';

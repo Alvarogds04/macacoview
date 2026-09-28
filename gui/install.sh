@@ -172,9 +172,15 @@ cp -r "$root/pc_ai_monitor" "$lib/"
 
 # The collectors: the app shells out to these, so an install without them opens
 # with empty dashboards. They live in ../scripts, not in this directory.
-for tool in pc-ai-stats pc-ai-tokens pc-ai-bar; do
+for tool in macacoview-stats macacoview-tokens macacoview-bar; do
   install -m 755 "$root/../scripts/$tool" "$bin/$tool"
 done
+
+# Limpieza del renombre: las versiones previas dejaban los colectores y el
+# lanzador con el nombre viejo en ~/.local/bin. Sin esto una maquina actualizada
+# quedaria con dos juegos de binarios y la config vieja seguiria resolviendo al
+# nombre viejo. Borrarlos es seguro: la app actual solo mira los nombres nuevos.
+rm -f "$bin/pc-ai-stats" "$bin/pc-ai-tokens" "$bin/pc-ai-bar"
 
 cat > "$bin/pc-ai-monitor-gnome" <<LAUNCHER
 #!/usr/bin/env bash
@@ -236,7 +242,7 @@ PYTHONPATH="$lib" python3 -c \
 echo "Instalado:"
 echo "  $lib"
 echo "  $bin/pc-ai-monitor-gnome"
-echo "  $bin/pc-ai-stats, pc-ai-tokens, pc-ai-bar"
+echo "  $bin/macacoview-stats, macacoview-tokens, macacoview-bar"
 echo "  $apps/pc-ai-monitor-gnome.desktop"
 echo "  extension pc-ai-monitor@alvaro"
 echo "  systemd --user pc-ai-monitor-gnome.service"

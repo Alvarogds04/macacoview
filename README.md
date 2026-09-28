@@ -61,7 +61,7 @@ bash gui/install.sh
 ```text
 ~/.local/lib/pc-ai-monitor/pc_ai_monitor         la app
 ~/.local/bin/pc-ai-monitor-gnome                 lanzador
-~/.local/bin/pc-ai-stats, pc-ai-tokens, pc-ai-bar   colectores
+~/.local/bin/macacoview-stats, macacoview-tokens, macacoview-bar   colectores
 ~/.local/share/applications/pc-ai-monitor-gnome.desktop
 ~/.local/share/gnome-shell/extensions/pc-ai-monitor@alvaro   pill del panel
 ~/.config/systemd/user/pc-ai-monitor-gnome.service

@@ -62,7 +62,7 @@ jobs:
           # The same gate install-smoke runs on push: if the packaged tree
           # cannot install and find its collectors, the release must not exist.
           HOME="$tmp/freshuser" bash "$tmp/pc-ai-monitor-$TAG/gui/install.sh"
-          HOME="$tmp/freshuser" "$tmp/freshuser/.local/bin/pc-ai-stats" --pill
+          HOME="$tmp/freshuser" "$tmp/freshuser/.local/bin/macacoview-stats" --pill
 
       - name: Attach tarball and checksum to the GitHub release
         env:

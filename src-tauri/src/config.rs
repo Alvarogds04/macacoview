@@ -1,6 +1,6 @@
 //! Reading of the shared `config.toml` watch list.
 //!
-//! The GTK app and the Linux collector (`scripts/pc-ai-stats`) already read
+//! The GTK app and the Linux collector (`scripts/macacoview-stats`) already read
 //! `~/.config/macacoview/config.toml`: `[[watch]]` blocks choose which
 //! process groups the collector builds. This module gives the macOS collector
 //! the same file from the same place, so the user configures what to watch
@@ -15,7 +15,7 @@
 //!
 //! Only the `[[watch]]` table is consumed here: the remaining sections belong
 //! to the GTK app. The parsing rules mirror `_load_watch` in
-//! `scripts/pc-ai-stats` on purpose — a malformed file or a broken entry must
+//! `scripts/macacoview-stats` on purpose — a malformed file or a broken entry must
 //! never change what gets monitored, it must fall back to the defaults.
 
 use std::ffi::OsStr;
@@ -41,7 +41,7 @@ pub struct WatchEntry {
 
 /// The five groups of always, identical to `DEFAULT_WATCH` in
 /// `gui/pc_ai_monitor/config.py` and `WATCH_DEFAULTS` in
-/// `scripts/pc-ai-stats`: same names, same anchored patterns, same icons.
+/// `scripts/macacoview-stats`: same names, same anchored patterns, same icons.
 pub fn default_watch() -> Vec<WatchEntry> {
     vec![
         WatchEntry {

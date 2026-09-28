@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Token consumption collector for PC-AI Monitor.
+"""Token consumption collector for MacacoView.
 
 Aggregates six independent sources into one JSON document on stdout:
 

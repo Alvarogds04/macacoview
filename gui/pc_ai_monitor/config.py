@@ -1,4 +1,4 @@
-"""Configuration for the PC-AI Monitor GNOME app.
+"""Configuration for the MacacoView GNOME app.
 
 Everything machine-specific lives here: which collectors to run, where they are,
 how often, and what the panel pill shows. The defaults are derived from the home
@@ -25,16 +25,16 @@ LEGACY_CONFIG_DIR = Path.home() / ".config" / "pc-ai-monitor"
 LEGACY_CONFIG_PATH = LEGACY_CONFIG_DIR / "config.toml"
 
 TEMPLATE = """\
-# PC-AI Monitor — configuración
+# MacacoView — configuración
 #
 # Las rutas aceptan ~. Si un colector no existe, esa sección de la app queda en
 # "sin datos" y el resto sigue funcionando.
 
 [paths]
 # Colector de recursos (JSON en stdout).
-stats = "~/.local/bin/pc-ai-stats"
+stats = "~/.local/bin/macacoview-stats"
 # Colector de consumo de tokens (JSON en stdout).
-tokens = "~/.local/bin/pc-ai-tokens"
+tokens = "~/.local/bin/macacoview-tokens"
 
 [ports]
 # Helper privilegiado que imprime la salida de `ss`. Se invoca con `sudo -n`, es
@@ -226,10 +226,10 @@ def _as_watch(raw: Any, fallback: tuple[WatchEntry, ...]) -> tuple[WatchEntry, .
 @dataclass(frozen=True)
 class Config:
     stats_bin: Path = field(
-        default_factory=lambda: Path.home() / ".local/bin/pc-ai-stats"
+        default_factory=lambda: Path.home() / ".local/bin/macacoview-stats"
     )
     tokens_bin: Path = field(
-        default_factory=lambda: Path.home() / ".local/bin/pc-ai-tokens"
+        default_factory=lambda: Path.home() / ".local/bin/macacoview-tokens"
     )
     ports_helper: Path = Path("/usr/local/bin/pc-ai-ports-read")
     ports_use_sudo: bool = True
