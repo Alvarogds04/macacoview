@@ -412,6 +412,6 @@ jobs:
 
       - name: Config must not contain the runner's home path
         run: |
-          cfg=$(sudo -u friend -H cat /home/friend/.config/pc-ai-monitor/config.toml)
+          cfg=$(sudo -u friend -H cat /home/friend/.config/macacoview/config.toml)
           echo "$cfg" | grep -q "/home/runner" && { echo "FALLO: el template embebe la ruta del builder"; exit 1; }
           echo "  config sin rutas de otra maquina"

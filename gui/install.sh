@@ -11,7 +11,7 @@
 #   ~/.local/lib/pc-ai-monitor/pc_ai_monitor        the package
 #   ~/.local/bin/pc-ai-monitor-gnome                launcher
 #   ~/.local/share/applications/pc-ai-monitor-gnome.desktop
-#   ~/.config/pc-ai-monitor/config.toml             config template (first run)
+#   ~/.config/macacoview/config.toml             config template (first run)
 #
 # It does not touch the Tauri app (pc-ai-monitor-gui / PC-AI Monitor), which
 # stays installed until the migration is complete.
@@ -240,4 +240,4 @@ echo "  $bin/pc-ai-stats, pc-ai-tokens, pc-ai-bar"
 echo "  $apps/pc-ai-monitor-gnome.desktop"
 echo "  extension pc-ai-monitor@alvaro"
 echo "  systemd --user pc-ai-monitor-gnome.service"
-echo "Config en ~/.config/pc-ai-monitor/config.toml"
+echo "Config en ~/.config/macacoview/config.toml"
