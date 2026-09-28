@@ -280,10 +280,12 @@ pub fn lsof_to_ss(text: &str) -> String {
 //
 // En Darwin no hay /proc ni config del colector de Linux: los modelos locales
 // se descubren desde el argv de `ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,args=`
-// (`-ww` evita truncar los flags largos con las rutas de los modelos). Ollama
-// queda deliberadamente fuera: sus modelos corren en un proceso hijo `ollama
-// runner` cuyo argv no dice nada, y descubrirlos necesita su propia captura
-// (`ollama ps` y `GET /api/ps`), no un formato inventado.
+// (`-ww` evita truncar los flags largos con las rutas de los modelos) mas la
+// salida de `ollama ps` para los modelos cargados en Ollama. El runner interno
+// de Ollama es un hijo `llama-server` cuyo argv apunta a un blob sin nombre
+// util, asi que se excluye del camino llama.cpp (ver `is_ollama_runner`) y sus
+// modelos entran por la captura propia de `ollama ps` — herramienta del
+// sistema, no cliente HTTP.
 
 /// Parses `ps -ww -axo pid=,ppid=,uid=,rss=,%cpu=,args=`.
 ///
@@ -449,12 +451,19 @@ pub fn listen_ports(lsof_text: &str) -> HashMap<i64, u16> {
 /// macOS has no public per-process GPU memory API, and `None` means "not
 /// measurable", never zero.
 pub fn detect_models(rows: &[Process], listen: &HashMap<i64, u16>) -> Vec<Model> {
+    // Los hijos de `ollama serve` se suprimen antes de derivar alias: su
+    // --model es un blob del almacen de Ollama y el alias derivado seria
+    // basura (ver `is_ollama_runner`).
+    let ollama_serve = ollama_serve_pids(rows);
     let mut models = Vec::new();
     for row in rows {
         let tokens: Vec<&str> = row.args.split_whitespace().collect();
         let Some((model, alias_flag)) = detect_server(&tokens) else {
             continue;
         };
+        if is_ollama_runner(&tokens, row, &ollama_serve) {
+            continue;
+        }
         let alias = alias_flag
             .unwrap_or_else(|| strip_gguf(basename(&model)).to_string());
         let port = flag_value(&tokens, "--port", None)
@@ -472,6 +481,193 @@ pub fn detect_models(rows: &[Process], listen: &HashMap<i64, u16>) -> Vec<Model>
         });
     }
     models
+}
+
+/// pids de los procesos `ollama serve` (el demonio de Ollama) en un snapshot
+/// de ps. El argv puede venir como `ollama serve` o `/ruta/cualquiera/ollama
+/// serve`: la identidad va por el basename, igual que en `detect_server`.
+fn ollama_serve_pids(rows: &[Process]) -> HashSet<i64> {
+    rows.iter()
+        .filter(|row| {
+            let mut tokens = row.args.split_whitespace();
+            let is_ollama = basename(tokens.next().unwrap_or("")) == "ollama";
+            is_ollama && tokens.any(|token| token == "serve")
+        })
+        .map(|row| row.pid)
+        .collect()
+}
+
+/// Whether a detected model server is actually Ollama's internal runner, not a
+/// standalone llama.cpp server. Two independent criteria, either one suffices:
+///
+/// 1. Parentage: a direct child of `ollama serve`. Ollama's architecture
+///    spawns one backend server per loaded model from its daemon (real
+///    capture, b54a80c: `ollama serve` pid 15442 -> `llama-server` pid 16327),
+///    so any server whose parent is the daemon is Ollama's by construction.
+///    This is the primary criterion because it depends on the daemon and not
+///    on names or paths: it survives the child binary being renamed in future
+///    Ollama versions and the model store being relocated (OLLAMA_MODELS).
+/// 2. Model-path layout: `--model` points into Ollama's content-addressed
+///    blob store (`<root>/blobs/sha256-<64 hex>`, where root defaults to
+///    `~/.ollama/models` and moves wholesale with OLLAMA_MODELS). The
+///    prefix and the `<root>/blobs/` shape are Ollama's storage layout, not a
+///    user path convention, and a raw blob hash is never a usable model name
+///    anyway — an alias derived from it is garbage. Catches the runner when
+///    the daemon row is absent from the same ps snapshot.
+///
+/// What this deliberately does NOT assume: the child's binary name
+/// (`llama-server` is vendored llama.cpp and may change) and any fixed
+/// install path (Homebrew on ARM vs Intel, or a source build, all differ).
+fn is_ollama_runner(tokens: &[&str], row: &Process, ollama_serve: &HashSet<i64>) -> bool {
+    if ollama_serve.contains(&row.ppid) {
+        return true;
+    }
+    flag_value(tokens, "--model", Some("-m"))
+        .is_some_and(|model| model.contains("/blobs/sha256-"))
+}
+
+/// One loaded model as `ollama ps` reports it: the NAME and the SIZE column
+/// parsed to bytes (`None` when the cell is missing or unparseable).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OllamaLoaded {
+    pub name: String,
+    pub size_bytes: Option<u64>,
+}
+
+/// Parses the `ollama ps` table (pure text, no Ollama process spawned, so it
+/// runs on Linux CI like the other parsers).
+///
+/// Columns are aligned with runs of whitespace: a cell may contain single
+/// spaces ("51 MB", "100% GPU", "4 minutes from now"), cells are separated
+/// by two or more, so the split is by 2+ spaces, never by one. Column
+/// positions come from the header row (NAME and SIZE), not from fixed
+/// indexes: Ollama has added columns before (CONTEXT) and may add more.
+/// Without a recognizable header there is no table to parse and the result is
+/// empty; broken or nameless rows are skipped, never fatal, and a row whose
+/// SIZE does not parse still yields the model with `size_bytes: None`.
+pub fn parse_ollama_ps(text: &str) -> Vec<OllamaLoaded> {
+    let Ok(col_sep) = Regex::new(r"\s{2,}") else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut name_idx = None;
+    let mut size_idx = None;
+    for line in text.lines() {
+        // Sin trim de la linea: las filas arrancan en la columna 0, y recortar
+        // espacios iniciales correria las celdas a la izquierda (una fila sin
+        // nombre se leeria como si el digest fuera el nombre). Cada celda si
+        // se recorta para comparar el encabezado.
+        let cells: Vec<&str> = col_sep.split(line).collect();
+        let header_name = cells.iter().position(|cell| cell.trim() == "NAME");
+        let header_size = cells.iter().position(|cell| cell.trim() == "SIZE");
+        if let (Some(n), Some(s)) = (header_name, header_size) {
+            // Header row: fix the positions of the columns that matter.
+            name_idx = Some(n);
+            size_idx = Some(s);
+            continue;
+        }
+        let (Some(n), Some(s)) = (name_idx, size_idx) else { continue };
+        let name = cells.get(n).map(|cell| cell.trim()).unwrap_or("");
+        if name.is_empty() || name == "NAME" {
+            continue;
+        }
+        // A row shorter than the table's columns is broken data: a shifted or
+        // truncated row would misattribute cells, so it is skipped whole.
+        // (A present-but-unparseable SIZE still yields the model with
+        // `size_bytes: None`; dropping it whole would hide a loaded model.)
+        if cells.len() <= s {
+            continue;
+        }
+        out.push(OllamaLoaded {
+            name: name.to_string(),
+            size_bytes: parse_ollama_size(cells[s]),
+        });
+    }
+    out
+}
+
+/// Bytes of one SIZE cell of `ollama ps` ("51 MB", "1.2 GB", "1048576").
+/// Ollama humanizes with decimal units — the API reports 51_652_852 bytes and
+/// the table says "51 MB" (51.65 truncated) — so KB/MB/GB/TB are powers of a
+/// thousand and KiB/MiB/GiB/TiB powers of two. No unit means bytes; anything
+/// that does not start with a number is not a size and yields `None`.
+fn parse_ollama_size(cell: &str) -> Option<u64> {
+    let cell = cell.trim();
+    let digits = cell
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .count();
+    if digits == 0 {
+        return None;
+    }
+    let value: f64 = cell[..digits].parse().ok()?;
+    let factor = match cell[digits..].trim().to_ascii_uppercase().as_str() {
+        "" | "B" => 1.0,
+        "K" | "KB" => 1e3,
+        "M" | "MB" => 1e6,
+        "G" | "GB" => 1e9,
+        "T" | "TB" => 1e12,
+        "KIB" => 1024.0,
+        "MIB" => 1024.0 * 1024.0,
+        "GIB" => 1024.0 * 1024.0 * 1024.0,
+        "TIB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * factor) as u64)
+}
+
+/// Models loaded in Ollama, from `ollama ps` output, added to the same
+/// `models` list the argv-detected servers feed. The text is captured by
+/// executing the `ollama` binary (PATH lookup, no fixed install path and no
+/// HTTP client): the project resolves everything by running system tools, and
+/// a network dependency is not justified here. Missing binary or empty output
+/// means this detection contributes nothing; it can never fail the snapshot.
+///
+/// Field decisions, all deliberate:
+///
+/// * `alias` and `model` are the table's NAME: the identifier the user knows
+///   the model by (`smollm:135m`); there is no better name to derive.
+/// * `rss_gib` carries the SIZE column. It is the number OLLAMA REPORTS as
+///   the loaded model's footprint (weights plus KV cache, split between VRAM
+///   and RAM per the PROCESSOR column); it is NOT the RSS of any process —
+///   `ollama ps` has no pid column, so the runner's real RSS cannot be
+///   attributed to one model. Ollama humanizes in decimal units, and the
+///   conversion to GiB keeps that rounding. When the cell is missing or
+///   unparseable the model still shows, with 0.0 standing for "Ollama did
+///   not report a parseable SIZE" (the field is not an `Option`).
+/// * `pid` is 0 = unknown: `ollama ps` reports no pid, and pairing a NAME
+///   with one of the internal `llama-server` children would be guessing (the
+///   argv blob does not derive to the NAME; several models share one daemon).
+/// * `cpu` is 0.0 for the same reason: `Model.cpu` is not an `Option`, and
+///   here it means "not measurable", never a measured zero.
+/// * `port` is the listening socket of the `ollama serve` daemon found in the
+///   same ps snapshot, cross-referenced with `lsof` via `listen` — the same
+///   daemon that serves the models. No daemon visible, no invented port.
+/// * `gtt_gib`/`vram_gib` stay `None`: the already-decided macOS rule (no
+///   per-process GPU memory API; `None` is "not measurable", never zero).
+pub fn detect_ollama_models(
+    rows: &[Process],
+    ollama_ps_text: Option<&str>,
+    listen: &HashMap<i64, u16>,
+) -> Vec<Model> {
+    let Some(text) = ollama_ps_text else {
+        return Vec::new();
+    };
+    let port = ollama_serve_pids(rows)
+        .iter()
+        .find_map(|pid| listen.get(pid).copied())
+        .map(i64::from);
+    parse_ollama_ps(text)
+        .into_iter()
+        .map(|loaded| Model {
+            alias: loaded.name.clone(),
+            pid: 0,
+            port,
+            model: loaded.name,
+            rss_gib: loaded.size_bytes.unwrap_or(0) as f64 / GIB,
+            cpu: 0.0,
+            gtt_gib: None,
+            vram_gib: None,
+        })
+        .collect()
 }
 
 /// Parses `ioreg -l -w 0` into machine-level GPU memory.
@@ -693,6 +889,13 @@ pub fn collect_processes() -> Vec<Process> {
 pub fn collect_stats() -> Stats {
     let rows = collect_process_args();
     let listen = collect_listen_ports();
+    // `ollama ps` via PATH, never a fixed path: the binary lives in
+    // /opt/homebrew/bin on Apple Silicon, /usr/local/bin on Intel and
+    // anywhere else for source installs. Without Ollama installed `run`
+    // returns None and this detection simply contributes nothing.
+    let ollama_ps = run(&["ollama", "ps"]);
+    let mut models = detect_models(&rows, &listen);
+    models.extend(detect_ollama_models(&rows, ollama_ps.as_deref(), &listen));
     Stats {
         memory: collect_memory().unwrap_or(Memory {
             total_gib: 0.0,
@@ -701,7 +904,7 @@ pub fn collect_stats() -> Stats {
             swap_total_gib: 0.0,
             swap_used_gib: 0.0,
         }),
-        models: detect_models(&rows, &listen),
+        models,
         gpu: collect_gpu(),
         groups: group_by(&rows, &crate::config::load_watch()),
         processes: collect_processes(),
@@ -1159,6 +1362,146 @@ mod tests {
         assert_eq!(models[0].alias, "mixtral-8x7b-instruct", "basename sin .gguf");
         assert_eq!(models[0].port, Some(11434), "el puerto viene del socket en escucha");
         assert_eq!(models[1].port, None, "sin puerto en argv ni socket: None, nunca 0");
+    }
+
+    // -- falso positivo: el runner interno de Ollama NO es llama.cpp --------
+
+    /// Arbol de procesos real capturado en el runner macOS (b54a80c):
+    /// `ollama serve` es el padre y su hijo `llama-server` carga un modelo
+    /// desde el almacen de blobs de Ollama. El blob no derivaba a un alias
+    /// con nombre y mostraba un modelo fantasma al lado del real.
+    const OLLAMA_TREE: &str = concat!(
+        "15442 14974 501 10485760  0.5 ollama serve\n",
+        "16327 15442 501 20971520  1.2 /opt/homebrew/Cellar/ollama/0.33.0/libexec/lib/ollama/llama-server --model /Users/runner/.ollama/models/blobs/sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+    );
+
+    #[test]
+    fn el_runner_interno_de_ollama_no_es_un_servidor_llama_cpp() {
+        let models = detect_models(&parse_ps_args(OLLAMA_TREE), &HashMap::new());
+        assert!(
+            models.is_empty(),
+            "el hijo de `ollama serve` se detecto como llama.cpp propio: {:?}",
+            models.iter().map(|m| &m.alias).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn el_bloque_por_ruta_de_blobs_no_depende_del_padre() {
+        // Mismo hijo sin el daemon en el snapshot (padre no capturado):
+        // la ruta del --model dentro del almacen de blobs de Ollama basta.
+        let ps = " 16327     1   501 20971520  1.2 /opt/homebrew/bin/llama-server --model /Users/runner/.ollama/models/blobs/sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        assert!(detect_models(&parse_ps_args(ps), &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn ollama_no_tapa_al_llama_server_legitimo() {
+        // Suprimir el falso positivo no puede costar el verdadero: un
+        // llama-server propio (hijo de launchd, --model a un .gguf real) en la
+        // misma maquina sigue dando su modelo.
+        let mut ps = String::from(OLLAMA_TREE);
+        ps.push_str(" 4200     1   501 8388608  12.5 /opt/homebrew/bin/llama-server --port 11002 --alias abito-gpt -m /models/qwen2.5-7b-instruct-q4_k_m.gguf\n");
+        let models = detect_models(&parse_ps_args(&ps), &HashMap::new());
+        assert_eq!(models.len(), 1, "solo el llama-server legitimo, sin fantasma");
+        assert_eq!(models[0].alias, "abito-gpt");
+    }
+
+    // -- Ollama (`ollama ps`) --------------------------------------------------
+
+    /// Tabla literal de `ollama ps` capturada en el runner macOS con
+    /// `smollm:135m` cargado (evidencia real, b54a80c).
+    const OLLAMA_PS_REAL: &str = concat!(
+        "NAME           ID              SIZE     PROCESSOR    CONTEXT    UNTIL\n",
+        "smollm:135m    b0b2a4617438    51 MB    100% GPU     2048       4 minutes from now\n",
+    );
+
+    #[test]
+    fn ollama_ps_captura_real_da_el_modelo_cargado() {
+        let parsed = parse_ollama_ps(OLLAMA_PS_REAL);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "smollm:135m");
+        // "51 MB" en unidades decimales: la API reporta 51_652_852 bytes y
+        // Ollama los humaniza como "51 MB" (51.65 truncado).
+        assert_eq!(parsed[0].size_bytes, Some(51_000_000));
+    }
+
+    #[test]
+    fn ollama_ps_sin_modelos_cargados_no_produce_nada() {
+        // Maquina sin modelos cargados: solo el encabezado, ni un modelo ni
+        // un error. Tampoco hay tabla sin encabezado reconocible.
+        let header_only = "NAME           ID              SIZE     PROCESSOR    CONTEXT    UNTIL\n";
+        assert!(parse_ollama_ps(header_only).is_empty());
+        assert!(parse_ollama_ps("").is_empty());
+        assert!(parse_ollama_ps("texto que no es la tabla\n").is_empty());
+    }
+
+    #[test]
+    fn ollama_ps_filas_rotas_o_sin_size_se_ignoran() {
+        let text = concat!(
+            "NAME           ID              SIZE     PROCESSOR    CONTEXT    UNTIL\n",
+            "m1    b0b2a4617438    10 MB    100% GPU    2048    soon\n",
+            "m2    solo-dos-columnas\n",
+            "    b0b2a4617438    10 MB    fila sin nombre\n",
+            "m3    b0b2a4617438    NaN MB    100% GPU    2048    soon\n",
+        );
+        let parsed = parse_ollama_ps(text);
+        assert_eq!(parsed.len(), 2, "las filas sin nombre se descartan");
+        assert_eq!(parsed[0].name, "m1");
+        assert_eq!(parsed[0].size_bytes, Some(10_000_000));
+        assert_eq!(parsed[1].name, "m3");
+        assert_eq!(
+            parsed[1].size_bytes, None,
+            "SIZE no parseable: modelo sin tamano, nunca un numero inventado"
+        );
+    }
+
+    #[test]
+    fn ollama_ps_unidades_de_tamano() {
+        // Ollama humaniza en decimales (51652852 bytes -> "51 MB").
+        assert_eq!(parse_ollama_size("51 MB"), Some(51_000_000));
+        assert_eq!(parse_ollama_size("512MB"), Some(512_000_000));
+        assert_eq!(parse_ollama_size("1.2 GB"), Some(1_200_000_000));
+        assert_eq!(parse_ollama_size("1048576"), Some(1_048_576), "sin unidad: bytes");
+        assert_eq!(parse_ollama_size("1 KiB"), Some(1024));
+        assert_eq!(parse_ollama_size("pronto"), None);
+        assert_eq!(parse_ollama_size(""), None);
+    }
+
+    #[test]
+    fn ollama_entra_a_la_misma_lista_models() {
+        // El arbol real mas la tabla real: un solo modelo, el de Ollama, con
+        // las reglas de campos decididas.
+        let rows = parse_ps_args(OLLAMA_TREE);
+        let models = detect_ollama_models(&rows, Some(OLLAMA_PS_REAL), &HashMap::new());
+        assert_eq!(models.len(), 1);
+        let m = &models[0];
+        assert_eq!(m.alias, "smollm:135m", "alias = NAME");
+        assert_eq!(m.model, "smollm:135m", "model = NAME");
+        assert_eq!(m.pid, 0, "ollama ps no da pid: 0 = desconocido");
+        assert_eq!(m.port, None, "sin daemon visible en el snapshot: sin puerto");
+        assert!((m.rss_gib - 51_000_000f64 / GIB).abs() < 1e-9, "rss_gib={}", m.rss_gib);
+        assert_eq!(m.gtt_gib, None, "regla macOS: None, nunca 0.0");
+        assert_eq!(m.vram_gib, None, "regla macOS: None, nunca 0.0");
+    }
+
+    #[test]
+    fn ollama_ps_ausente_no_aporta_nada() {
+        // Sin binario `ollama` la captura es None: la deteccion aporta nada
+        // y no puede fallar.
+        let rows = parse_ps_args(OLLAMA_TREE);
+        assert!(detect_ollama_models(&rows, None, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn ollama_toma_el_puerto_del_serve_del_cruce_con_lsof() {
+        // El socket que sirve los modelos es el del demonio `ollama serve`,
+        // cruzado con lsof igual que los demas servidores.
+        let ps = "15442 14974 501 10485760  0.5 /opt/homebrew/bin/ollama serve\n";
+        let lsof = "COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n\
+                    ollama  15442 user   14u  IPv4 0xa111      0t0  TCP 127.0.0.1:11434 (LISTEN)\n";
+        let listen = listen_ports(lsof);
+        let models = detect_ollama_models(&parse_ps_args(ps), Some(OLLAMA_PS_REAL), &listen);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].port, Some(11434));
     }
 
     #[test]

@@ -249,7 +249,7 @@ function ModelCard({
         />
       </div>
 
-      <footer className="model-foot">PID {model.pid}</footer>
+      {model.pid ? `PID ${model.pid}` : "sin PID propio"}
     </article>
   );
 }
@@ -498,7 +498,10 @@ export function Recursos({
             </p>
             <div className="model-grid">
               {models.map((m) => (
-                <ModelCard key={m.pid} model={m} gttMax={gttMax} rssMax={rssMax} />
+                // Un modelo servido por Ollama no tiene pid propio (lo sirve el
+                // demonio), asi que pid es 0 para todos: con la clave en el pid dos
+                // modelos cargados a la vez colisionarian.
+                <ModelCard key={m.pid || m.alias} model={m} gttMax={gttMax} rssMax={rssMax} />
               ))}
             </div>
           </>
