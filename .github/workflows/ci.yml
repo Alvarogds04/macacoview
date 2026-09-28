@@ -6,6 +6,11 @@ name: ci
 # below report, per push, which layers actually hold on each OS.
 #
 # What is proven here vs. what is not:
+#   - The HTTP daemon boots and serves on both OSes: after the frontend build
+#     (the daemon embeds it at compile time), a smoke step starts
+#     `pc-ai-monitor-serve`, requires a real collected snapshot and the
+#     compiled UI on `/`, and that it listens on 127.0.0.1 only. A binary that
+#     crashes on boot or serves the placeholder cannot pass.
 #   - The Rust parsers run on both OSes because their fixtures are synthetic
 #     strings (`ports.rs` parses `ss` output and never reads /proc), so a green
 #     macos test suite does NOT mean port collection works on macOS.
@@ -108,6 +113,102 @@ jobs:
             exit 1
           }
 
+      # Until this step existed, CI compiled the daemon but never ran it: a
+      # crash on boot, an empty page or an unresponsive port reached the user
+      # unseen. dist/ exists by now (the step above rebuilt with it), so run
+      # the binary a user would run and hit the endpoints they would hit.
+      - name: Boot the daemon and hit its endpoints
+        run: |
+          cd src-tauri
+          touch build.rs          # dist/ appeared since the last build: re-embed
+          cargo build --bin pc-ai-monitor-serve
+
+          # Linux collection shells out to $HOME/.local/bin/pc-ai-stats, which
+          # only exists on an installed machine. Ship it there, or snapshot
+          # stays null and this smoke would report a missing collector as a
+          # broken daemon. No home literal: the daemon itself resolves $HOME.
+          mkdir -p "$HOME/.local/bin"
+          cp "$GITHUB_WORKSPACE/scripts/pc-ai-stats" "$HOME/.local/bin/pc-ai-stats"
+          chmod +x "$HOME/.local/bin/pc-ai-stats"
+
+          port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+          log=$(mktemp)
+          state=$(mktemp)
+          PC_AI_PORT="$port" target/debug/pc-ai-monitor-serve >"$log" 2>&1 &
+          pid=$!
+          # The daemon must die even if an assertion below fails: a process
+          # left behind on the runner fails the job in confusing ways.
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+
+          # Wait with retries and a deadline. "Ready" means the first
+          # collection tick landed (snapshot non-null): it runs on a background
+          # thread and can lose the race against the very first request. If the
+          # collector is broken this times out and the daemon log below names
+          # the failure. Every probe sits inside an `if` because Actions runs
+          # this as plain `bash -e` on macOS.
+          ready=""
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            if curl -fsS -o "$state" "http://127.0.0.1:$port/api/state" 2>/dev/null \
+               && grep -q '"snapshot":{' "$state"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "FALLO: el daemon no arranco o el colector no produjo snapshot; salida del daemon:"
+            cat "$log"
+            exit 1
+          fi
+          echo "daemon arriba en 127.0.0.1:$port (pid $pid)"
+
+          # /api/state: valid JSON, the documented keys, and a memory number
+          # only a working collector on this machine can produce.
+          python3 -c '
+          import json
+          import sys
+
+          with open(sys.argv[1]) as fh:
+              state = json.load(fh)
+          for key in ("snapshot", "history"):
+              if key not in state:
+                  sys.exit("FALLO: /api/state no tiene la clave " + key)
+          total = state["snapshot"]["memory"]["total_gib"]
+          if not (isinstance(total, (int, float)) and total > 0):
+              sys.exit("FALLO: snapshot.memory.total_gib = " + repr(total) + ": el colector no midio nada en esta maquina")
+          print("api/state ok: history " + str(len(state["history"])) + " samples, memory.total_gib = " + str(total))
+          ' "$state"
+
+          # / : the real UI, not the placeholder. The placeholder also answers
+          # 200 with HTML, so the status code alone proves nothing.
+          page=$(mktemp)
+          if ! curl -fsS -o "$page" "http://127.0.0.1:$port/"; then
+            echo "FALLO: GET / no respondio 200; salida del daemon:"
+            cat "$log"
+            exit 1
+          fi
+          if ! grep -q '<script' "$page"; then
+            echo "FALLO: GET / no contiene <script: sirve el placeholder, no la interfaz compilada"
+            exit 1
+          fi
+          echo "GET / ok: la interfaz compilada, no el placeholder"
+
+          # One-user daemon: localhost only, never exposed to the network.
+          listen=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN)
+          echo "$listen"
+          if ! echo "$listen" | grep -q "TCP 127.0.0.1:$port "; then
+            echo "FALLO: el daemon no escucha en 127.0.0.1:$port"
+            exit 1
+          fi
+          if echo "$listen" | grep -Eq 'TCP (\*|0\.0\.0\.0):'; then
+            echo "FALLO: el daemon escucha en todas las interfaces; debe ser solo 127.0.0.1"
+            exit 1
+          fi
+          echo "escucha solo en 127.0.0.1:$port"
+
       - name: Extension syntax
         run: node --check gui/gnome-extension/extension.js
 
@@ -115,9 +216,10 @@ jobs:
         working-directory: gui
         run: xvfb-run -a python3 -m unittest discover -s tests
 
-  # macOS: the honest diagnostic. It compiles, runs the pure parsers and builds
-  # the frontend. It keeps failing on anything that still assumes Linux, and
-  # that failure is the list of work left for 0.2.0.
+  # macOS: the honest diagnostic. It compiles, runs the pure parsers, builds
+  # the frontend and boots the daemon for an endpoint smoke. It keeps failing
+  # on anything that still assumes Linux, and that failure is the list of work
+  # left for 0.2.0.
   check-macos:
     runs-on: macos-14
     steps:
@@ -168,6 +270,93 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      # Same daemon smoke as the Linux job. No collector to install here:
+      # macOS collection is native (sysctl/vm_stat/ps), it needs nothing
+      # outside this checkout.
+      - name: Boot the daemon and hit its endpoints
+        run: |
+          cd src-tauri
+          touch build.rs          # dist/ appeared since the last build: re-embed
+          cargo build --bin pc-ai-monitor-serve
+
+          port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+          log=$(mktemp)
+          state=$(mktemp)
+          PC_AI_PORT="$port" target/debug/pc-ai-monitor-serve >"$log" 2>&1 &
+          pid=$!
+          # The daemon must die even if an assertion below fails: a process
+          # left behind on the runner fails the job in confusing ways.
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+
+          # Wait with retries and a deadline. "Ready" means the first
+          # collection tick landed (snapshot non-null): it runs on a background
+          # thread and can lose the race against the very first request. If the
+          # collector is broken this times out and the daemon log below names
+          # the failure. Every probe sits inside an `if` because Actions runs
+          # this step as plain `bash -e`.
+          ready=""
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            if curl -fsS -o "$state" "http://127.0.0.1:$port/api/state" 2>/dev/null \
+               && grep -q '"snapshot":{' "$state"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "FALLO: el daemon no arranco o el colector no produjo snapshot; salida del daemon:"
+            cat "$log"
+            exit 1
+          fi
+          echo "daemon arriba en 127.0.0.1:$port (pid $pid)"
+
+          # /api/state: valid JSON, the documented keys, and a memory number
+          # only a working collector on this machine can produce.
+          python3 -c '
+          import json
+          import sys
+
+          with open(sys.argv[1]) as fh:
+              state = json.load(fh)
+          for key in ("snapshot", "history"):
+              if key not in state:
+                  sys.exit("FALLO: /api/state no tiene la clave " + key)
+          total = state["snapshot"]["memory"]["total_gib"]
+          if not (isinstance(total, (int, float)) and total > 0):
+              sys.exit("FALLO: snapshot.memory.total_gib = " + repr(total) + ": el colector no midio nada en esta maquina")
+          print("api/state ok: history " + str(len(state["history"])) + " samples, memory.total_gib = " + str(total))
+          ' "$state"
+
+          # / : the real UI, not the placeholder. The placeholder also answers
+          # 200 with HTML, so the status code alone proves nothing.
+          page=$(mktemp)
+          if ! curl -fsS -o "$page" "http://127.0.0.1:$port/"; then
+            echo "FALLO: GET / no respondio 200; salida del daemon:"
+            cat "$log"
+            exit 1
+          fi
+          if ! grep -q '<script' "$page"; then
+            echo "FALLO: GET / no contiene <script: sirve el placeholder, no la interfaz compilada"
+            exit 1
+          fi
+          echo "GET / ok: la interfaz compilada, no el placeholder"
+
+          # One-user daemon: localhost only, never exposed to the network.
+          listen=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN)
+          echo "$listen"
+          if ! echo "$listen" | grep -q "TCP 127.0.0.1:$port "; then
+            echo "FALLO: el daemon no escucha en 127.0.0.1:$port"
+            exit 1
+          fi
+          if echo "$listen" | grep -Eq 'TCP (\*|0\.0\.0\.0):'; then
+            echo "FALLO: el daemon escucha en todas las interfaces; debe ser solo 127.0.0.1"
+            exit 1
+          fi
+          echo "escucha solo en 127.0.0.1:$port"
 
       - name: Record which layer is still Linux-only
         run: |
