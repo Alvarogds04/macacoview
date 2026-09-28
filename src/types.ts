@@ -202,6 +202,31 @@ export interface Tokens {
 }
 
 // ---------------------------------------------------------------------------
+// Watch config (mirrors the daemon `GET`/`POST /api/config` payloads, i.e.
+// `watch_json`/`watch_from_json` in src-tauri/src/config.rs). The JSON key is
+// `match` even though the Rust side calls the field `patterns`.
+// ---------------------------------------------------------------------------
+
+/// One `[[watch]]` entry of `~/.config/pc-ai-monitor/config.toml`: a process
+/// group the collector builds. `match` holds regular expressions searched
+/// against the process name (comm) and its full command line; an entry
+/// without patterns is one of the collector's fixed rules (`system` catches
+/// root processes, the other empty-pattern entry catches everything no
+/// pattern claimed). `visible` decides whether the group is built at all.
+export interface WatchEntry {
+  name: string;
+  match: string[];
+  icon: string;
+  visible: boolean;
+}
+
+/// The exact body of `GET /api/config` and of a successful `POST /api/config`
+/// (the server answers with the config re-read from disk).
+export interface WatchConfig {
+  watch: WatchEntry[];
+}
+
+// ---------------------------------------------------------------------------
 // Fixed group display order and labels (matches GTK refresh_resources).
 // ---------------------------------------------------------------------------
 
