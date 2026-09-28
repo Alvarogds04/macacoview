@@ -82,3 +82,84 @@ jobs:
 
           section "END"
           exit 0
+
+      - name: Capture Ollama evidence
+        # Ollama never puts the model name in a process argv: it runs the model
+        # in a child called `ollama runner`, so `ps`/`lsof` cannot see it. The
+        # only honest source is `ollama ps` / GET /api/ps, and no authentic
+        # capture of those existed. This step installs Ollama, loads the
+        # smallest model there is, and prints the real output -- same rule as
+        # the ioreg capture above: parsers are written against this, never
+        # against an invented format.
+        # Deliberately tolerant: brew can be slow, the pull can fail, and a
+        # fixture factory that aborts halfway is worth nothing. Actions applies
+        # `bash -e`, so `set +e` undoes it; and there is no `head` after a pipe
+        # that could die of SIGPIPE (that already killed a run once).
+        run: |
+          set +e -u
+
+          section() { printf '\n===== BEGIN %s =====\n' "$1"; }
+
+          section "ollama-install"
+          # `tail` reads everything brew prints, so this pipe cannot SIGPIPE.
+          brew install ollama 2>&1 | tail -25
+          echo "brew install exit: ${PIPESTATUS[0]}"
+          command -v ollama >/dev/null 2>&1 || {
+            echo "ollama is not installed after brew; skipping the rest of the capture"
+            exit 0
+          }
+
+          section "ollama-version"
+          ollama --version 2>&1
+
+          section "ollama-serve"
+          # Start the server in the background and wait until the API answers.
+          ollama serve >"${TMPDIR}/ollama-serve.log" 2>&1 &
+          server_pid=$!
+          up=no
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if curl -s http://127.0.0.1:11434/ >/dev/null 2>&1; then up=yes; break; fi
+            sleep 2
+          done
+          echo "server up: $up (pid $server_pid)"
+
+          section "ollama-pull"
+          # Smallest model that exists (100 MB class): enough to show up as
+          # loaded in `ollama ps`, without a multi-GB download.
+          ollama pull smollm:135m 2>&1
+          echo "pull exit: $?"
+
+          section "ollama-infer"
+          # One trivial inference so the model ends up loaded -- that is the
+          # state `ollama ps` and /api/ps are meant to report. The response
+          # carries the full context array, so only its first 300 chars are
+          # printed from the saved file (no pipe, no SIGPIPE).
+          curl -sS http://127.0.0.1:11434/api/generate \
+            -o "${TMPDIR}/ollama-generate.json" \
+            -w 'generate http=%{http_code}\n' \
+            -d '{"model":"smollm:135m","prompt":"hi","stream":false}' 2>&1
+          cut -c1-300 "${TMPDIR}/ollama-generate.json" 2>&1
+
+          section "ollama-list"
+          ollama list 2>&1
+
+          section "ollama-ps"
+          # THE deliverable: the model loaded, exactly as `ollama ps` prints it.
+          ollama ps 2>&1
+
+          section "ollama-api-ps"
+          # The raw JSON the future parser will actually read.
+          curl -s http://127.0.0.1:11434/api/ps 2>&1
+          echo
+
+          section "ollama-processes"
+          # Documents why the parser cannot read the model from argv: the model
+          # runs in a child called `ollama runner` and the model name appears in
+          # no process command line -- only in the API answer above.
+          ps -ww -axo pid=,ppid=,args= | grep -i ollama
+
+          section "ollama-serve-log"
+          tail -20 "${TMPDIR}/ollama-serve.log" 2>&1
+
+          section "END"
+          exit 0
