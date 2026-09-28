@@ -10,7 +10,7 @@ name: release
 # collectors the app shells out to).
 #
 # On macOS the product IS a binary: the self-contained daemon
-# `pc-ai-monitor-serve` (no Node, no Python, no GTK; frontend embedded at
+# `macacoview-serve` (no Node, no Python, no GTK; frontend embedded at
 # compile time). It is packaged per architecture (aarch64/x86_64-apple-darwin)
 # and attached to the same release. See the package-macos job for why the
 # build order there is load-bearing.
@@ -39,8 +39,8 @@ jobs:
       - name: Package the installable tree
         run: |
           set -euo pipefail
-          dir="pc-ai-monitor-$TAG"
-          tarball="pc-ai-monitor-$TAG-linux.tar.gz"
+          dir="macacoview-$TAG"
+          tarball="macacoview-$TAG-linux.tar.gz"
           mkdir "$dir"
           cp -a gui "$dir/gui"
           cp -a scripts "$dir/scripts"
@@ -61,7 +61,7 @@ jobs:
           tar -xzf "$tarball" -C "$tmp"
           # The same gate install-smoke runs on push: if the packaged tree
           # cannot install and find its collectors, the release must not exist.
-          HOME="$tmp/freshuser" bash "$tmp/pc-ai-monitor-$TAG/gui/install.sh"
+          HOME="$tmp/freshuser" bash "$tmp/macacoview-$TAG/gui/install.sh"
           HOME="$tmp/freshuser" "$tmp/freshuser/.local/bin/macacoview-stats" --pill
 
       - name: Attach tarball and checksum to the GitHub release
@@ -130,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           touch build.rs
-          cargo build --release --target ${{ matrix.target }} --bin pc-ai-monitor-serve \
+          cargo build --release --target ${{ matrix.target }} --bin macacoview-serve \
             2>&1 | tee /tmp/embed.log
           grep -q "embedded .* frontend asset" /tmp/embed.log || {
             echo "FALLO: el daemon no incrusto el frontend; serviria el placeholder"
@@ -140,9 +140,9 @@ jobs:
       - name: Package the binary with its checksum
         run: |
           set -euo pipefail
-          tarball="pc-ai-monitor-serve-${{ matrix.target }}.tar.gz"
+          tarball="macacoview-serve-${{ matrix.target }}.tar.gz"
           tar -czf "$tarball" \
-            -C "src-tauri/target/${{ matrix.target }}/release" pc-ai-monitor-serve
+            -C "src-tauri/target/${{ matrix.target }}/release" macacoview-serve
           shasum -a 256 "$tarball" > "$tarball.sha256"
           echo "tarball=$tarball" >> "$GITHUB_ENV"
 

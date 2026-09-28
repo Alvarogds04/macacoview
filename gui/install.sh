@@ -105,7 +105,7 @@ print(json.load(sys.stdin)["tag_name"])
 ')"
   fi
 
-  tarball="pc-ai-monitor-$tag-linux.tar.gz"
+  tarball="macacoview-$tag-linux.tar.gz"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
 
@@ -134,7 +134,7 @@ for asset in json.load(sys.stdin).get("assets", []):
 
   echo "Instalando desde $tag..."
   tar -xzf "$tmp/$tarball" -C "$tmp"
-  bash "$tmp/pc-ai-monitor-$tag/gui/install.sh"
+  bash "$tmp/macacoview-$tag/gui/install.sh"
   exit 0
 fi
 

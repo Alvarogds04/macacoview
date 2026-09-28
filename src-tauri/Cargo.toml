@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # 127.0.0.1 without Tauri, Node or Python. Port comes from PC_AI_PORT
 # (default 8787).
 [[bin]]
-name = "pc-ai-monitor-serve"
+name = "macacoview-serve"
 path = "src/bin/serve.rs"
 
 [build-dependencies]

@@ -8,7 +8,7 @@ name: ci
 # What is proven here vs. what is not:
 #   - The HTTP daemon boots and serves on both OSes: after the frontend build
 #     (the daemon embeds it at compile time), a smoke step starts
-#     `pc-ai-monitor-serve`, requires a real collected snapshot and the
+#     `macacoview-serve`, requires a real collected snapshot and the
 #     compiled UI on `/`, and that it listens on 127.0.0.1 only. A binary that
 #     crashes on boot or serves the placeholder cannot pass.
 #   - The Rust parsers run on both OSes because their fixtures are synthetic
@@ -121,7 +121,7 @@ jobs:
         run: |
           cd src-tauri
           touch build.rs          # dist/ appeared since the last build: re-embed
-          cargo build --bin pc-ai-monitor-serve
+          cargo build --bin macacoview-serve
 
           # Linux collection shells out to $HOME/.local/bin/macacoview-stats, which
           # only exists on an installed machine. Ship it there, or snapshot
@@ -134,7 +134,7 @@ jobs:
           port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
           log=$(mktemp)
           state=$(mktemp)
-          PC_AI_PORT="$port" target/debug/pc-ai-monitor-serve >"$log" 2>&1 &
+          PC_AI_PORT="$port" target/debug/macacoview-serve >"$log" 2>&1 &
           pid=$!
           # The daemon must die even if an assertion below fails: a process
           # left behind on the runner fails the job in confusing ways.
@@ -278,12 +278,12 @@ jobs:
         run: |
           cd src-tauri
           touch build.rs          # dist/ appeared since the last build: re-embed
-          cargo build --bin pc-ai-monitor-serve
+          cargo build --bin macacoview-serve
 
           port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
           log=$(mktemp)
           state=$(mktemp)
-          PC_AI_PORT="$port" target/debug/pc-ai-monitor-serve >"$log" 2>&1 &
+          PC_AI_PORT="$port" target/debug/macacoview-serve >"$log" 2>&1 &
           pid=$!
           # The daemon must die even if an assertion below fails: a process
           # left behind on the runner fails the job in confusing ways.

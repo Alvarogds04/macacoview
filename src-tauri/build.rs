@@ -35,12 +35,12 @@ fn generate_asset_table() {
         collect_assets(&dist, &dist, &mut assets);
         assets.sort();
         println!(
-            "cargo:warning=pc-ai-monitor-serve: embedded {} frontend asset(s) from dist/",
+            "cargo:warning=macacoview-serve: embedded {} frontend asset(s) from dist/",
             assets.len()
         );
     } else {
         println!(
-            "cargo:warning=pc-ai-monitor-serve: dist/ not found; the HTTP daemon will serve a placeholder page instead of the frontend (run `npm run build` to embed it)"
+            "cargo:warning=macacoview-serve: dist/ not found; the HTTP daemon will serve a placeholder page instead of the frontend (run `npm run build` to embed it)"
         );
     }
 
@@ -70,7 +70,7 @@ fn collect_assets(root: &Path, dir: &Path, assets: &mut Vec<(String, PathBuf, &'
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
-            println!("cargo:warning=pc-ai-monitor-serve: cannot read {}: {error}", dir.display());
+            println!("cargo:warning=macacoview-serve: cannot read {}: {error}", dir.display());
             return;
         }
     };
