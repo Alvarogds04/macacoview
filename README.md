@@ -59,13 +59,13 @@ bash gui/install.sh
 ### Que deja instalado
 
 ```text
-~/.local/lib/pc-ai-monitor/pc_ai_monitor         la app
-~/.local/bin/pc-ai-monitor-gnome                 lanzador
+~/.local/lib/macacoview/pc_ai_monitor            la app
+~/.local/bin/macacoview                          lanzador
 ~/.local/bin/macacoview-stats, macacoview-tokens, macacoview-bar   colectores
-~/.local/share/applications/pc-ai-monitor-gnome.desktop
-~/.local/share/gnome-shell/extensions/pc-ai-monitor@alvaro   pill del panel
-~/.config/systemd/user/pc-ai-monitor-gnome.service
-~/.config/pc-ai-monitor/config.toml              config (solo si no existe)
+~/.local/share/applications/macacoview.desktop
+~/.local/share/gnome-shell/extensions/macacoview@alvaro   pill del panel
+~/.config/systemd/user/macacoview-gnome.service
+~/.config/macacoview/config.toml                 config (solo si no existe)
 ```
 
 Todo sin sudo. Los pasos opcionales degradan: sin `gnome-extensions` se salta la

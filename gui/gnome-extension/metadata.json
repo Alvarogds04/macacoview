@@ -1,7 +1,7 @@
 {
   "name": "PC-AI Monitor",
   "description": "Monitor PC-AI de modelos y recursos",
-  "uuid": "pc-ai-monitor@alvaro",
+  "uuid": "macacoview@alvaro",
   "shell-version": [
     "45",
     "46",

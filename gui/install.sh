@@ -169,12 +169,15 @@ apps="$HOME/.local/share/applications"
 rm -rf "$lib"
 mkdir -p "$lib" "$bin" "$apps"
 
-# Limpieza del renombre: la unidad, el .desktop, el lanzador y el directorio
-# de lib con el nombre viejo quedaron instalados de la version previa. Sin
-# borrarlos habria dos unidades de systemd y dos entradas de menu apuntando al
-# mismo codigo. La config NO se toca: vive en ~/.config y ya tiene su propia
-# migracion.
+# Limpieza del renombre: la unidad, el .desktop, el lanzador, el directorio
+# de lib con el nombre viejo y el directorio de la extension con el uuid viejo
+# quedaron instalados de la version previa. Sin borrarlos habria dos unidades
+# de systemd, dos entradas de menu y DOS PILLS en el panel apuntando al mismo
+# codigo: el uuid es el nombre del directorio de la extension, asi que
+# instalar el nuevo no reemplaza al viejo, lo deja puesto al lado. La config
+# NO se toca: vive en ~/.config y ya tiene su propia migracion.
 rm -rf "$HOME/.local/lib/pc-ai-monitor"
+rm -rf "$HOME/.local/share/gnome-shell/extensions/pc-ai-monitor@alvaro"
 rm -f "$bin/pc-ai-monitor-gnome"
 rm -f "$HOME/.config/systemd/user/pc-ai-monitor-gnome.service"
 rm -f "$apps/pc-ai-monitor-gnome.desktop"
@@ -218,11 +221,11 @@ DESKTOP
 # `gnome-extensions install` wants a zip and `pack` segfaults on this stack, so
 # the directory is copied into place -- which is what install would end up doing.
 if command -v gnome-extensions >/dev/null 2>&1; then
-  ext_dir="$HOME/.local/share/gnome-shell/extensions/pc-ai-monitor@alvaro"
+  ext_dir="$HOME/.local/share/gnome-shell/extensions/macacoview@alvaro"
   install -d "$ext_dir"
   cp -a "$root/gnome-extension/." "$ext_dir/"
-  if [ "$(gnome-extensions info pc-ai-monitor@alvaro 2>/dev/null | awk -F': ' '/^State/{print $2}')" = "INITIALIZED" ]; then
-    gnome-extensions enable pc-ai-monitor@alvaro
+  if [ "$(gnome-extensions info macacoview@alvaro 2>/dev/null | awk -F': ' '/^State/{print $2}')" = "INITIALIZED" ]; then
+    gnome-extensions enable macacoview@alvaro
   fi
   echo "  extension copiada (recargar GNOME Shell para el cambio de clic)"
 else
@@ -255,6 +258,6 @@ echo "  $lib"
 echo "  $bin/macacoview"
 echo "  $bin/macacoview-stats, macacoview-tokens, macacoview-bar"
 echo "  $apps/macacoview.desktop"
-echo "  extension pc-ai-monitor@alvaro"
+echo "  extension macacoview@alvaro"
 echo "  systemd --user macacoview-gnome.service"
 echo "Config en ~/.config/macacoview/config.toml"

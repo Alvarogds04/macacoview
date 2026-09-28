@@ -974,11 +974,11 @@ class ExtensionTests(unittest.TestCase):
         self.assertIn(current, supported, f"shell {current} no esta soportado")
 
     def test_class_matches_metadata_uuid(self):
-        self.assertEqual(self.meta["uuid"], "pc-ai-monitor@alvaro")
+        self.assertEqual(self.meta["uuid"], "macacoview@alvaro")
         # No `class` key in metadata: the shell finds the single exported
         # default class, and renaming it breaks live reloads.
         self.assertNotIn("class", self.meta)
-        self.assertIn("export default class PcAiMonitorExtension", self.js)
+        self.assertIn("export default class MacacoViewExtension", self.js)
 
     def test_parsers_survive_the_click_fix(self):
         # The collector protocol is "<used>|<total>|<chips>"; the rewrite of
