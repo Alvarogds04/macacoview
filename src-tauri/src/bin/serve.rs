@@ -7,7 +7,7 @@
 //!
 //! Port: `PC_AI_PORT`, default 8787.
 //!
-//! Usage: `PC_AI_PORT=8787 pc-ai-monitor-serve`, then open
+//! Usage: `PC_AI_PORT=8787 macacoview-serve`, then open
 //! `http://localhost:8787`.
 
 fn main() -> std::io::Result<()> {

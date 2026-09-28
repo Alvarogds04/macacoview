@@ -10,4 +10,4 @@ fi
 
 # Resolved from $HOME: the first version hard-coded one user's home directory,
 # which is why the pill worked on exactly one machine.
-exec "$HOME/.local/bin/pc-ai-stats" "$@"
+exec "$HOME/.local/bin/macacoview-stats" "$@"

@@ -66,7 +66,7 @@ class Placeholder(Gtk.Box):
         self.append(text)
 
 
-DESKTOP_ENTRY = Path.home() / ".local/share/applications/pc-ai-monitor-gnome.desktop"
+DESKTOP_ENTRY = Path.home() / ".local/share/applications/macacoview.desktop"
 
 
 def update_desktop_icon(name: str) -> None:

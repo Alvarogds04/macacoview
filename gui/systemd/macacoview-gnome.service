@@ -3,14 +3,14 @@
 # que un spawn directo muere sin dejar rastro visible. Las unidades de usuario
 # corren dentro de la sesion de login, y ahi GTK si encuentra el compositor.
 [Unit]
-Description=PC AI Monitor (GNOME app)
+Description=MacacoView (GNOME app)
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-Environment=PYTHONPATH=%h/.local/lib/pc-ai-monitor
-ExecStart=%h/.local/bin/pc-ai-monitor-gnome
+Environment=PYTHONPATH=%h/.local/lib/macacoview
+ExecStart=%h/.local/bin/macacoview
 Restart=no
 
 [Install]

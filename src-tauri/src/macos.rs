@@ -1,6 +1,6 @@
 //! Native macOS collection.
 //!
-//! The Linux path shells out to `pc-ai-stats`, which reads `/proc` and runs `ss`.
+//! The Linux path shells out to `macacoview-stats`, which reads `/proc` and runs `ss`.
 //! Neither exists here, so this module reads the same numbers from the tools that
 //! do exist: `sysctl`, `vm_stat`, `ps` and `lsof`.
 //!
@@ -182,7 +182,7 @@ pub fn parse_ps(text: &str) -> Vec<Process> {
 }
 
 /// Groups processes exactly the way the Linux collector does
-/// (`scripts/pc-ai-stats`): pattern entries are matched first, in config
+/// (`scripts/macacoview-stats`): pattern entries are matched first, in config
 /// order, as regular expressions searched against the process name (comm)
 /// and its full command line; a `system` entry without patterns then catches
 /// root (uid 0) processes; any other visible entry without patterns catches
@@ -242,7 +242,7 @@ pub fn group_by(rows: &[Process], watch: &[WatchEntry]) -> HashMap<String, Group
 
 /// Whether any pattern claims the row. A pattern is a regular expression
 /// searched against the process name and its full command line, exactly like
-/// `_matches` in `scripts/pc-ai-stats`; a broken regex is skipped, never
+/// `_matches` in `scripts/macacoview-stats`; a broken regex is skipped, never
 /// fatal.
 fn row_matches(patterns: &[String], row: &Process) -> bool {
     patterns.iter().any(|pattern| {

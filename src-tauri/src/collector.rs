@@ -110,20 +110,20 @@ fn collect_stats() -> Result<Stats, String> {
 fn collect_stats() -> Result<Stats, String> {
     let output = Command::new(pc_ai_stats_bin())
         .output()
-        .map_err(|e| format!("pc-ai-stats: {e}"))?;
+        .map_err(|e| format!("macacoview-stats: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(
-            "pc-ai-stats exited with {}: {}",
+            "macacoview-stats exited with {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
 
     let json = String::from_utf8(output.stdout)
-        .map_err(|e| format!("pc-ai-stats output not UTF-8: {e}"))?;
+        .map_err(|e| format!("macacoview-stats output not UTF-8: {e}"))?;
 
-    serde_json::from_str(&json).map_err(|e| format!("pc-ai-stats JSON parse error: {e}"))
+    serde_json::from_str(&json).map_err(|e| format!("macacoview-stats JSON parse error: {e}"))
 }
 
 /// Read the privileged listener table. The helper is invoked with an argv
@@ -133,7 +133,7 @@ fn collect_stats() -> Result<Stats, String> {
 #[cfg(not(target_os = "macos"))]
 fn pc_ai_stats_bin() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    format!("{home}/.local/bin/pc-ai-stats")
+    format!("{home}/.local/bin/macacoview-stats")
 }
 
 #[cfg(target_os = "macos")]

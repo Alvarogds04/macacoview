@@ -1,6 +1,6 @@
 """Token consumption: totals, providers, models and the Codex windows.
 
-Everything comes from the external collector (``pc-ai-tokens``); this module only
+Everything comes from the external collector (``macacoview-tokens``); this module only
 presents it. Providers and models are aggregated here, so no extra plumbing is
 needed in the data layer.
 """
@@ -54,7 +54,7 @@ class TokenKpiBlock(Block):
 class CliKpiBlock(Block):
     """Headline consumption of one external CLI section.
 
-    The collector (``pc-ai-tokens``) emits ``codex_cli`` and ``claude_code``
+    The collector (``macacoview-tokens``) emits ``codex_cli`` and ``claude_code``
     with the same normalized fields, so the only per-CLI difference is which
     section to read: reasoning (thinking in Claude Code), cache_write (cache
     creation) and cache_read are metrics Pi's block does not show.

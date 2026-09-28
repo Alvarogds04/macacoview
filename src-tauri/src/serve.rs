@@ -53,7 +53,7 @@ pub fn run_daemon() -> std::io::Result<()> {
     let state = start_sampling_loop();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let addr = listener.local_addr()?;
-    eprintln!("pc-ai-monitor: serving on http://{addr} (Ctrl-C to stop)");
+    eprintln!("macacoview-serve: serving on http://{addr} (Ctrl-C to stop)");
     accept_loop(listener, state)
 }
 
@@ -117,9 +117,9 @@ fn placeholder_page() -> Asset {
         path: "/",
         bytes: br#"<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>pc-ai-monitor</title></head>
+<head><meta charset="utf-8"><title>macacoview-serve</title></head>
 <body>
-<h1>pc-ai-monitor</h1>
+<h1>macacoview-serve</h1>
 <p>The frontend has not been compiled into this binary.</p>
 <p>Rebuild the project from a checkout with <code>npm install &amp;&amp; npm run build</code> and embed the assets by recompiling the Rust binary.</p>
 <p>The JSON API is available at <code>/api/state</code>.</p>
@@ -552,7 +552,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("el reloj del sistema deberia avanzar")
                 .as_nanos();
-            let dir = std::env::temp_dir().join(format!("pc-ai-monitor-serve-{tag}-{unique}"));
+            let dir = std::env::temp_dir().join(format!("macacoview-serve-{tag}-{unique}"));
             let config_dir = dir.join("macacoview");
             std::fs::create_dir_all(&config_dir)
                 .expect("deberia poder crear el directorio temporal");

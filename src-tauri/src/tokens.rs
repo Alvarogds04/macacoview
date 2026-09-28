@@ -1,7 +1,7 @@
 //! Token consumption per source.
 //!
-//! The HTTP-facing aggregation lives in `scripts/pc-ai-tokens` (installed as
-//! `$HOME/.local/bin/pc-ai-tokens`), which talks to Prometheus, llama.cpp and
+//! The HTTP-facing aggregation lives in `scripts/macacoview-tokens` (installed as
+//! `$HOME/.local/bin/macacoview-tokens`), which talks to Prometheus, llama.cpp and
 //! codexbar. This module runs it for those sources and deserializes the
 //! document: keeping the HTTP sources out of the Rust tree avoids adding an
 //! HTTP client to an app that needs none.
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 fn tokens_bin() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
-    format!("{home}/.local/bin/pc-ai-tokens")
+    format!("{home}/.local/bin/macacoview-tokens")
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -175,18 +175,18 @@ fn run_script_document(bin: &Path) -> Result<Tokens, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(script_unavailable_tokens());
         }
-        Err(error) => return Err(format!("pc-ai-tokens: {error}")),
+        Err(error) => return Err(format!("macacoview-tokens: {error}")),
     };
 
     if !output.status.success() {
         return Err(format!(
-            "pc-ai-tokens exited with {}: {}",
+            "macacoview-tokens exited with {}: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
 
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("pc-ai-tokens JSON parse error: {e}"))
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("macacoview-tokens JSON parse error: {e}"))
 }
 
 /// The document used when the script binary does not exist: the sources only
@@ -275,7 +275,7 @@ struct CachedFile {
 }
 
 /// Cache document, shaped exactly like the Python collector's so both can
-/// share the files under `~/.cache/pc-ai-tokens`. The version is bumped
+/// share the files under `~/.cache/macacoview`. The version is bumped
 /// whenever the shape changes: an older cache is ignored and the transcripts
 /// are re-read from the start, which self-heals without manual cleanup.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -330,7 +330,7 @@ fn codex_spec(home: &Path) -> SourceSpec {
         root: home.join(".codex").join("sessions"),
         cache_path: home
             .join(".cache")
-            .join("pc-ai-tokens")
+            .join("macacoview")
             .join("codex-cli-sessions.json"),
         cache_version: CODEX_CLI_CACHE_VERSION,
         pattern: "rollout-*.jsonl",
@@ -345,7 +345,7 @@ fn claude_spec(home: &Path) -> SourceSpec {
         root: home.join(".claude").join("projects"),
         cache_path: home
             .join(".cache")
-            .join("pc-ai-tokens")
+            .join("macacoview")
             .join("claude-code-sessions.json"),
         cache_version: CLAUDE_CACHE_VERSION,
         pattern: "*.jsonl",
@@ -809,13 +809,17 @@ mod transcript_tests {
     // against them is the `#[ignore]`d test at the bottom of this module.
 
     fn temp_dir(tag: &str) -> PathBuf {
+        // pid plus nanoseconds is not enough: two tests running in parallel in the
+        // same process can land in the same instant, get handed the same directory,
+        // and then the remove_dir_all below deletes the other test's files mid-run.
+        // Seen for real: the suite failed 2 runs in 3 with the default thread count
+        // and passed every time with --test-threads=1.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "pc-ai-tokens-{tag}-{}-{}",
+            "macacoview-tokens-{tag}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1153,8 +1157,17 @@ mod transcript_tests {
     #[cfg(unix)]
     fn write_executable_script(path: &Path, body: &str) {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, body).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Publish atomically: write a sibling, set its mode, then rename it into
+        // place. The kernel refuses to exec a file that anyone holds open for
+        // writing (ETXTBSY, os error 26), and these tests run as parallel threads
+        // of one process, so a fork can carry a half-written descriptor into an
+        // unrelated exec call. After a rename, the path that gets exec'd only ever
+        // names a closed, complete inode -- the open-for-write descriptor lives on
+        // the sibling, which nothing executes.
+        let staging = path.with_extension("staging");
+        std::fs::write(&staging, body).unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&staging, path).unwrap();
     }
 
     #[test]
@@ -1174,7 +1187,7 @@ mod transcript_tests {
         );
 
         let tokens =
-            collect_tokens_from(Path::new("/nonexistent/pc-ai-tokens"), &home).expect("must not fail");
+            collect_tokens_from(Path::new("/nonexistent/macacoview-tokens"), &home).expect("must not fail");
 
         assert_eq!(tokens.remote.status, "unavailable");
         assert_eq!(tokens.local.status, "unavailable");
@@ -1195,7 +1208,7 @@ mod transcript_tests {
         // script's own sources pass through untouched.
         let dir = temp_dir("collect-with-script");
         let home = dir.join("home");
-        let script = dir.join("fake-pc-ai-tokens");
+        let script = dir.join("fake-macacoview-tokens");
         write_executable_script(
             &script,
             r#"#!/bin/sh
@@ -1228,7 +1241,7 @@ echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi
         // Only a missing binary degrades the document; a script that runs and
         // exits non-zero keeps the caller's keep-previous-value behavior.
         let dir = temp_dir("collect-failing");
-        let script = dir.join("failing-pc-ai-tokens");
+        let script = dir.join("failing-macacoview-tokens");
         write_executable_script(&script, "#!/bin/sh\necho boom >&2\nexit 3\n");
 
         let error = collect_tokens_from(&script, &dir.join("home")).unwrap_err();

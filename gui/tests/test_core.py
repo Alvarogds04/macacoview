@@ -614,10 +614,10 @@ class TokenParserTests(unittest.TestCase):
         import importlib.util
         from importlib.machinery import SourceFileLoader
 
-        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-tokens"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "macacoview-tokens"
         if not script.exists():
-            raise unittest.SkipTest("no se encontro scripts/pc-ai-tokens")
-        loader = SourceFileLoader("pc_ai_tokens", str(script))
+            raise unittest.SkipTest("no se encontro scripts/macacoview-tokens")
+        loader = SourceFileLoader("macacoview_tokens", str(script))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         cls.tokens = importlib.util.module_from_spec(spec)
         loader.exec_module(cls.tokens)
@@ -974,11 +974,11 @@ class ExtensionTests(unittest.TestCase):
         self.assertIn(current, supported, f"shell {current} no esta soportado")
 
     def test_class_matches_metadata_uuid(self):
-        self.assertEqual(self.meta["uuid"], "pc-ai-monitor@alvaro")
+        self.assertEqual(self.meta["uuid"], "macacoview@alvaro")
         # No `class` key in metadata: the shell finds the single exported
         # default class, and renaming it breaks live reloads.
         self.assertNotIn("class", self.meta)
-        self.assertIn("export default class PcAiMonitorExtension", self.js)
+        self.assertIn("export default class MacacoViewExtension", self.js)
 
     def test_parsers_survive_the_click_fix(self):
         # The collector protocol is "<used>|<total>|<chips>"; the rewrite of
@@ -1095,13 +1095,13 @@ class ConfigMigrationTests(unittest.TestCase):
 
 
 class StatsConfigPathTests(unittest.TestCase):
-    """El colector pc-ai-stats lee la ruta nueva de la config."""
+    """El colector macacoview-stats lee la ruta nueva de la config."""
 
     def test_stats_reads_the_renamed_config_path(self):
         import os
         import tempfile
 
-        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-stats"
+        script = Path(__file__).resolve().parents[2] / "scripts" / "macacoview-stats"
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / ".config" / "macacoview" / "config.toml"
             config.parent.mkdir(parents=True)

@@ -8,7 +8,7 @@ de tokens, puertos y procesos.
 - **Linux — producto instalable.** La app GNOME es Python + GTK4/libadwaita: lo
   distribuible es el arbol de fuentes + `gui/install.sh`. No hay binario, y no
   hace falta: el instalador deja todo andando en `~/.local` sin sudo.
-- **macOS — daemon descargable.** El producto es el binario `pc-ai-monitor-serve`:
+- **macOS — daemon descargable.** El producto es el binario `macacoview-serve`:
   un solo archivo sin dependencias (no Node, no Python, no GTK) que sirve el
   mismo tablero en `http://127.0.0.1:8787` con el frontend React incrustado.
   Va sin firmar: Gatekeeper lo frena la primera vez (ver la seccion de macOS).
@@ -59,13 +59,13 @@ bash gui/install.sh
 ### Que deja instalado
 
 ```text
-~/.local/lib/pc-ai-monitor/pc_ai_monitor         la app
-~/.local/bin/pc-ai-monitor-gnome                 lanzador
-~/.local/bin/pc-ai-stats, pc-ai-tokens, pc-ai-bar   colectores
-~/.local/share/applications/pc-ai-monitor-gnome.desktop
-~/.local/share/gnome-shell/extensions/pc-ai-monitor@alvaro   pill del panel
-~/.config/systemd/user/pc-ai-monitor-gnome.service
-~/.config/pc-ai-monitor/config.toml              config (solo si no existe)
+~/.local/lib/macacoview/pc_ai_monitor            la app
+~/.local/bin/macacoview                          lanzador
+~/.local/bin/macacoview-stats, macacoview-tokens, macacoview-bar   colectores
+~/.local/share/applications/macacoview.desktop
+~/.local/share/gnome-shell/extensions/macacoview@alvaro   pill del panel
+~/.config/systemd/user/macacoview-gnome.service
+~/.config/macacoview/config.toml                 config (solo si no existe)
 ```
 
 Todo sin sudo. Los pasos opcionales degradan: sin `gnome-extensions` se salta la
@@ -75,7 +75,7 @@ de GPU sale en 0 con un aviso en vez de un cero mudo.
 
 ## macOS: bajar y correr el daemon
 
-En Mac el producto es **un solo binario**: `pc-ai-monitor-serve`. No necesita
+En Mac el producto es **un solo binario**: `macacoview-serve`. No necesita
 Node, ni Python, ni GTK, ni instalacion: se baja, se corre, y sirve el mismo
 tablero en el navegador. Esta seccion esta escrita para alguien que no
 programa.
@@ -96,7 +96,7 @@ Mac con Intel se dejaron de vender en 2020.
 ### Paso 2: bajar, descomprimir y verificar
 
 En la pagina de **Releases** del repositorio, de la ultima version baja de la
-seccion Assets dos archivos: el `pc-ai-monitor-serve-<tu-arquitectura>.tar.gz`
+seccion Assets dos archivos: el `macacoview-serve-<tu-arquitectura>.tar.gz`
 y su `.sha256` (el repositorio es privado: necesitas acceso al repo, o que te
 pase los archivos quien te lo compartio).
 
@@ -105,8 +105,8 @@ Despues, en Terminal (la abris con Spotlight: Command + Espacio, escribis
 
 ```bash
 cd ~/Downloads
-shasum -a 256 -c pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz.sha256
-tar -xzf pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz
+shasum -a 256 -c macacoview-serve-aarch64-apple-darwin.tar.gz.sha256
+tar -xzf macacoview-serve-aarch64-apple-darwin.tar.gz
 ```
 
 (la version Intel usa `x86_64-apple-darwin` en el nombre). El primer comando
@@ -123,10 +123,10 @@ salidas, cualquiera alcanza:
 - En Terminal, quitarle la cuarentena:
 
   ```bash
-  xattr -d com.apple.quarantine ./pc-ai-monitor-serve
+  xattr -d com.apple.quarantine ./macacoview-serve
   ```
 
-- O en Finder, clic derecho sobre `pc-ai-monitor-serve` -> **Abrir** ->
+- O en Finder, clic derecho sobre `macacoview-serve` -> **Abrir** ->
   **Abrir** de nuevo en el dialogo que aparece.
 
 Despues de esa primera vez arranca sin volver a preguntar.
@@ -134,12 +134,12 @@ Despues de esa primera vez arranca sin volver a preguntar.
 ### Paso 4: correrlo
 
 ```bash
-./pc-ai-monitor-serve
+./macacoview-serve
 ```
 
 Y abrir **http://127.0.0.1:8787** en el navegador (Safari, Chrome, el que
 uses). Se corta con Ctrl-C en la Terminal. Si el puerto esta ocupado, se
-cambia asi: `PC_AI_PORT=9000 ./pc-ai-monitor-serve`.
+cambia asi: `PC_AI_PORT=9000 ./macacoview-serve`.
 
 ### Que vas a ver (y que NO vas a ver)
 
@@ -163,11 +163,11 @@ maquina.
 Empujar un tag `v*` dispara el workflow `release`, que empaqueta el arbol
 instalable (`gui/` + `scripts/`), lo verifica instalando en un HOME limpio del
 runner, y lo adjunta a la release de GitHub como
-`pc-ai-monitor-<tag>-linux.tar.gz` + `.sha256`.
+`macacoview-<tag>-linux.tar.gz` + `.sha256`.
 
 La misma release lleva los binarios del daemon para Mac:
-`pc-ai-monitor-serve-aarch64-apple-darwin.tar.gz` (Apple Silicon) y
-`pc-ai-monitor-serve-x86_64-apple-darwin.tar.gz` (Intel), cada uno con su
+`macacoview-serve-aarch64-apple-darwin.tar.gz` (Apple Silicon) y
+`macacoview-serve-x86_64-apple-darwin.tar.gz` (Intel), cada uno con su
 `.sha256`. El workflow los compila DESPUES de compilar el frontend (que queda
 incrustado en el binario) y falla si el build no confirma que los assets
 fueron incrustados: un daemon sin frontend compila igual y sirve un
