@@ -10,18 +10,18 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BAR = GLib.getenv('HOME') + '/.local/bin/macacoview-bar';
-const SERVICE = 'pc-ai-monitor-gnome.service';
+const SERVICE = 'macacoview-gnome.service';
 const LAUNCHER =
-    GLib.getenv('HOME') + '/.local/bin/pc-ai-monitor-gnome';
+    GLib.getenv('HOME') + '/.local/bin/macacoview';
 const PILL_WIDTH = 46; // px, fixed RAM track width
 
-export default class PcAiMonitorExtension extends Extension {
+export default class MacacoViewExtension extends Extension {
 
     enable() {
 
         this._indicator = new PanelMenu.Button(
             0.0,
-            'PC-AI Monitor',
+            'MacacoView',
             false
         );
 
@@ -80,7 +80,7 @@ export default class PcAiMonitorExtension extends Extension {
 
         const openItem =
             new PopupMenu.PopupMenuItem(
-                '📊 Abrir PC-AI Monitor'
+                '📊 Abrir MacacoView'
             );
 
         openItem.connect('activate', () => this._openApp());
@@ -98,7 +98,7 @@ export default class PcAiMonitorExtension extends Extension {
         });
 
         Main.panel.addToStatusArea(
-            'pc-ai-monitor',
+            'macacoview',
             this._indicator,
             1,
             'right'
@@ -131,7 +131,7 @@ export default class PcAiMonitorExtension extends Extension {
             );
             return;
         } catch (e) {
-            console.error(`pc-ai-monitor: systemd fallo: ${e.message}`);
+            console.error(`macacoview: systemd fallo: ${e.message}`);
         }
 
         try {
@@ -141,7 +141,7 @@ export default class PcAiMonitorExtension extends Extension {
                     Gio.SubprocessFlags.STDERR_IGNORE
             );
         } catch (e) {
-            console.error(`pc-ai-monitor: no se pudo abrir: ${e.message}`);
+            console.error(`macacoview: no se pudo abrir: ${e.message}`);
         }
     }
 

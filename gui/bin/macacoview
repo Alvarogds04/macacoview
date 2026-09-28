@@ -3,7 +3,7 @@
 #
 # Runs straight from the checkout: the package lives one level up from this
 # script, so PYTHONPATH points at gui/. install.sh writes a copy that points at
-# ~/.local/lib/pc-ai-monitor instead.
+# ~/.local/lib/macacoview instead.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

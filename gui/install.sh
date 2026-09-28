@@ -8,9 +8,9 @@
 #                                          (default: latest), verify its SHA256
 #                                          and only then install from it
 #
-#   ~/.local/lib/pc-ai-monitor/pc_ai_monitor        the package
-#   ~/.local/bin/pc-ai-monitor-gnome                launcher
-#   ~/.local/share/applications/pc-ai-monitor-gnome.desktop
+#   ~/.local/lib/macacoview/pc_ai_monitor          the package
+#   ~/.local/bin/macacoview                        launcher
+#   ~/.local/share/applications/macacoview.desktop
 #   ~/.config/macacoview/config.toml             config template (first run)
 #
 # It does not touch the Tauri app (pc-ai-monitor-gui / PC-AI Monitor), which
@@ -162,12 +162,23 @@ then
 fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-lib="$HOME/.local/lib/pc-ai-monitor"
+lib="$HOME/.local/lib/macacoview"
 bin="$HOME/.local/bin"
 apps="$HOME/.local/share/applications"
 
 rm -rf "$lib"
 mkdir -p "$lib" "$bin" "$apps"
+
+# Limpieza del renombre: la unidad, el .desktop, el lanzador y el directorio
+# de lib con el nombre viejo quedaron instalados de la version previa. Sin
+# borrarlos habria dos unidades de systemd y dos entradas de menu apuntando al
+# mismo codigo. La config NO se toca: vive en ~/.config y ya tiene su propia
+# migracion.
+rm -rf "$HOME/.local/lib/pc-ai-monitor"
+rm -f "$bin/pc-ai-monitor-gnome"
+rm -f "$HOME/.config/systemd/user/pc-ai-monitor-gnome.service"
+rm -f "$apps/pc-ai-monitor-gnome.desktop"
+
 cp -r "$root/pc_ai_monitor" "$lib/"
 
 # The collectors: the app shells out to these, so an install without them opens
@@ -182,20 +193,20 @@ done
 # nombre viejo. Borrarlos es seguro: la app actual solo mira los nombres nuevos.
 rm -f "$bin/pc-ai-stats" "$bin/pc-ai-tokens" "$bin/pc-ai-bar"
 
-cat > "$bin/pc-ai-monitor-gnome" <<LAUNCHER
+cat > "$bin/macacoview" <<LAUNCHER
 #!/usr/bin/env bash
 set -euo pipefail
 exec env PYTHONPATH="$lib" python3 -m pc_ai_monitor "\$@"
 LAUNCHER
-chmod +x "$bin/pc-ai-monitor-gnome"
+chmod +x "$bin/macacoview"
 
-cat > "$apps/pc-ai-monitor-gnome.desktop" <<DESKTOP
+cat > "$apps/macacoview.desktop" <<DESKTOP
 [Desktop Entry]
-Name=PC-AI Monitor
+Name=MacacoView
 Comment=Monitor nativo de recursos, tokens, puertos y procesos
 # systemctl arranca la unidad de usuario, que corre dentro de la sesion de
 # login; llamar al lanzador directo deja a GTK sin WAYLAND_DISPLAY.
-Exec=/usr/bin/systemctl --user start pc-ai-monitor-gnome.service
+Exec=/usr/bin/systemctl --user start macacoview-gnome.service
 Icon=utilities-system-monitor
 Terminal=false
 Type=Application
@@ -221,8 +232,8 @@ fi
 # Systemd user unit: la unica forma confiable de levantar la app desde un
 # contexto sin entorno de sesion (la extension, o un atajo de teclado).
 install -d "$HOME/.config/systemd/user"
-install -m 644 "$root/systemd/pc-ai-monitor-gnome.service" \
-  "$HOME/.config/systemd/user/pc-ai-monitor-gnome.service"
+install -m 644 "$root/systemd/macacoview-gnome.service" \
+  "$HOME/.config/systemd/user/macacoview-gnome.service"
 systemctl --user daemon-reload || true
 
 # AMD GPUs read GTT through a root-owned helper. Without it the app degrades to
@@ -241,9 +252,9 @@ PYTHONPATH="$lib" python3 -c \
 
 echo "Instalado:"
 echo "  $lib"
-echo "  $bin/pc-ai-monitor-gnome"
+echo "  $bin/macacoview"
 echo "  $bin/macacoview-stats, macacoview-tokens, macacoview-bar"
-echo "  $apps/pc-ai-monitor-gnome.desktop"
+echo "  $apps/macacoview.desktop"
 echo "  extension pc-ai-monitor@alvaro"
-echo "  systemd --user pc-ai-monitor-gnome.service"
+echo "  systemd --user macacoview-gnome.service"
 echo "Config en ~/.config/macacoview/config.toml"

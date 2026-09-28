@@ -402,7 +402,7 @@ jobs:
 
       - name: The app must find its collectors and report data
         run: |
-          out=$(sudo -u friend -H env PYTHONPATH=/home/friend/.local/lib/pc-ai-monitor \
+          out=$(sudo -u friend -H env PYTHONPATH=/home/friend/.local/lib/macacoview \
               xvfb-run -a python3 -m pc_ai_monitor --self-test 2>&1)
           echo "$out"
           echo "$out" | grep -q "errores ninguno" || { echo "FALLO: la app no consiguio datos"; exit 1; }
