@@ -11,5 +11,5 @@
 //! `http://localhost:8787`.
 
 fn main() -> std::io::Result<()> {
-    pc_ai_monitor_lib::serve::run_daemon()
+    macacoview_lib::serve::run_daemon()
 }
