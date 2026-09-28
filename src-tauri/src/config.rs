@@ -1,11 +1,17 @@
 //! Reading of the shared `config.toml` watch list.
 //!
 //! The GTK app and the Linux collector (`scripts/pc-ai-stats`) already read
-//! `~/.config/pc-ai-monitor/config.toml`: `[[watch]]` blocks choose which
+//! `~/.config/macacoview/config.toml`: `[[watch]]` blocks choose which
 //! process groups the collector builds. This module gives the macOS collector
 //! the same file from the same place, so the user configures what to watch
 //! once and every platform obeys it. `XDG_CONFIG_HOME` is honoured exactly
 //! like the other readers do; nothing here builds a home path from literals.
+//!
+//! The config used to live in `~/.config/pc-ai-monitor/`; the first reader
+//! that needs it after the rename copies it over to the new directory (a
+//! copy, never a move: the original stays untouched until the user removes
+//! it). Only `config.toml` migrates — other files that live next to it are
+//! not ours to touch.
 //!
 //! Only the `[[watch]]` table is consumed here: the remaining sections belong
 //! to the GTK app. The parsing rules mirror `_load_watch` in
@@ -71,27 +77,75 @@ pub fn default_watch() -> Vec<WatchEntry> {
     ]
 }
 
-/// Resolves the directory that holds `pc-ai-monitor/config.toml` from the
+/// Resolves the directory that holds `<app_dir>/config.toml` from the
 /// same inputs every other reader uses: `XDG_CONFIG_HOME` when set, the home
+/// directory's `.config` otherwise. `None` only when neither exists.
+fn config_dir_named(
+    xdg_config_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+    app_dir: &str,
+) -> Option<PathBuf> {
+    if let Some(dir) = xdg_config_home.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir).join(app_dir));
+    }
+    let home = home.filter(|value| !value.is_empty())?;
+    Some(PathBuf::from(home).join(".config").join(app_dir))
+}
+
+/// Resolves the directory that holds `macacoview/config.toml` from the same
+/// inputs every other reader uses: `XDG_CONFIG_HOME` when set, the home
 /// directory's `.config` otherwise. `None` only when neither exists.
 pub fn config_dir(
     xdg_config_home: Option<&OsStr>,
     home: Option<&OsStr>,
 ) -> Option<PathBuf> {
-    if let Some(dir) = xdg_config_home.filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(dir).join("pc-ai-monitor"));
-    }
-    let home = home.filter(|value| !value.is_empty())?;
-    Some(PathBuf::from(home).join(".config").join("pc-ai-monitor"))
+    config_dir_named(xdg_config_home, home, "macacoview")
 }
 
-/// The config file the GTK app writes and every collector reads.
+/// The directory the config lived in before the rename to `macacoview`.
+/// Only the migration reads from here; nothing ever writes to it.
+pub fn legacy_config_dir(
+    xdg_config_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    config_dir_named(xdg_config_home, home, "pc-ai-monitor")
+}
+
+/// Copies the legacy `pc-ai-monitor/config.toml` into the new `macacoview`
+/// directory when the config is needed and the new file is not there yet.
+///
+/// The rules, in order: a config that already exists at the new path is
+/// never overwritten; with no legacy file there is nothing to do and no
+/// directory is invented. When the copy does happen it is a copy, never a
+/// move or a delete — the original stays where it was so the user can remove
+/// it once they trust the migration. Only `config.toml` is copied: other
+/// files that live next to it (backups and such) are not ours to touch.
+/// Any failure is reported as `false` and never breaks the caller.
+pub fn migrate_legacy_config(new_dir: &Path, legacy_dir: &Path) -> bool {
+    let new_path = new_dir.join("config.toml");
+    let legacy_path = legacy_dir.join("config.toml");
+    if new_path.exists() || !legacy_path.is_file() {
+        return false;
+    }
+    if std::fs::create_dir_all(new_dir).is_err() {
+        return false;
+    }
+    std::fs::copy(&legacy_path, &new_path).is_ok()
+}
+
+/// The config file the GTK app writes and every collector reads. The first
+/// resolution after the rename brings the legacy config over (a copy), so
+/// the user keeps their watch entries, bar settings and models.
 pub fn config_path() -> Option<PathBuf> {
-    config_dir(
-        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
-    .map(|dir| dir.join("config.toml"))
+    let xdg_var = std::env::var_os("XDG_CONFIG_HOME");
+    let home_var = std::env::var_os("HOME");
+    let xdg = xdg_var.as_deref();
+    let home = home_var.as_deref();
+    let dir = config_dir(xdg, home)?;
+    if let Some(legacy) = legacy_config_dir(xdg, home) {
+        migrate_legacy_config(&dir, &legacy);
+    }
+    Some(dir.join("config.toml"))
 }
 
 /// `[[watch]]` entries from the shared config file. A missing, unreadable or
@@ -427,20 +481,112 @@ name = "system"
     fn xdg_config_home_manda_sobre_home() {
         let dir = config_dir(Some("/tmp/xdg-config".as_ref()), Some("/usuarios/alguien".as_ref()))
             .expect("con XDG definido hay directorio");
-        assert_eq!(dir, PathBuf::from("/tmp/xdg-config/pc-ai-monitor"));
+        assert_eq!(dir, PathBuf::from("/tmp/xdg-config/macacoview"));
     }
 
     #[test]
     fn sin_xdg_se_cae_a_home_dot_config() {
         let dir = config_dir(None, Some("/usuarios/alguien".as_ref()))
             .expect("con HOME definido hay directorio");
-        assert_eq!(dir, PathBuf::from("/usuarios/alguien/.config/pc-ai-monitor"));
+        assert_eq!(dir, PathBuf::from("/usuarios/alguien/.config/macacoview"));
+    }
+
+    #[test]
+    fn el_directorio_legacy_sigue_resolviendo_a_pc_ai_monitor() {
+        assert_eq!(
+            legacy_config_dir(None, Some("/usuarios/alguien".as_ref())),
+            Some(PathBuf::from("/usuarios/alguien/.config/pc-ai-monitor"))
+        );
+        assert_eq!(
+            legacy_config_dir(Some("/tmp/xdg-config".as_ref()), None),
+            Some(PathBuf::from("/tmp/xdg-config/pc-ai-monitor"))
+        );
+        assert_eq!(legacy_config_dir(None, None), None);
     }
 
     #[test]
     fn sin_ninguna_base_no_hay_ruta_inventada() {
         assert_eq!(config_dir(None, None), None);
         assert_eq!(config_dir(Some("".as_ref()), Some("".as_ref())), None);
+    }
+
+    // -------------------------------------------------------------------
+    // Migración del config viejo (pc-ai-monitor -> macacoview)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn migracion_copia_el_config_viejo_cuando_el_nuevo_no_existe() {
+        let dir = temp_config_dir("migra");
+        let new_dir = dir.join("macacoview");
+        let legacy_dir = dir.join("pc-ai-monitor");
+        let legacy = write_config_file(&dir, "[[watch]]\nname = \"chrome\"\n");
+        // write_config_file crea `dir/pc-ai-monitor`, que es justo el legacy.
+        assert_eq!(legacy.parent(), Some(legacy_dir.as_path()));
+
+        assert!(migrate_legacy_config(&new_dir, &legacy_dir));
+
+        let migrated = new_dir.join("config.toml");
+        assert_eq!(
+            std::fs::read_to_string(&migrated).expect("la copia deberia existir"),
+            "[[watch]]\nname = \"chrome\"\n",
+            "el contenido migrado queda igual al original"
+        );
+        assert!(legacy.is_file(), "el original nunca se borra ni se mueve");
+        assert_eq!(
+            std::fs::read_to_string(&legacy).expect("el original deberia seguir ahi"),
+            "[[watch]]\nname = \"chrome\"\n",
+            "el original queda intacto"
+        );
+    }
+
+    #[test]
+    fn migracion_no_pisa_un_config_nuevo_ya_existente() {
+        let dir = temp_config_dir("no-pisa");
+        let new_dir = dir.join("macacoview");
+        let legacy_dir = dir.join("pc-ai-monitor");
+        let _legacy = write_config_file(&dir, "[[watch]]\nname = \"viejo\"\n");
+        std::fs::create_dir_all(&new_dir).expect("deberia crear el directorio nuevo");
+        let new_path = new_dir.join("config.toml");
+        std::fs::write(&new_path, "[[watch]]\nname = \"nuevo\"\n")
+            .expect("deberia escribir la config nueva de prueba");
+
+        assert!(!migrate_legacy_config(&new_dir, &legacy_dir));
+        assert_eq!(
+            std::fs::read_to_string(&new_path).expect("la config nueva deberia seguir ahi"),
+            "[[watch]]\nname = \"nuevo\"\n",
+            "el config nuevo nunca se pisa con el viejo"
+        );
+    }
+
+    #[test]
+    fn sin_config_viejo_la_migracion_no_inventa_nada() {
+        let dir = temp_config_dir("sin-viejo");
+        let new_dir = dir.join("macacoview");
+        let legacy_dir = dir.join("pc-ai-monitor"); // existe el dir, no el archivo
+        std::fs::create_dir_all(&legacy_dir).expect("deberia crear el directorio de prueba");
+
+        assert!(!migrate_legacy_config(&new_dir, &legacy_dir));
+        assert!(!new_dir.exists(), "sin nada que migrar no se crea el directorio nuevo");
+
+        // Ni siquiera existiendo el directorio legacy.
+        let dir = temp_config_dir("sin-dir-viejo");
+        let new_dir = dir.join("macacoview");
+        assert!(!migrate_legacy_config(&new_dir, &dir.join("pc-ai-monitor")));
+        assert!(!new_dir.exists());
+    }
+
+    #[test]
+    fn la_migracion_copia_solo_el_config_toml() {
+        let dir = temp_config_dir("solo-toml");
+        let new_dir = dir.join("macacoview");
+        let legacy_dir = dir.join("pc-ai-monitor");
+        let _legacy = write_config_file(&dir, "[ui]\ntheme = \"gentle\"\n");
+        std::fs::write(legacy_dir.join(".bak-precfg-bar"), "no es nuestro")
+            .expect("deberia escribir el archivo ajeno de prueba");
+
+        assert!(migrate_legacy_config(&new_dir, &legacy_dir));
+        assert_eq!(std::fs::read_dir(&new_dir).expect("deberia leer el dir nuevo").count(), 1,
+            "solo config.toml viaja al directorio nuevo");
     }
 
     // -------------------------------------------------------------------

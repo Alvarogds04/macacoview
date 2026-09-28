@@ -986,3 +986,138 @@ class ExtensionTests(unittest.TestCase):
         self.assertIn("communicate_utf8_async", self.js)
         self.assertIn("split('|')", self.js)
         self.assertEqual(self.js.count("("), self.js.count(")"))
+
+
+class ConfigMigrationTests(unittest.TestCase):
+    """El renombre del directorio de config migrA el archivo viejo.
+
+    Reglas del contrato: copiar, nunca mover ni borrar; no pisar una config
+    nueva ya existente; sin archivo viejo no se inventa nada. Todo contra
+    directorios temporales: la config real del usuario jamás se toca.
+    """
+
+    def test_migrates_old_config_when_new_is_missing(self):
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "pc-ai-monitor" / "config.toml"
+            new = Path(tmp) / "macacoview" / "config.toml"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("[[watch]]\nname = \"chrome\"\nmatch = ['^chrome$']\n")
+
+            self.assertTrue(cfg.migrate_legacy_config(new, legacy))
+
+            self.assertEqual(
+                new.read_text(), legacy.read_text(), "el contenido queda igual",
+            )
+            self.assertTrue(
+                legacy.is_file(), "el original se copia, nunca se mueve ni borra",
+            )
+
+    def test_does_not_overwrite_an_existing_new_config(self):
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "pc-ai-monitor" / "config.toml"
+            new = Path(tmp) / "macacoview" / "config.toml"
+            legacy.parent.mkdir(parents=True)
+            new.parent.mkdir(parents=True)
+            legacy.write_text("[[watch]]\nname = \"viejo\"\n")
+            new.write_text("[[watch]]\nname = \"nuevo\"\n")
+
+            self.assertFalse(cfg.migrate_legacy_config(new, legacy))
+            self.assertEqual(
+                new.read_text(), "[[watch]]\nname = \"nuevo\"\n",
+                "la config nueva nunca se pisa con la vieja",
+            )
+
+    def test_without_legacy_file_nothing_happens(self):
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            new = Path(tmp) / "macacoview" / "config.toml"
+
+            self.assertFalse(cfg.migrate_legacy_config(new, Path(tmp) / "no-existe.toml"))
+            self.assertFalse(
+                new.exists(), "sin nada que migrar no se crea el directorio nuevo",
+            )
+
+    def test_migration_copies_only_the_config_file(self):
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_dir = Path(tmp) / "pc-ai-monitor"
+            legacy_dir.mkdir()
+            legacy = legacy_dir / "config.toml"
+            legacy.write_text("[ui]\ntheme = \"gentle\"\n")
+            (legacy_dir / ".bak-precfg-bar").write_text("no es nuestro")
+            new = Path(tmp) / "macacoview" / "config.toml"
+
+            self.assertTrue(cfg.migrate_legacy_config(new, legacy))
+            self.assertEqual(
+                [p.name for p in new.parent.iterdir()], ["config.toml"],
+                "solo config.toml viaja al directorio nuevo",
+            )
+
+    def test_load_runs_the_migration_for_the_default_path(self):
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "pc-ai-monitor" / "config.toml"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("[[watch]]\nname = \"chrome\"\nmatch = ['^chrome$']\n")
+
+            original_config, original_legacy = cfg.CONFIG_PATH, cfg.LEGACY_CONFIG_PATH
+            cfg.CONFIG_PATH = Path(tmp) / "macacoview" / "config.toml"
+            cfg.LEGACY_CONFIG_PATH = legacy
+            try:
+                loaded = cfg.load(cfg.CONFIG_PATH)
+            finally:
+                cfg.CONFIG_PATH, cfg.LEGACY_CONFIG_PATH = original_config, original_legacy
+
+            self.assertEqual(
+                tuple(entry.name for entry in loaded.watch), ("chrome",),
+                "load usa la config migrada, no los defaults",
+            )
+            self.assertTrue(
+                legacy.is_file(), "el original sigue intacto después de migrar",
+            )
+
+
+class StatsConfigPathTests(unittest.TestCase):
+    """El colector pc-ai-stats lee la ruta nueva de la config."""
+
+    def test_stats_reads_the_renamed_config_path(self):
+        import os
+        import tempfile
+
+        script = Path(__file__).resolve().parents[2] / "scripts" / "pc-ai-stats"
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / ".config" / "macacoview" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                "[[watch]]\n"
+                "name = \"grupo-de-prueba\"\n"
+                "match = ['^este-proceso-no-existe$']\n"
+            )
+            env = dict(os.environ, HOME=tmp)
+            out = subprocess.run(
+                ["python3", str(script)], capture_output=True, text=True, env=env,
+            )
+
+        self.assertEqual(out.returncode, 0, out.stderr)
+        data = json.loads(out.stdout)
+        self.assertIn(
+            "grupo-de-prueba", data["groups"],
+            "el [[watch]] de la ruta nueva define los grupos del colector",
+        )

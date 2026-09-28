@@ -267,7 +267,7 @@ export function Settings() {
             Los cambios se aplican solos: el colector relee esta config en cada
             ciclo de medición, así que <strong>no hace falta reiniciar
             nada</strong>. Se escribe en{" "}
-            <code>~/.config/pc-ai-monitor/config.toml</code>, en la máquina
+            <code>~/.config/macacoview/config.toml</code>, en la máquina
             donde corre el daemon, y el resto del archivo queda intacto.
           </p>
 

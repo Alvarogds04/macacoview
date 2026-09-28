@@ -13,10 +13,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+import shutil
 import tomllib
 
-CONFIG_DIR = Path.home() / ".config" / "pc-ai-monitor"
+CONFIG_DIR = Path.home() / ".config" / "macacoview"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+
+# Directorio donde vivía la config antes del renombre. Solo lo lee la
+# migración: nunca se escribe acá ni se borra nada de acá.
+LEGACY_CONFIG_DIR = Path.home() / ".config" / "pc-ai-monitor"
+LEGACY_CONFIG_PATH = LEGACY_CONFIG_DIR / "config.toml"
 
 TEMPLATE = """\
 # PC-AI Monitor — configuración
@@ -80,6 +86,37 @@ router_indicators = false
 
 def _expand(value: str) -> Path:
     return Path(value).expanduser()
+
+
+def migrate_legacy_config(new_path: Path, legacy_path: Path) -> bool:
+    """Copy the legacy config to the new location when it is needed.
+
+    A config that already exists at the new path is never overwritten, and
+    with no legacy file there is nothing to do (no directory is invented).
+    When the copy happens it is a **copy, never a move or a delete**: the
+    original stays exactly where it was, and the user can remove it by hand
+    once they trust the migration. Only the config file itself migrates;
+    other files that live next to it (backups and such) are not ours to
+    touch. Returns True when a copy was made.
+    """
+    if new_path.exists() or not legacy_path.is_file():
+        return False
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(legacy_path, new_path)
+    except OSError:
+        return False
+    return True
+
+
+def _migrate_default(path: Path) -> None:
+    """Runs the legacy migration once, for the app's own config path.
+
+    Callers that pass an explicit path (the tests) opt out: only the default
+    location migrates.
+    """
+    if path == CONFIG_PATH:
+        migrate_legacy_config(CONFIG_PATH, LEGACY_CONFIG_PATH)
 
 
 def _as_float(raw: Any, fallback: float) -> float:
@@ -225,6 +262,7 @@ def load(path: Path = CONFIG_PATH) -> Config:
     A malformed file is not fatal: the app must still open and show which sources
     are unavailable.
     """
+    _migrate_default(path)
     try:
         raw = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError):
@@ -342,7 +380,12 @@ router_indicators = {str(config.bar_router_indicators).lower()}
 
 
 def write_template(path: Path = CONFIG_PATH) -> bool:
-    """Create a commented config when none exists yet. Never touches an existing one."""
+    """Create a commented config when none exists yet. Never touches an existing one.
+
+    The legacy migration runs first: if an old config exists it is copied
+    here instead of the template, so the user's settings survive the rename.
+    """
+    _migrate_default(path)
     if path.exists():
         return False
     try:
