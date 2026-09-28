@@ -116,7 +116,7 @@ function GroupPanel({ groups }: { groups: Record<string, Group> }) {
       <div className="group-panel">
         <p className="model-empty">Ningún grupo se monitorea en esta máquina.</p>
         <p className="scale-note">
-          Los grupos se configuran en ~/.config/pc-ai-monitor/config.toml: cada
+          Los grupos se configuran en ~/.config/macacoview/config.toml: cada
           bloque [[watch]] elige que monitorear.
         </p>
       </div>

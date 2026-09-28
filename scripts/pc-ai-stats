@@ -163,7 +163,7 @@ WATCH_DEFAULTS = (
     {"name": "other", "match": (), "icon": "\U0001f4e6", "visible": True},
 )
 
-WATCH_CONFIG = Path.home() / ".config/pc-ai-monitor/config.toml"
+WATCH_CONFIG = Path.home() / ".config/macacoview/config.toml"
 
 
 def _load_watch():

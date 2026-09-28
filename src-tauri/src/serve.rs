@@ -553,7 +553,7 @@ mod tests {
                 .expect("el reloj del sistema deberia avanzar")
                 .as_nanos();
             let dir = std::env::temp_dir().join(format!("pc-ai-monitor-serve-{tag}-{unique}"));
-            let config_dir = dir.join("pc-ai-monitor");
+            let config_dir = dir.join("macacoview");
             std::fs::create_dir_all(&config_dir)
                 .expect("deberia poder crear el directorio temporal");
             std::env::set_var("XDG_CONFIG_HOME", &dir);
@@ -561,7 +561,7 @@ mod tests {
         }
 
         fn config_file(&self) -> PathBuf {
-            self.dir.join("pc-ai-monitor").join("config.toml")
+            self.dir.join("macacoview").join("config.toml")
         }
     }
 
