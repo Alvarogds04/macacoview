@@ -1157,8 +1157,17 @@ mod transcript_tests {
     #[cfg(unix)]
     fn write_executable_script(path: &Path, body: &str) {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::write(path, body).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Publish atomically: write a sibling, set its mode, then rename it into
+        // place. The kernel refuses to exec a file that anyone holds open for
+        // writing (ETXTBSY, os error 26), and these tests run as parallel threads
+        // of one process, so a fork can carry a half-written descriptor into an
+        // unrelated exec call. After a rename, the path that gets exec'd only ever
+        // names a closed, complete inode -- the open-for-write descriptor lives on
+        // the sibling, which nothing executes.
+        let staging = path.with_extension("staging");
+        std::fs::write(&staging, body).unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&staging, path).unwrap();
     }
 
     #[test]
