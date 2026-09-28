@@ -809,13 +809,17 @@ mod transcript_tests {
     // against them is the `#[ignore]`d test at the bottom of this module.
 
     fn temp_dir(tag: &str) -> PathBuf {
+        // pid plus nanoseconds is not enough: two tests running in parallel in the
+        // same process can land in the same instant, get handed the same directory,
+        // and then the remove_dir_all below deletes the other test's files mid-run.
+        // Seen for real: the suite failed 2 runs in 3 with the default thread count
+        // and passed every time with --test-threads=1.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "macacoview-tokens-{tag}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
