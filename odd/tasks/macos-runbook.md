@@ -36,9 +36,8 @@ Opciones:
   contraseña.
 - `--api URL`: sondea esa URL para `/api/state` en vez de autodetectar el
   puerto en escucha del daemon.
-- Una ruta al final: el binario compilado del proyecto (`pc-ai-monitor`). Sin
-  ruta busca en `src-tauri/target/release|debug`, `~/Downloads` y
-  `/Applications/pc-ai-monitor.app`.
+- Una ruta al final: el binario del daemon (`macacoview-serve`). Sin ruta busca
+  en el directorio actual, `~/Downloads` y `src-tauri/target/release|debug`.
 
 Al final imprime un bloque `=== INFORME ===` y otro `=== LO QUE TODAVÍA NO
 SABEMOS ===`: **copiá ambos de vuelta** al repo (issue, PR o este runbook).
@@ -118,11 +117,11 @@ xattr -d com.apple.quarantine /ruta/al/binario
 Si el daemon está corriendo, el script sondea `/api/state` en el puerto que
 tenga en escucha (o en `--api URL`) y reporta si responde.
 
-El daemon se compila y se arranca así (el binario es `pc-ai-monitor-serve`):
+El daemon se compila y se arranca así (el binario es `macacoview-serve`):
 
 ```sh
-cd <repo>/src-tauri && cargo build --release --bin pc-ai-monitor-serve
-PC_AI_PORT=8787 ./target/release/pc-ai-monitor-serve
+cd <repo>/src-tauri && cargo build --release --bin macacoview-serve
+PC_AI_PORT=8787 ./target/release/macacoview-serve
 ```
 
 El puerto por defecto es **8787** y escucha **sólo en `127.0.0.1`**: no queda

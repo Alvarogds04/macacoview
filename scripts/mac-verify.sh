@@ -313,11 +313,11 @@ if [ -n "$bin_arg" ]; then
     fi
 else
     for c in \
-        ./src-tauri/target/release/pc-ai-monitor \
-        ./src-tauri/target/debug/pc-ai-monitor \
-        ./target/release/pc-ai-monitor \
-        "$HOME/Downloads/pc-ai-monitor" \
-        /Applications/pc-ai-monitor.app/Contents/MacOS/pc-ai-monitor
+        ./macacoview-serve \
+        "$HOME/Downloads/macacoview-serve" \
+        ./src-tauri/target/release/macacoview-serve \
+        ./src-tauri/target/debug/macacoview-serve \
+        ./target/release/macacoview-serve
     do
         if [ -f "$c" ]; then
             bin=$c
@@ -387,7 +387,7 @@ if [ -n "$bin" ]; then
         emit "El daemon no está corriendo; /api/state no se puede sondear (levantalo y re-corre el script)."
     fi
 else
-    emit "No se encontró el binario 'pc-ai-monitor' en las rutas habituales."
+    emit "No se encontró el binario 'macacoview-serve' en las rutas habituales."
     emit "Pasalo explícito: $PROG /ruta/al/binario"
     note "Binario del proyecto no encontrado: cuarentena y /api/state sin verificar."
 fi

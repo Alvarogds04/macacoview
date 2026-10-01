@@ -207,7 +207,7 @@ export interface Tokens {
 // `match` even though the Rust side calls the field `patterns`.
 // ---------------------------------------------------------------------------
 
-/// One `[[watch]]` entry of `~/.config/pc-ai-monitor/config.toml`: a process
+/// One `[[watch]]` entry of `~/.config/macacoview/config.toml`: a process
 /// group the collector builds. `match` holds regular expressions searched
 /// against the process name (comm) and its full command line; an entry
 /// without patterns is one of the collector's fixed rules (`system` catches
