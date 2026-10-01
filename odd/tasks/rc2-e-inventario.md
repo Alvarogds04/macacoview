@@ -79,14 +79,56 @@ Decisiones tomadas por el usuario:
 - Alcance: solo el daemon y la UI web (el lado Rust). La app GTK de Linux queda
   fuera.
 
-- [ ] `Stats.model_inventory` con `#[serde(default)]` (compatibilidad hacia
-      atras con el script Python de Linux y con los fixtures).
-- [ ] Colector en el lado Rust, en el seam de `collector.rs` (despues de
-      `collect_stats`), para que Linux y macOS compartan una sola
-      implementacion y los tests corran en Linux.
-- [ ] Directorios de disco por configuracion (`model_dirs`), no adivinados.
-- [ ] Cache con TTL: el barrido de disco no puede correr en cada tick.
-- [ ] UI: tabla de instalados, vacia cuando no hay nada (sin relleno).
+- [x] `Stats.model_inventory` con `#[serde(default)]`.
+- [x] Colector en el lado Rust, en el seam de `collector.rs` (despues de
+      `collect_stats`), para que Linux y macOS compartan una sola implementacion
+      y los tests corran en Linux.
+- [x] Directorios de disco por configuracion (`model_dirs`), no adivinados.
+- [x] Cache con TTL de 60 s: `run_tick` llama `collect_stats()` **cada segundo**,
+      asi que sin cache seria un GET HTTP y un barrido de disco por segundo.
+- [x] UI: tabla de instalados, vacia cuando no hay nada (sin relleno).
+
+Estado: **implementado en el working tree, sin commitear**. Archivos: nuevo
+`src-tauri/src/inventory.rs` (687 lineas, 15 tests) mas `lib.rs`, `stats.rs`,
+`collector.rs`, `config.rs`, `macos.rs`, `src/types.ts`,
+`src/components/Recursos.tsx` y `src/App.css`.
+
+Desvio del brief, encontrado por el writer y aceptado: el campo no viaja solo en
+`Stats` sino tambien en `FullSnapshot` + `apply()` de `collector.rs`. Sin eso el
+literal manual habria descartado `model_inventory` antes de serializar, y la UI
+nunca lo habria visto. Fue un hueco del brief, no del writer.
+
+Revision del padre (yo), sobre el codigo y no sobre el reporte:
+- `cargo test --offline`: **160 passed, 0 failed, 1 ignored**; `--lib` **161**
+  (piso de CI 146).
+- `cargo check --offline --all-targets`: exit 0.
+- Clippy: el writer dejo 3 avisos en `inventory.rs` (tipo complejo en la cache,
+  dos `&[x.clone()]` en tests). **Corregidos por mi** (alias `CachedInventory` y
+  `std::slice::from_ref`); ahora `cargo clippy --all-targets` no reporta ninguna
+  linea de `inventory.rs` (quedan 3 preexistentes en `tokens.rs` y `macos.rs`).
+- `npm run build`: OK.
+
+Dos hallazgos que valen mas que el codigo nuevo:
+
+1. **La doc mentia sobre el presupuesto del barrido.** Dice "500 files in
+   total", pero solo los `*.gguf` consumen el presupuesto: un directorio lleno de
+   archivos ajenos se recorre entero. Corregi la doc para que diga lo que hace
+   (el tope acota la lista, no el tiempo; lo que acota el tiempo es la
+   profundidad y el TTL).
+2. **`tokens.rs` tiene un test flaky preexistente**, y no es de este trabajo.
+   `a_script_that_runs_and_fails_is_still_an_error` falla con `Text file busy
+   (os error 26)` en `src/tokens.rs:1248`. `tokens.rs` esta **byte-identico a
+   HEAD**. Medido aca: **3/25 corridas** de la suite completa fallan, y
+   **2/25** fallan tambien salteando `--skip inventory::`, o sea que mis tests no
+   lo causan (con solo los tests de `tokens` filtrados, 60 corridas, 0 fallas:
+   necesita el paralelismo de la suite entera).
+   Mecanismo: `write_executable_script` escribe un hermano y lo renombra
+   creyendo que asi esquiva ETXTBSY, pero **el rename no cambia el inodo**. Si
+   otra hebra hace `fork()` justo mientras el `fs::write` tiene el descriptor
+   abierto, el hijo hereda ese descriptor de escritura y el inodo queda "abierto
+   para escritura" mientras el hijo viva; el `exec` del padre sobre ese mismo
+   inodo falla con ETXTBSY. El comentario del helper afirma lo contrario de lo
+   que hace el kernel.
 
 Primer intento fallido, para que no se repita: se delego el trabajo a un writer
 en un worktree limpio y **murio a los 20 minutos y 102 turnos sin escribir un

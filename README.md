@@ -41,7 +41,7 @@ curl -fsSL \
   -o install.sh
 
 bash install.sh --from-release          # ultima release
-# bash install.sh --from-release v0.2.0-rc2 # o una version puntual
+# bash install.sh --from-release <tag>  # o una version puntual
 ```
 
 El modo `--from-release` detecta la plataforma, baja el artefacto del tag y su
@@ -148,14 +148,41 @@ vacio**, y eso es correcto, no un error.
 - **Tokens**: aparecen los de **Claude Code** y **Codex** si esas herramientas
   estan instaladas y se usaron (el daemon lee sus transcripts locales). Cualquier
   otro proveedor no aparece si no lo configuraste.
-- **Modelos locales**: la lista queda **vacia** si no hay un servidor de
-  modelos corriendo (por ejemplo Ollama). Si no hay nada corriendo, no hay nada
-  que detectar.
+- **Modelos locales**: se muestran en dos listas separadas. Los **cargados** son
+  los que un servidor tiene en memoria ahora mismo: si no hay ningun servidor de
+  modelos levantado, esa lista queda vacia. Los **instalados** aparecen aparte,
+  aunque no este corriendo nada, y salen del catalogo de Ollama y de los
+  directorios que declares en `model_dirs` (ver abajo).
 - **Grupos de procesos**: quedan vacios hasta que configures que queres
   monitorear.
 
 Lo que si aparece sin configurar nada: memoria, CPU, GPU y puertos de la
 maquina.
+
+### Que modelos instalados aparecen (opcional)
+
+No hace falta configurar nada para ver los modelos que Ollama tiene bajados: el
+daemon le pregunta a su API local en `127.0.0.1:11434`, asi que tampoco necesita
+que la CLI `ollama` este en el PATH.
+
+Para que el tablero liste ademas archivos `.gguf` que tengas en disco, agrega una
+linea al principio de `~/.config/macacoview/config.toml`:
+
+```toml
+model_dirs = ["~/models", "/Volumes/Modelos"]
+```
+
+Las reglas, para que no las adivines: `~/` se expande a tu home, cada entrada
+tiene que quedar **absoluta**, los directorios que no existan se ignoran (no es un
+error) y no hay ninguno por defecto. Se buscan `.gguf` hasta cuatro niveles de
+subdirectorio y hasta 500 archivos, y la lista se recalcula como mucho cada 60
+segundos.
+
+Aviso honesto sobre esos datos: para un `.gguf` de disco, los **parametros** y la
+**cuantizacion** se leen del **nombre del archivo**, no de adentro
+(`qwen2.5-7b-Q4_K_M.gguf` da `7b` y `Q4_K_M`, con la mayuscula tal como este
+escrita). Si el archivo esta mal nombrado, el dato va a estar mal: es una pista,
+no una medicion. Para los de Ollama los informa Ollama en serio.
 
 ## Releases
 

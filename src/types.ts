@@ -15,6 +15,9 @@ export interface FullSnapshot {
   gpu: GpuMemory | null;
   ports: PortRow[];
   tokens: Tokens | null;
+  /// Models installed on the machine (Ollama's catalog plus configured
+  /// `model_dirs`), as opposed to the loaded `models` above.
+  model_inventory: InstalledModel[];
 }
 
 /// GPU memory at machine level, read from `ioreg` on macOS. `null` when it
@@ -51,6 +54,19 @@ export interface Group {
   rss_gib: number;
   cpu: number;
   pids: number[];
+}
+
+/// One model installed on this machine (mirrors `InstalledModel` in
+/// src-tauri/src/inventory.rs): present in Ollama's catalog or as a GGUF file
+/// on disk, which is not the same as currently loaded/running. For disk
+/// models, `parameters` and `quantization` are hints parsed from the file
+/// name — a badly named file yields a wrong hint, never a measurement.
+export interface InstalledModel {
+  name: string;
+  source: "ollama" | "disk" | string;
+  size_bytes: number | null;
+  parameters: string | null;
+  quantization: string | null;
 }
 
 export interface Process {

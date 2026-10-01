@@ -369,6 +369,30 @@
   color: #667a8f;
 }
 
+/* Installed models — on disk or in Ollama's catalog, not loaded */
+
+.installed-models {
+  margin-top: 0.9rem;
+}
+
+.installed-models .sub-title {
+  margin-top: 0;
+}
+
+.installed-table td {
+  padding: 0.3rem 0.75rem;
+}
+
+.installed-name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  color: #c8d4e0;
+}
+
 /* ── Loading state ────────────────────────────────────────────────────────── */
 
 .loading-state {

@@ -12,6 +12,7 @@ mod ring_buffer;
 mod collector;
 mod commands;
 mod tokens;
+mod inventory;
 
 /// Standalone HTTP daemon that serves `/api/state` (and, with a compiled
 /// frontend, the dashboard assets) over `127.0.0.1`. See [`serve`].

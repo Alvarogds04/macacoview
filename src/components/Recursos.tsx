@@ -1,4 +1,11 @@
-import type { FullSnapshot, Group, HistorySample, Memory, Model } from "../types";
+import type {
+  FullSnapshot,
+  Group,
+  HistorySample,
+  InstalledModel,
+  Memory,
+  Model,
+} from "../types";
 import { GROUP_KEYS, GROUP_LABELS } from "../types";
 import { Bar, Meter, pctOf } from "./Meter";
 import { ErrorIndicator, LoadingState, Section } from "./Section";
@@ -43,6 +50,57 @@ function fmtTwoDecimals(v: number): string {
 
 function safe(v: number): number {
   return Number.isFinite(v) ? v : 0;
+}
+
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+
+/// Human size for one installed model. `null` (Ollama did not report it, or
+/// the file could not be stat'ed) is "—", never a fabricated `0`.
+function fmtBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes >= GIB) return `${(bytes / GIB).toFixed(1)} GiB`;
+  return `${(bytes / MIB).toFixed(1)} MiB`;
+}
+
+// ---------------------------------------------------------------------------
+// Installed models — present on the machine, not necessarily loaded
+// ---------------------------------------------------------------------------
+
+function InstalledModelsPanel({ models }: { models: InstalledModel[] }) {
+  return (
+    <div className="installed-models">
+      <p className="sub-title">Instalados</p>
+      <p className="scale-note">
+        Modelos presentes en la máquina que no están corriendo ahora mismo:
+        aparecen aquí aunque ningún servidor los tenga cargados.
+      </p>
+      <table className="table installed-table">
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Tamaño</th>
+            <th>Parámetros</th>
+            <th>Cuantización</th>
+            <th>Origen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {models.map((m) => (
+            <tr key={`${m.source}/${m.name}`}>
+              <td className="installed-name" title={m.name}>
+                {m.name}
+              </td>
+              <td className="col-num">{fmtBytes(m.size_bytes)}</td>
+              <td className="col-num">{m.parameters ?? "—"}</td>
+              <td className="col-num">{m.quantization ?? "—"}</td>
+              <td>{m.source === "ollama" ? "Ollama" : "Disco"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +510,7 @@ export function Recursos({
     );
   }
 
-  const { memory, models, groups } = snapshot;
+  const { memory, models, groups, model_inventory } = snapshot;
 
   // Shared scales so meters are comparable inside their own metric.
   // "Not measurable" models (gtt_gib === null) are excluded from the scale:
@@ -506,6 +564,11 @@ export function Recursos({
             </div>
           </>
         )}
+
+        {/* Installed-but-not-loaded models. Rendered only when the list is
+            non-empty: no empty table, no placeholder rows — absent and
+            measured-zero are different things in this codebase. */}
+        {model_inventory.length > 0 && <InstalledModelsPanel models={model_inventory} />}
       </Section>
 
       {/* Groups */}

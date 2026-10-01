@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::ports::{parse_ss_output, PortRow};
 use crate::ring_buffer::{sample_from_stats, HistorySample, RingBuffer, RING_BUFFER_CAPACITY};
+use crate::inventory::InstalledModel;
 use crate::stats::{Groups, GpuMemory, Memory, Model, Process, Stats};
 use crate::tokens::{collect_tokens, Tokens};
 
@@ -32,6 +33,9 @@ pub struct FullSnapshot {
     /// Machine-level GPU memory. `None` where it cannot be measured, which is
     /// not the same as zero: the Linux collector does not report it at all.
     pub gpu: Option<GpuMemory>,
+    /// Installed (not necessarily loaded) models, shared by both platform
+    /// collectors via `crate::inventory`.
+    pub model_inventory: Vec<InstalledModel>,
 }
 
 /// The payload returned by the `get_state` command.
@@ -75,6 +79,7 @@ impl CollectorState {
             ports,
             tokens: self.tokens.clone(),
             gpu: stats.gpu,
+            model_inventory: stats.model_inventory,
         });
     }
 
@@ -102,8 +107,11 @@ impl CollectorState {
 #[cfg(target_os = "macos")]
 fn collect_stats() -> Result<Stats, String> {
     // /proc and `ss` do not exist on Darwin, so the Python collector cannot run
-    // here. Read the same numbers from sysctl/vm_stat/ps instead.
-    Ok(crate::macos::collect_stats())
+    // here. Read the same numbers from sysctl/vm_stat/ps instead. The model
+    // inventory is platform-independent and cached, so both platforms share it.
+    let mut stats = crate::macos::collect_stats();
+    stats.model_inventory = crate::inventory::collect();
+    Ok(stats)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -123,7 +131,12 @@ fn collect_stats() -> Result<Stats, String> {
     let json = String::from_utf8(output.stdout)
         .map_err(|e| format!("macacoview-stats output not UTF-8: {e}"))?;
 
-    serde_json::from_str(&json).map_err(|e| format!("macacoview-stats JSON parse error: {e}"))
+    let mut stats: Stats = serde_json::from_str(&json)
+        .map_err(|e| format!("macacoview-stats JSON parse error: {e}"))?;
+    // The inventory is platform-independent and cached (60 s TTL), so it is
+    // filled here, outside both platform collectors.
+    stats.model_inventory = crate::inventory::collect();
+    Ok(stats)
 }
 
 /// Read the privileged listener table. The helper is invoked with an argv

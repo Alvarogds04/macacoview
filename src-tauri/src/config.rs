@@ -161,6 +161,71 @@ pub fn load_watch() -> Vec<WatchEntry> {
     }
 }
 
+/// Directories to scan for installed GGUF models, from the top-level
+/// `model_dirs` key of the shared config file:
+///
+/// ```toml
+/// model_dirs = ["~/models", "/Volumes/big/models"]
+/// ```
+///
+/// The rules mirror the watch parsing: a missing key or unparseable TOML
+/// returns an empty list, never a panic. A leading `~/` expands to `$HOME`
+/// (an entry that needs `$HOME` and has none is dropped, never guessed);
+/// entries that are relative after expansion are ignored, as are directories
+/// that do not exist. The default is empty — no directory is ever invented.
+pub fn parse_model_dirs(text: &str) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME");
+    parse_model_dirs_in(text, home.as_deref())
+}
+
+/// [`parse_model_dirs`] with `$HOME` injected, so the `~/` expansion is
+/// testable without touching the real environment.
+pub(crate) fn parse_model_dirs_in(text: &str, home: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let Ok(table) = toml::from_str::<toml::Table>(text) else {
+        return Vec::new();
+    };
+    let Some(list) = table
+        .get("model_dirs")
+        .and_then(toml::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(toml::Value::as_str)
+        .filter_map(|raw| resolve_model_dir(raw, home))
+        .collect()
+}
+
+/// One `model_dirs` entry into an absolute path, or `None` when the entry is
+/// unusable: relative after expansion, or pointing at a directory that does
+/// not exist. Only a leading `~/` is expanded, exactly like the readers of
+/// the other keys; `~` alone or `~user/` are left untouched (and thus land in
+/// the relative-entry filter, since they are never absolute paths here).
+fn resolve_model_dir(raw: &str, home: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    let expanded = match trimmed.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(home?).join(rest),
+        None => PathBuf::from(trimmed),
+    };
+    if !expanded.is_absolute() || !expanded.is_dir() {
+        return None;
+    }
+    Some(expanded)
+}
+
+/// `model_dirs` from the shared config file. A missing, unreadable or broken
+/// file means an empty list: no directories configured means nothing to scan
+/// for installed GGUF files, and that must never be a fatal condition.
+pub fn load_model_dirs() -> Vec<PathBuf> {
+    let Some(path) = config_path() else {
+        return Vec::new();
+    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_model_dirs(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Parses `[[watch]]` entries out of a `config.toml` document.
 ///
 /// A section that is absent, not a list, or full of unusable entries means

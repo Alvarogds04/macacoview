@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::inventory::InstalledModel;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memory {
     pub total_gib: f64,
@@ -62,6 +64,12 @@ pub struct Stats {
     pub processes: Vec<Process>,
     #[serde(default)]
     pub gpu: Option<GpuMemory>,
+    /// Models installed on the machine (Ollama's catalog plus configured
+    /// `model_dirs`), as opposed to the loaded `models` above. Filled by
+    /// `collector.rs` from `crate::inventory`, never by a platform collector;
+    /// the Python collector's JSON never carries it, hence the default.
+    #[serde(default)]
+    pub model_inventory: Vec<InstalledModel>,
 }
 
 // Groups is a map of named groups

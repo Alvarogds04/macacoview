@@ -908,6 +908,9 @@ pub fn collect_stats() -> Stats {
         gpu: collect_gpu(),
         groups: group_by(&rows, &crate::config::load_watch()),
         processes: collect_processes(),
+        // The platform collector cannot know the installed-model inventory
+        // (it is platform-independent and cached): `collector.rs` fills it.
+        model_inventory: Vec::new(),
     }
 }
 
