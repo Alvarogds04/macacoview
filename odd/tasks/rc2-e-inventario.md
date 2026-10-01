@@ -53,7 +53,14 @@ tag, y el README no manda a bajar ni a compilar nada que no exista.
       hablaba de repo privado deja de mentir.
 - [x] Un tag con sufijo de pre-release se publica ya marcado como pre-release:
       la rc1 salio como release plena y hubo que corregirla a mano despues.
-- [ ] Publicar el tag y verificar los assets con la salida real del run.
+- [x] Publicado (`v0.2.0-rc2`, pre-release automatica) y verificado contra los
+      assets reales, no contra el color del workflow: bajados de la release, los
+      dos SHA256 dan OK, cada tar trae **un solo** archivo `macacoview-serve`, y
+      `file` confirma `Mach-O 64-bit arm64` (2.192.688 bytes) y
+      `Mach-O 64-bit x86_64` (2.454.448 bytes), los dos con permiso de ejecucion.
+      La pata Intel existe de verdad por primera vez: el job
+      `package-macos (x86_64-apple-darwin, macos-15-intel)` termino **success**,
+      no cancelado tras 24 h.
 
 ## Linea 2: inventario de modelos instalados
 
@@ -105,11 +112,14 @@ hacer desde aca: necesita a alguien con una Mac.
 - Python, `python3 -m unittest discover -s tests` desde `gui/`: **42 tests OK**.
 - API de GitHub, medido: `releases/latest` -> 404, `releases?per_page=10` -> 200,
   y la resolucion nueva devuelve `v0.2.0-rc1`.
+- Run del release `36856695274`, `WATCH_EXIT=0`: los tres jobs en **success**
+  (`package`, `package-macos (aarch64-apple-darwin, macos-14)`,
+  `package-macos (x86_64-apple-darwin, macos-15-intel)`), `prerelease=true`, y
+  seis assets, todos con el nombre nuevo.
 - Los 27 bloques `run:` de `release.yml` y `ci.yml`, renderizados desde el YAML
   y pasados por `bash -n`: ninguno falla. La logica de `--prerelease` probada
   con `set -euo pipefail` en bash 5.3: `v0.2.0-rc2` -> `[--prerelease]`,
   `v0.3.0` -> `[]`.
 
-Lo que todavia no esta probado: el run del release con la pata Intel en
-`macos-15-intel`, porque eso solo se sabe despues de empujar el tag; y la Mac de
-otra persona, que necesita otra persona.
+Lo que todavia no esta probado: la Mac de otra persona, que necesita otra
+persona.
