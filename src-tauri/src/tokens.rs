@@ -1154,20 +1154,23 @@ mod transcript_tests {
 
     // -- integration with the collector document ------------------------------
 
+    /// A committed fixture, located the same way `ports.rs` locates its own.
+    ///
+    /// The scripts the token tests exec live in git, already executable, and no
+    /// test writes them. Writing an executable at run time and exec'ing it
+    /// immediately is what made this suite flaky: `fs::write` holds the inode
+    /// open for writing, and a `fork()` in another test thread during that
+    /// window hands the child an inherited open-for-write descriptor, which
+    /// keeps the inode write-open for as long as the child lives. A rename does
+    /// not help -- it does not change the inode -- so an exec of that same file
+    /// fails with ETXTBSY (os error 26), measured at 2 to 3 full-suite runs in
+    /// 25. A file that is never written cannot lose that race.
     #[cfg(unix)]
-    fn write_executable_script(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        // Publish atomically: write a sibling, set its mode, then rename it into
-        // place. The kernel refuses to exec a file that anyone holds open for
-        // writing (ETXTBSY, os error 26), and these tests run as parallel threads
-        // of one process, so a fork can carry a half-written descriptor into an
-        // unrelated exec call. After a rename, the path that gets exec'd only ever
-        // names a closed, complete inode -- the open-for-write descriptor lives on
-        // the sibling, which nothing executes.
-        let staging = path.with_extension("staging");
-        std::fs::write(&staging, body).unwrap();
-        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::rename(&staging, path).unwrap();
+    fn fixture_path(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
     }
 
     #[test]
@@ -1208,13 +1211,7 @@ mod transcript_tests {
         // script's own sources pass through untouched.
         let dir = temp_dir("collect-with-script");
         let home = dir.join("home");
-        let script = dir.join("fake-macacoview-tokens");
-        write_executable_script(
-            &script,
-            r#"#!/bin/sh
-echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi":{"status":"ok","total":9},"codex_cli":{"status":"ok","total":1},"claude_code":{"status":"ok","total":2},"codex":{"status":"ok","plan":"prolite"}}'
-"#,
-        );
+        let script = fixture_path("tokens-script-ok.sh");
         write_file(
             &home.join(".codex/sessions/2026/09/01/rollout-a.jsonl"),
             format!("{}\n{}\n", codex_turn_context("gpt-a"), codex_event(100, 100)).as_bytes(),
@@ -1241,8 +1238,7 @@ echo '{"remote":{"status":"ok","total":77},"local":{"status":"ok","total":3},"pi
         // Only a missing binary degrades the document; a script that runs and
         // exits non-zero keeps the caller's keep-previous-value behavior.
         let dir = temp_dir("collect-failing");
-        let script = dir.join("failing-macacoview-tokens");
-        write_executable_script(&script, "#!/bin/sh\necho boom >&2\nexit 3\n");
+        let script = fixture_path("tokens-script-failing.sh");
 
         let error = collect_tokens_from(&script, &dir.join("home")).unwrap_err();
         assert!(error.contains("exited with"), "unexpected error: {error}");
