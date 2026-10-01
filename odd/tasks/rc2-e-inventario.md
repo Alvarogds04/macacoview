@@ -88,10 +88,10 @@ Decisiones tomadas por el usuario:
       asi que sin cache seria un GET HTTP y un barrido de disco por segundo.
 - [x] UI: tabla de instalados, vacia cuando no hay nada (sin relleno).
 
-Estado: **implementado en el working tree, sin commitear**. Archivos: nuevo
-`src-tauri/src/inventory.rs` (687 lineas, 15 tests) mas `lib.rs`, `stats.rs`,
-`collector.rs`, `config.rs`, `macos.rs`, `src/types.ts`,
-`src/components/Recursos.tsx` y `src/App.css`.
+Estado: **implementado, commiteado y publicado en `v0.2.0-rc3`** (commit
+`1a9015f`). Archivos: nuevo `src-tauri/src/inventory.rs` (694 lineas, 15 tests)
+mas `lib.rs`, `stats.rs`, `collector.rs`, `config.rs`, `macos.rs`,
+`src/types.ts`, `src/components/Recursos.tsx`, `src/App.css` y `README.md`.
 
 Desvio del brief, encontrado por el writer y aceptado: el campo no viaja solo en
 `Stats` sino tambien en `FullSnapshot` + `apply()` de `collector.rs`. Sin eso el
@@ -173,6 +173,17 @@ hacer desde aca: necesita a alguien con una Mac.
   y pasados por `bash -n`: ninguno falla. La logica de `--prerelease` probada
   con `set -euo pipefail` en bash 5.3: `v0.2.0-rc2` -> `[--prerelease]`,
   `v0.3.0` -> `[]`.
+- rc3 (run `36867493679`, `WATCH_EXIT=0`): los tres jobs en **success**, otra vez
+  con la pata Intel en `macos-15-intel`; `prerelease=true`; seis assets. Los dos
+  binarios de Mac bajados y verificados: SHA256 OK, un solo `macacoview-serve`,
+  `Mach-O 64-bit arm64` de 2.225.872 bytes y `Mach-O 64-bit x86_64` de 2.491.472
+  bytes. Crecieron respecto de rc2 (2.192.688 y 2.454.448): es lo que se espera
+  si el inventario va adentro del binario.
+- Flaky de `tokens.rs` (`fae8281`): **3/25** corridas de la suite completa
+  fallaban antes y **2/25** salteando los tests del inventario, o sea que ya
+  estaba en `main`; despues del arreglo, **0/25**. Los dos scripts que los tests
+  ejecutan son ahora fixtures versionados con modo `100755`, asi que en tiempo
+  de test no se escribe ningun ejecutable y no queda ventana para ETXTBSY.
 
 Lo que todavia no esta probado: la Mac de otra persona, que necesita otra
 persona.

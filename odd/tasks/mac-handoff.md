@@ -4,15 +4,17 @@ Estado: **pendiente de ejecutar**. Es lo unico del cierre de MacacoView que no s
 puede verificar desde esta maquina; necesita a alguien con una Mac (cualquiera:
 la tuya, ya se probo; la de otra persona, no).
 
-Version a probar: **v0.2.0-rc2**, pre-release.
+Version a probar: **v0.2.0-rc3**, pre-release.
 Binarios verificados antes de escribir esto: descargados de la release, SHA256
 correcto, cada tar trae un solo archivo `macacoview-serve`,
-`Mach-O 64-bit arm64` (2.192.688 bytes) y `Mach-O 64-bit x86_64` (2.454.448
-bytes), los dos con permiso de ejecucion.
+`Mach-O 64-bit arm64` (2.225.872 bytes) y `Mach-O 64-bit x86_64` (2.491.472
+bytes), los dos con permiso de ejecucion. Son mas grandes que los de rc2
+(2.192.688 y 2.454.448): adentro va el inventario de modelos instalados, que es
+justamente lo que esta version agrega.
 
 Repositorio: `https://github.com/Alvarogds04/macacoview` (publico: no hace falta
 ninguna cuenta ni token).
-Release: `https://github.com/Alvarogds04/macacoview/releases/tag/v0.2.0-rc2`
+Release: `https://github.com/Alvarogds04/macacoview/releases/tag/v0.2.0-rc3`
 
 ## Texto para pasarle a la persona
 
@@ -110,8 +112,10 @@ cual. Si te pregunta por la contrasena, decile que no: el script no la necesita
 
 - El tablero vacio o casi vacio. En una Mac recien instalada no hay nada que
   medir de modelos ni de tokens, y eso es correcto, no un fallo.
-- Que no aparezca ningun modelo local: aparece solo si hay un servidor de
-  modelos corriendo (por ejemplo Ollama).
+- Que no aparezca ningun modelo **cargado**: esa lista muestra solo los que
+  estan corriendo en este momento. Los que Ollama tenga bajados aparecen aparte,
+  en **Instalados**, aunque no este corriendo nada; y si tenes archivos `.gguf`
+  sueltos en disco, se declaran con `model_dirs` (esta en el README).
 - Que la memoria de GPU diga "—" o "no medible". En Apple Silicon la memoria es
   compartida y macOS no publica cuanto usa cada proceso: mostrar 0 seria mentir.
 - Que la lista de token diga que no hay datos si no usas Claude Code ni Codex.
