@@ -88,6 +88,14 @@ Decisiones tomadas por el usuario:
 - [ ] Cache con TTL: el barrido de disco no puede correr en cada tick.
 - [ ] UI: tabla de instalados, vacia cuando no hay nada (sin relleno).
 
+Primer intento fallido, para que no se repita: se delego el trabajo a un writer
+en un worktree limpio y **murio a los 20 minutos y 102 turnos sin escribir un
+solo archivo**. La causa no fue el diseno sino el interceptor de caveman: toda
+salida de herramienta por encima de ~600 bytes vuelve como un handle `ccr://`,
+asique el writer intentaba leer `config.rs` en tajadas de 600 bytes. El arbol
+quedo limpio. La extension se desactivo (movida a `~/.pi/disabled/`); antes de
+relanzar el writer, verificar que el interceptor ya no actua.
+
 ## Linea 3: probar el binario en una Mac ajena
 
 Es lo unico que sigue sin verificar en la maquina de otra persona, y no se puede
@@ -96,8 +104,11 @@ hacer desde aca: necesita a alguien con una Mac.
 - [x] `mac-verify.sh` y el runbook nombran el binario como es hoy
       (`macacoview-serve`), y el script busca en el directorio actual y en
       `~/Downloads` antes que en los `target/` de desarrollo.
-- [ ] Handoff con los pasos exactos (bajar, verificar sha256, quitar cuarentena,
-      arrancar, correr el script, que devolver).
+- [x] Handoff con los pasos exactos en `odd/tasks/mac-handoff.md`: que Mac es,
+      que asset bajar, `shasum -a 256 -c`, cuarentena, arrancar el daemon en el
+      puerto 8787, correr el script y devolver el bloque `=== INFORME ===`. Con
+      la lista de "esto NO es un bug" para que la persona no reporte el tablero
+      vacio como un fallo. Falta que una persona lo corra.
 
 ## Evidencia recogida
 
