@@ -15,8 +15,8 @@ name: release
 # and attached to the same release. See the package-macos job for why the
 # build order there is load-bearing.
 #
-# The repo is private, so machines download the artifact with a read-only GitHub
-# token: gui/install.sh --from-release does that, verifying the SHA256 before it
+# The repo is public, so machines download the artifact with no credential at
+# all: gui/install.sh --from-release does that, verifying the SHA256 before it
 # installs anything. No npm/node step is involved anywhere in this path.
 
 on:
@@ -69,14 +69,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A tag with a semver prerelease suffix (`v0.2.0-rc2`) must be created
+          # as a GitHub pre-release, not as a full release: rc1 went out as a
+          # full release and had to be corrected by hand afterwards. It has to
+          # be decided right here, because the release exists for only a moment
+          # before the macOS jobs race to upload their binaries into it.
+          args=()
+          case "$TAG" in *-*) args+=(--prerelease) ;; esac
           gh release create "$TAG" --verify-tag --generate-notes \
-            "$tarball" "$tarball.sha256"
+            "${args[@]}" "$tarball" "$tarball.sha256"
 
   # The macOS product is the self-contained daemon: one unsigned binary that
   # serves the embedded frontend on http://127.0.0.1:8787 (PC_AI_PORT to
   # change it). One job per real architecture: macos-14 runners are Apple
-  # Silicon, macos-13 runners are Intel, so each builds its native target and
-  # the names in the release match what the binary actually is.
+  # Silicon and macos-15-intel runners are Intel, so each builds its native
+  # target and the names in the release match what the binary actually is.
+  # macos-13 (the old Intel label) was retired in December 2025: a job pinned
+  # to it queues forever, not fails.
   #
   # ORDER IS LOAD-BEARING. build.rs embeds dist/ at compile time, so the
   # frontend must be built BEFORE cargo runs: npm ci -> npm run build ->
@@ -101,7 +110,7 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

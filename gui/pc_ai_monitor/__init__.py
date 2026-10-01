@@ -25,4 +25,4 @@ gi.require_version("PangoCairo", "1.0")
 with contextlib.suppress(ImportError):
     gi.require_foreign("cairo")
 
-__version__ = "0.1.0"
+__version__ = "0.2.0-rc2"

@@ -99,10 +99,19 @@ MAC
   api="https://api.github.com/repos/$repo"
   if [ "$tag" = "latest" ]; then
     echo "Buscando la ultima release de $repo..."
-    tag="$(gh_get "$api/releases/latest" | python3 -c '
+    # No se usa /releases/latest: ese endpoint omite las pre-releases, asi que
+    # mientras la ultima publicada sea un rc devuelve 404. La lista viene
+    # ordenada de la mas nueva a la mas vieja y si incluye los rc.
+    tag="$(gh_get "$api/releases?per_page=10" | python3 -c '
 import json, sys
-print(json.load(sys.stdin)["tag_name"])
-')"
+rels = [r for r in json.load(sys.stdin) if not r.get("draft")]
+if not rels:
+    raise SystemExit("no hay ninguna release publicada")
+print(rels[0]["tag_name"])
+')" || {
+      echo "No pude resolver la ultima release de $repo." >&2
+      exit 1
+    }
   fi
 
   tarball="macacoview-$tag-linux.tar.gz"

@@ -1,6 +1,6 @@
 [package]
 name = "macacoview"
-version = "0.1.0"
+version = "0.2.0-rc2"
 description = "PC-AI Monitor"
 edition = "2021"
 

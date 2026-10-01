@@ -41,7 +41,7 @@ curl -fsSL \
   -o install.sh
 
 bash install.sh --from-release          # ultima release
-# bash install.sh --from-release v0.1.0 # o una version puntual
+# bash install.sh --from-release v0.2.0-rc2 # o una version puntual
 ```
 
 El modo `--from-release` detecta la plataforma, baja el artefacto del tag y su
@@ -52,7 +52,7 @@ entonces corre el instalador. Si el checksum no coincide, aborta.
 
 ```bash
 git clone https://github.com/Alvarogds04/macacoview.git
-cd pc-ai-monitor
+cd macacoview
 bash gui/install.sh
 ```
 
@@ -97,8 +97,7 @@ Mac con Intel se dejaron de vender en 2020.
 
 En la pagina de **Releases** del repositorio, de la ultima version baja de la
 seccion Assets dos archivos: el `macacoview-serve-<tu-arquitectura>.tar.gz`
-y su `.sha256` (el repositorio es privado: necesitas acceso al repo, o que te
-pase los archivos quien te lo compartio).
+y su `.sha256` (el repositorio es publico: se bajan sin ninguna credencial).
 
 Despues, en Terminal (la abris con Spotlight: Command + Espacio, escribis
 "Terminal"):
