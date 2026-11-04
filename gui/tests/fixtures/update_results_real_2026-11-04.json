@@ -1,0 +1,53 @@
+{
+ "_source": "measured on the real machine by the owner of pc-ai-local-models, 2026-11-04 (odd/tasks/macacoview-gtk.md L12)",
+ "success_applied": {
+  "exit": 0,
+  "stdout": {
+   "action": "update controller-gufo",
+   "from": "d2309665",
+   "to": "1c78d6c1",
+   "verified": true
+  },
+  "human": "controlador d2309665 → 1c78d6c1 (verificado)"
+ },
+ "success_noop": {
+  "exit": 0,
+  "stdout": {
+   "action": "update controller-gufo",
+   "from": "1c78d6c1",
+   "to": "1c78d6c1",
+   "source": "/home/alvaro/Apps/proyect_local/pc-ai-local-models/worktrees/gufo-safe-campaign/gufo-service/gufo_ctl.py",
+   "target": "/home/alvaro/.local/share/gufo-flash/gufo_ctl.py",
+   "applied": false,
+   "restart": false,
+   "downtime_seconds_approx": 0,
+   "reason": "el controlador desplegado ya coincide con la copia del repositorio"
+  }
+ },
+ "refused_no_channel_weights": {
+  "exit": 10,
+  "stdout": {
+   "action": "update weights-models",
+   "reason": "los pesos se descargan a mano; no hay canal de actualización",
+   "applied": false
+  }
+ },
+ "refused_no_channel_cli": {
+  "exit": 10,
+  "stdout": {
+   "action": "update cli-local-ai-models",
+   "reason": "el repositorio no tiene remoto git; no hay canal de actualización",
+   "applied": false
+  }
+ },
+ "needs_confirmation_build": {
+  "exit": 10,
+  "stdout": {
+   "action": "update engine-abito",
+   "from": "9f31776c",
+   "to": "5851a8e5",
+   "build_required": true,
+   "reason": "confirmation required"
+  }
+ }
+}
