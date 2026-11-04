@@ -30,7 +30,7 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 | T4 | Motores page: resident cards, Actualizaciones del PC (engine real, others via B1 contract), performance as instruments, inventory | S5 S6 S7 S9 S11 | worker | — |
 | T5 | Router page rebuild with filters and live refresh | S8 S11 | worker | — |
 | T6 | Recursos, Tokens, Puertos, Procesos, Configuración restyle keeping every function | S10 S12 | worker | — |
-| B1 | Backend: updaters for models, router, tools in `pc-ai-local-models` (`local-ai-models updates --json`, `update <component>`) | S6 | owner session (intercom) | — |
+| B1 | Backend: updaters in `pc-ai-local-models` — contract fixed in L8; owner session implements it | S6 | owner session (intercom) | — |
 
 Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its own repo.
 
@@ -43,3 +43,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 - L5 (user): updates without backend → «Agregar los actualizadores que faltan» (B1, separate task in `pc-ai-local-models`, owned by the session that maintains that repo).
 - L6 (evidence): router `/status` today names engines `abito` (:11002) and `flash` (:11008, parado) while the Gufo engine serves on :11070 — naming mismatch to resolve in T5 with the router owner.
 - L7 (slice): 8fd620c is design assets only (HTML artboards ~9.8k lines, not reviewable code); code slices from T1 on stay at ~400 authored lines per commit.
+- L8 (owner of pc-ai-local-models, contract fixed): `local-ai-models updates [--json]` → exit 0, `{"checked_at", "components":[{id, kind: engine|model|tool, name, installed, available|null, updatable, reason|null, restarts_engine, eta_s|null, apply|null}]}` with ids engine-gufo, engine-abito, controller-gufo, router-pi, weights-models, cli-local-ai-models. `available: null` = no real channel (refuses even with --yes, exit 10 + reason); unreachable channel → available null, updatable false, reason = failure. `updatable: true` only when a different version was observed. `local-ai-models update <id> [--yes] [--json]` → 0 verified, 10 needs confirmation / not applicable, 1 failed and rolled back; without --yes prints the plan only. engine-abito needs `--build` (~40 min, restarts Abito) — the UI must ask for it explicitly; weights are never downloaded. T4 codes against this contract (fixture from L8) and degrades to «sin actualizador» when the command is missing.
