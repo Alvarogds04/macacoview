@@ -31,10 +31,18 @@ existe, esa sección queda en "sin datos" y el resto sigue funcionando.
 ## MacacoView
 
 La app se llama **MacacoView** (ventana y cabeceras; los identificadores y las
-rutas de config no cambian). La sección **Home**, primera y por defecto, será el
-cockpit del diseño 07; de momento muestra «Home: en construcción». La barra
-lateral lleva badges vivos —motor activo, RAM libre, % local del router y
-puertos expuestos— y cada cabecera una pill con la edad de los datos de su
+rutas de config no cambian). La sección **Home**, primera y por defecto, es el
+cockpit del diseño 07: bloques de RAM con la reserva rayada (Gufo ≈ 85 GiB,
+Abito ≈ 20 GiB, figura «en uso» medida), banda de motores de 15 minutos con
+marcadores de cambio/caída/actualización, mini tarjetas de motor con el botón
+compacto «Cambiar a …» (Ctrl E), lanes decode/prefill con cursor compartido,
+anillos de caché y ventana KV, dial MTP, lámpara de GPU, inventario compacto
+de motores con margen RAM (disponible / conservadora con sus mínimos) y la
+tarjeta de actualización de un solo estado con Ctrl U. Todo el cockpit se
+alimenta de un poller compartido (5 s) que reutiliza las mismas lecturas que
+el panel Motores (`local-ai-models`) y del propio motor Gufo (`:11070`). La
+barra lateral lleva badges vivos —motor activo, RAM libre, % local del router
+y puertos expuestos— y cada cabecera una pill con la edad de los datos de su
 sección (verde < 10 s, ámbar desde 10 s); si el colector de una sección falla,
 un banner lo anuncia arriba.
 

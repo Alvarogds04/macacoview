@@ -1121,3 +1121,28 @@ class StatsConfigPathTests(unittest.TestCase):
             "grupo-de-prueba", data["groups"],
             "el [[watch]] de la ruta nueva define los grupos del colector",
         )
+
+
+class ThemeCssTests(unittest.TestCase):
+    """Pase visual 2, defecto 1: libadwaita 1.9 lee las variables CSS
+    ``--accent-*`` (los ``@define-color`` están deprecados), así que el
+    paquete debe emitir también el bloque ``:root`` con el acento del tema."""
+
+    def test_emits_accent_css_variables_for_every_theme(self):
+        from pc_ai_monitor import theme
+
+        for palette in theme.THEMES.values():
+            with self.subTest(theme=palette.key):
+                css = theme.colors_css(palette)
+                self.assertIn(f"--accent-bg-color: {palette.accent};", css)
+                self.assertIn(f"--accent-color: {palette.accent};", css)
+                self.assertIn(f"--accent-fg-color: {palette.background};", css)
+
+    def test_keeps_the_define_color_lines_for_older_libadwaita(self):
+        from pc_ai_monitor import theme
+
+        palette = theme.get("gentle")
+        css = theme.colors_css(palette)
+        self.assertIn(f"@define-color accent_bg_color {palette.accent};", css)
+        self.assertIn(f"@define-color accent_color {palette.accent};", css)
+        self.assertIn(f"@define-color accent_fg_color {palette.background};", css)

@@ -14,6 +14,28 @@ import unittest
 
 from pc_ai_monitor.datos import Snapshot
 
+
+def _no_refresh(self, snapshot, force=False):
+    """Sustituye al poller real de Home: estos tests no tocan el motor."""
+
+
+_POLLER_PATCH = None
+
+
+def setUpModule():
+    global _POLLER_PATCH
+    from unittest import mock
+
+    from pc_ai_monitor.blocks import home as home_blocks
+
+    _POLLER_PATCH = mock.patch.object(home_blocks._HomePoller, "refresh", _no_refresh)
+    _POLLER_PATCH.start()
+
+
+def tearDownModule():
+    if _POLLER_PATCH is not None:
+        _POLLER_PATCH.stop()
+
 DASH = "\u2014"
 
 SS_SAMPLE = """tcp LISTEN 0 511 127.0.0.1:4000 0.0.0.0:* users:(("litellm",pid=2551494,fd=12))
@@ -77,15 +99,18 @@ class SectionsTests(unittest.TestCase):
         )
         self.assertIs(app.SHELL_PAGES["home"], HomePage)
 
-    def test_home_page_is_a_placeholder_dashboard(self):
+    def test_home_page_is_the_cockpit(self):
         from pc_ai_monitor.pages.home import HomePage
 
         page = HomePage()
-        # T1: sólo el aviso; T3 añade los bloques del cockpit.
-        self.assertEqual(len(page._blocks), 1)
-        note = page._blocks[0].body.get_first_child()
-        self.assertEqual(note.get_text(), "Home: en construcción")
-        self.assertTrue(note.has_css_class("muted"))
+        # T3: las tres filas del cockpit más la tarjeta de actualización.
+        self.assertEqual(len(page._blocks), 4)
+
+    def test_shell_tests_never_start_the_real_engine_poller(self):
+        """El shell recibe snapshots; el poller real no debe lanzar subprocesos."""
+        from pc_ai_monitor.blocks import home as home_blocks
+
+        self.assertIs(home_blocks._HomePoller.refresh, _no_refresh)
 
 
 class BadgeTests(unittest.TestCase):

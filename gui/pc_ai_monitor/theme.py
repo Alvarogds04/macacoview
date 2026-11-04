@@ -270,7 +270,7 @@ headerbar {
   background-color: @theme_element;
   border: 1px solid @theme_border;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .card-title {
@@ -345,6 +345,13 @@ headerbar {
   color: @theme_text;
 }
 
+/* Nombre de fila del inventario compacto de Home: más bajo que .heading. */
+.row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: @theme_text;
+}
+
 .section-head {
   color: @theme_muted;
   font-size: 11px;
@@ -415,6 +422,63 @@ listview, gridview {
   border-color: @theme_warning;
 }
 
+/* Tarjeta de actualización de Home (S6): pill del estado único. */
+.vpill {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Cambio compacto de motor (S4): píldora con lámparas + ⇄ + etiqueta + kbd,
+   como el artboard — nunca un botón suggested de ancho completo. */
+.switch-pill {
+  background-color: @theme_element;
+  border: 1px solid @theme_border;
+  border-radius: 6px;
+  padding: 5px 10px;
+}
+
+.switch-pill:hover:not(:disabled) {
+  background-color: @theme_selection;
+}
+
+.switch-pill:disabled {
+  opacity: 0.55;
+}
+
+.switch-pill .kbd {
+  color: @theme_muted;
+}
+
+/* Tecla de atajo dentro de un botón (Ctrl E / Ctrl U). */
+.kbd {
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid @theme_border;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: @theme_muted;
+  background-color: @theme_subtle;
+}
+
+.vpill.vpill-ok {
+  color: @theme_green;
+}
+
+.vpill.vpill-warn {
+  color: @theme_warning;
+}
+
+.vpill.vpill-acc {
+  color: @theme_accent;
+}
+
+/* Inventario de Home (fila 3): la barra de contexto usa el azul serie del
+   artboard, no el acento del tema, y no compite con las lámparas. */
+progressbar.inv-ctx > trough > progress {
+  background-color: @theme_blue;
+}
+
 /* Router: valores alineados y semaforo de estado. */
 .mono {
   font-family: monospace;
@@ -452,6 +516,16 @@ def colors_css(palette: Palette) -> str:
 @define-color accent_color {palette.accent};
 @define-color accent_bg_color {palette.accent};
 @define-color accent_fg_color {palette.background};
+
+/* libadwaita 1.9 pintó los botones «suggested-action», las barras de
+   progreso y los pilotos desde las variables CSS y ya no desde los
+   @define-color deprecados: sin este bloque :root el acento del tema no
+   llegaba a la interfaz (quedaba el verde/azul por defecto del sistema). */
+:root {{
+  --accent-bg-color: {palette.accent};
+  --accent-color: {palette.accent};
+  --accent-fg-color: {palette.background};
+}}
 """
 
 

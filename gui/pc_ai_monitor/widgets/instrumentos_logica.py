@@ -8,6 +8,7 @@ contract without opening a window. Colours are named by palette key (``accent``,
 """
 
 import math
+import time
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
@@ -175,6 +176,7 @@ class Lane:
     low: float
     high: float
     stale_tail: bool = False
+    unit: str = "tok/s"
 
 
 def lane_y(value: float, low: float, high: float, top: float, bottom: float) -> float:
@@ -252,6 +254,56 @@ def lane_stale_tail(
     return (last_good[0], last_good[1], plot_x + plot_w, last_good[1])
 
 
+def lane_value_at(
+    points: tuple[tuple[float, float | None], ...], t: float
+) -> float | None:
+    """Nearest sample value at or before ``t``; ``None`` in a gap or off data."""
+    best: float | None = None
+    best_t: float | None = None
+    for point_t, value in points:
+        if point_t <= t and value is not None and (best_t is None or point_t >= best_t):
+            best_t = point_t
+            best = value
+    return best
+
+
+def lane_current(
+    points: tuple[tuple[float, float | None], ...], cursor: float | None = None
+) -> float | None:
+    """The value the lane shows at its right end.
+
+    With an active cursor, the value at the cursor; without it, the last
+    reading. ``None`` = «sin datos» (never a 0, S11).
+    """
+    if cursor is not None:
+        return lane_value_at(points, cursor)
+    last: float | None = None
+    for _t, value in points:
+        if value is not None:
+            last = value
+    return last
+
+
+def lane_value_text(value: float | None) -> str:
+    """Big number for the right end of a lane: «47.8», «1 046», «sin datos"."""
+    if value is None:
+        return "sin datos"
+    if abs(value) >= 100:
+        return f"{round(value):,}".replace(",", "\u202f")
+    return f"{value:.1f}"
+
+
+def wall_clock_hm(epoch_s: float) -> str:
+    """Wall-clock «HH:MM» of a unix timestamp (lane axis labels)."""
+    stamp = time.localtime(epoch_s)
+    return f"{stamp.tm_hour:02d}:{stamp.tm_min:02d}"
+
+
+def tick_label_visible(x: float, width: float, reserve_px: float = 56.0) -> bool:
+    """A tick label fits left of the «ahora» corner."""
+    return 0.0 <= x <= width - reserve_px
+
+
 def clamp_cursor(t: float | None, tmin: float, tmax: float) -> float | None:
     if t is None:
         return None
@@ -298,11 +350,15 @@ def ring_sweep(pct: float) -> float:
     return value / 100.0 * 360.0
 
 
-def ring_state(pct: float | None, text: str) -> tuple[float, str, bool]:
-    """``(sweep_deg, centre_text, no_data)``; ``None`` renders «sin datos»."""
+def ring_state(pct: float | None) -> tuple[float, str, bool]:
+    """``(sweep_deg, centre_text, no_data)``.
+
+    The centre carries the VALUE, never the label: «91 %» with data,
+    «sin datos» without (the label lives under the ring).
+    """
     if pct is None:
         return (0.0, "sin datos", True)
-    return (ring_sweep(pct), text, False)
+    return (ring_sweep(pct), f"{round(pct)} %", False)
 
 
 def dial_angle(value: float) -> float:

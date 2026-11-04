@@ -10,7 +10,7 @@ Tooltips hit-test the last drawn layout via ``query-tooltip``.
 
 import math
 
-from gi.repository import GObject, Gtk
+from gi.repository import GObject, Gtk, PangoCairo
 
 from pc_ai_monitor import theme
 from pc_ai_monitor.formato import truncate
@@ -66,13 +66,37 @@ def round_rect(cr, x: float, y: float, w: float, h: float, r: float) -> None:
     cr.close_path()
 
 
+def text_right(
+    area: Gtk.DrawingArea,
+    cr,
+    text: str,
+    x_right: float,
+    y_top: float,
+    color: str,
+    size: float = 11.0,
+    bold: bool = False,
+) -> None:
+    """One line of text right-aligned at ``x_right`` (top edge at ``y_top``)."""
+    layout = area.create_pango_layout(text)
+    weight = "bold" if bold else "normal"
+    layout.set_markup(
+        f'<span size="{round(size * 1024)}" weight="{weight}">{text}</span>'
+    )
+    width, _height = layout.get_pixel_size()
+    cr.move_to(x_right - width, y_top)
+    cr.set_source_rgba(*theme.rgba(color))
+    PangoCairo.show_layout(cr, layout)
+
+
 # ---------------------------------------------------------------------------
 # RAM blocks
 # ---------------------------------------------------------------------------
 
-# kind → (fill, border, text, dashed)
+# kind → (fill, border, text, dashed). El bloque activo lleva el texto del
+# tema (claro): con el relleno de acento al 16 % sobre el fondo oscuro, el
+# texto «background» era ilegible (defecto 3 del pase visual 2).
 _RAM_STYLES = {
-    "active": ("accent", "accent", "background", False),
+    "active": ("accent", "accent", "text", False),
     "idle": (None, "blue", "blue", True),
     "other": (None, "muted", "muted", False),
     "free": (None, "border", "muted", True),
@@ -82,7 +106,7 @@ _RAM_STYLES = {
 class RamBlocks(Chart):
     """RAM of the machine as ordered blocks with a hatched reservation (S9)."""
 
-    def __init__(self, width: int = 560, height: int = 66, gap: float = 3.0) -> None:
+    def __init__(self, width: int = 560, height: int = 62, gap: float = 3.0) -> None:
         super().__init__(width, height)
         self._blocks: tuple[logica.RamBlock, ...] = ()
         self._gap = gap
@@ -137,14 +161,14 @@ class RamBlocks(Chart):
                     cr,
                     truncate(rect.block.label, max(3, round(rect.width / 9))),
                     rect.x + 8,
-                    18,
+                    6,
                     _color(text),
                     12,
                     True,
                 )
             if rect.width > 90 and rect.block.sublabel:
                 draw_text(
-                    area, cr, rect.block.sublabel, rect.x + 8, 34, palette.muted, 9
+                    area, cr, rect.block.sublabel, rect.x + 8, 22, palette.muted, 9
                 )
             if rect.width > 90:
                 draw_text(
@@ -152,7 +176,7 @@ class RamBlocks(Chart):
                     cr,
                     f"{rect.block.used_gib:.1f} GiB",
                     rect.x + 8,
-                    height - 16,
+                    height - 24,
                     _color(text),
                     11,
                 )
@@ -192,7 +216,7 @@ _MARKER_COLORS = {
 class MotorBand(Chart):
     """15-minute engine state band with hit-testable event markers."""
 
-    def __init__(self, width: int = 560, height: int = 74, window_s: float = 900.0) -> None:
+    def __init__(self, width: int = 560, height: int = 56, window_s: float = 900.0) -> None:
         super().__init__(width, height)
         self._segments: tuple[logica.BandSegment, ...] = ()
         self._markers: tuple[logica.BandMarker, ...] = ()
@@ -227,7 +251,7 @@ class MotorBand(Chart):
             cr.line_to(x, height)
             cr.stroke()
 
-        band_y, band_h = 28.0, 34.0
+        band_y, band_h = 20.0, 26.0
         for segment in self._segments:
             clipped = logica.clip_segment(segment, tmin, tmax)
             if clipped is None:
@@ -252,14 +276,14 @@ class MotorBand(Chart):
             color = _color(_MARKER_COLORS.get(marker.kind, "muted"))
             cr.set_source_rgba(*theme.rgba(color, 0.8))
             cr.set_line_width(1.5)
-            cr.move_to(x, 16)
+            cr.move_to(x, 12)
             cr.line_to(x, band_y)
             cr.stroke()
             cr.set_source_rgba(*theme.rgba(color))
-            cr.arc(x, 10.0, 5.0, 0, 2 * math.pi)
+            cr.arc(x, 7.0, 5.0, 0, 2 * math.pi)
             cr.fill()
             cr.set_source_rgba(*theme.rgba(palette.background))
-            cr.arc(x, 10.0, 2.0, 0, 2 * math.pi)
+            cr.arc(x, 7.0, 2.0, 0, 2 * math.pi)
             cr.fill()
 
         # «ahora» at the right edge
@@ -307,12 +331,19 @@ class Lanes(Chart):
     BIG_STEP_S = 60.0
 
     def __init__(
-        self, width: int = 560, lane_height: int = 64, axis_height: int = 26
+        self,
+        width: int = 560,
+        lane_height: int = 64,
+        axis_height: int = 26,
+        clock=None,
     ) -> None:
+        """``clock`` maps a sample instant to «HH:MM» (wall clock); without it
+        the axis falls back to the raw seconds of the shared clock."""
         super().__init__(width, lane_height + axis_height)
         self._lanes: tuple[logica.Lane, ...] = ()
         self._lane_height = lane_height
         self._axis_height = axis_height
+        self._clock = clock
         self._cursor: float | None = None
 
         motion = Gtk.EventControllerMotion()
@@ -335,6 +366,11 @@ class Lanes(Chart):
 
     def get_cursor(self) -> float | None:
         return self._cursor
+
+    def current_text(self, index: int) -> str:
+        """The big number at the right end of lane ``index`` («47.8»)."""
+        lane = self._lanes[index]
+        return logica.lane_value_text(logica.lane_current(lane.points, self._cursor))
 
     def set_cursor(self, t: float | None) -> None:
         tmin = self._tmin()
@@ -434,6 +470,23 @@ class Lanes(Chart):
                 area, cr, lane.label.upper(), 8, index * lane_h + 10, palette.muted, 9, True
             )
 
+            # Current value as a big number at the right end (artboard),
+            # following the cursor while it is active.
+            value = logica.lane_current(lane.points, self._cursor)
+            centre_y = (top + bottom) / 2
+            if value is None:
+                text_right(
+                    area, cr, "sin datos", width - 10, centre_y - 7, palette.muted, 12, True
+                )
+            else:
+                text_right(
+                    area, cr, logica.lane_value_text(value), width - 10,
+                    centre_y - 19, color, 18, True,
+                )
+                text_right(
+                    area, cr, lane.unit, width - 10, centre_y + 6, palette.muted, 9
+                )
+
         axis_y = len(self._lanes) * lane_h
         cr.set_source_rgba(*theme.rgba(palette.border))
         cr.set_line_width(1.0)
@@ -442,8 +495,14 @@ class Lanes(Chart):
         cr.stroke()
         for t in logica.band_ticks(tmin, tmax, step_s=max(1.0, (tmax - tmin) / 6)):
             x = logica.lane_x(t, tmin, tmax, 0.0, float(width))
-            draw_text(area, cr, _hm(t), x, axis_y + 14, palette.muted, 8, centered=True)
-        draw_text(area, cr, "ahora", width - 4, axis_y + 14, palette.accent, 8, True, True)
+            label = self._clock(t) if self._clock is not None else _hm(t)
+            if logica.tick_label_visible(x, float(width)):
+                draw_text(
+                    area, cr, label, x, axis_y + 14, palette.muted, 8, centered=True
+                )
+        text_right(
+            area, cr, "ahora", width - 2, axis_y + 9, palette.accent, 9, True
+        )
 
         if self._cursor is not None:
             x = logica.lane_x(self._cursor, tmin, tmax, 0.0, float(width))
@@ -455,7 +514,7 @@ class Lanes(Chart):
             cr.stroke()
             cr.set_dash([])
             for index, lane in enumerate(self._lanes):
-                value = _value_at(lane, self._cursor)
+                value = logica.lane_value_at(lane.points, self._cursor)
                 if value is None:
                     continue
                 y = logica.lane_y(
@@ -465,17 +524,6 @@ class Lanes(Chart):
                 cr.set_source_rgba(*theme.rgba(_color(lane.color)))
                 cr.arc(x, y, 3.5, 0, 2 * math.pi)
                 cr.fill()
-
-
-def _value_at(lane: logica.Lane, t: float) -> float | None:
-    """Nearest sample value at or before ``t``; ``None`` in a gap or off data."""
-    best: float | None = None
-    best_t: float | None = None
-    for point_t, value in lane.points:
-        if point_t <= t and (best_t is None or point_t >= best_t):
-            best_t = point_t
-            best = value
-    return best
 
 
 def _hm(t: float) -> str:
@@ -494,13 +542,12 @@ class Ring(Chart):
     def __init__(self, size: int = 64, thickness: int = 10) -> None:
         super().__init__(size, size)
         self._pct: float | None = None
-        self._text = ""
         self._color = "accent"
         self._thickness = thickness
 
-    def set_data(self, pct: float | None, text: str = "", color: str = "accent") -> None:
+    def set_data(self, pct: float | None, color: str = "accent") -> None:
+        """``pct`` in 0–100; the centre shows the VALUE (label lives outside)."""
         self._pct = pct
-        self._text = text
         self._color = color
         self.queue_draw()
 
@@ -511,7 +558,10 @@ class Ring(Chart):
         palette = theme.active()
         cx, cy = width / 2, height / 2
         radius = (min(width, height) - self._thickness) / 2 - 1
-        sweep, text, no_data = logica.ring_state(self._pct, self._text)
+        sweep, text, no_data = logica.ring_state(self._pct)
+        # El centro lleva el VALOR a escala del aro: «91 %» cabe dentro,
+        # nunca el label (que vive debajo del anillo).
+        font = max(11.0, min(21.0, min(width, height) * 0.23))
 
         cr.set_line_width(self._thickness)
         cr.set_line_cap(1)
@@ -526,7 +576,7 @@ class Ring(Chart):
 
         draw_text(
             area, cr, text, cx, cy, palette.text if not no_data else palette.muted,
-            21 if not no_data else 10, not no_data, True,
+            font if not no_data else 10, not no_data, True,
         )
 
 
@@ -534,7 +584,8 @@ class Dial(Chart):
     """Small 240° arc gauge with a needle for a 0–1 value (MTP acceptance)."""
 
     def __init__(self, size: int = 66) -> None:
-        super().__init__(size, size)
+        # Extra strip under the arc so «sin datos» / the value never overlap it.
+        super().__init__(size, size + 12)
         self._value: float | None = None
         self._color = "blue"
 
@@ -548,7 +599,9 @@ class Dial(Chart):
 
     def _draw(self, area, cr, width: int, height: int) -> None:
         palette = theme.active()
-        cx, cy, radius = width / 2, height / 2 - 2, min(width, height) / 2 - 9
+        inner = float(height) - 12.0
+        cx, cy = width / 2, inner / 2
+        radius = min(width, inner) / 2 - 9
         thickness = 8.0
         angle, no_data = logica.dial_state(self._value)
 
@@ -578,7 +631,7 @@ class Dial(Chart):
             cr.stroke()
 
         draw_text(
-            area, cr, "sin datos" if no_data else f"{self._value:.2f}", cx, cy + radius + 8,
+            area, cr, "sin datos" if no_data else f"{self._value:.2f}", cx, height - 8,
             palette.muted if no_data else palette.text, 10 if no_data else 12, not no_data, True,
         )
 
@@ -702,11 +755,14 @@ class VersionRail(Chart):
             cr.line_to(xb - 5, y + 5)
             cr.stroke()
 
-        draw_text(area, cr, self._from, xa, height - 30, palette.text, 11, True, True)
+        # Sin pasos, las etiquetas bajan para no pisar el halo del punto;
+        # con stepper quedan sobre la fila de pasos.
+        labels_y = height - 34.0 if self._steps else height - 20.0
+        draw_text(area, cr, self._from, xa, labels_y, palette.text, 11, True, True)
         to_color = palette.text if view.muted else (
             palette.green if view.done else palette.warning if view.reverted else palette.text
         )
-        draw_text(area, cr, self._to, xb, height - 30, to_color, 11, True, True)
+        draw_text(area, cr, self._to, xb, labels_y, to_color, 11, True, True)
         draw_text(area, cr, self._status, width / 2, y - 14, accent, 9, True, True)
 
         if self._steps:

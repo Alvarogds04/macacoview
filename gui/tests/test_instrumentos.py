@@ -27,6 +27,13 @@ class RamBlockLayoutTests(unittest.TestCase):
             logica.RamBlock("Libre", "", 41.0, 41.0, "free"),
         )
 
+    def test_active_block_text_is_bright_not_background(self):
+        """Defecto 3 (pase visual 2): el texto del bloque activo se dibuja con
+        el color de texto del tema (claro), nunca con el fondo oscuro."""
+        from pc_ai_monitor.widgets.instrumentos import _RAM_STYLES
+
+        self.assertEqual(_RAM_STYLES["active"][2], "text")
+
     def test_widths_sum_to_bar_width(self):
         rects = logica.ram_layout(self._blocks(), 560.0, gap=3.0)
         usable = 560.0 - 3.0 * (len(rects) - 1)
@@ -174,14 +181,55 @@ class RingDialTests(unittest.TestCase):
         self.assertAlmostEqual(logica.ring_sweep(-5.0), 0.0)
 
     def test_ring_no_data(self):
-        sweep, text, no_data = logica.ring_state(None, "42 %")
+        sweep, text, no_data = logica.ring_state(None)
         self.assertEqual(sweep, 0.0)
         self.assertEqual(text, "sin datos")
         self.assertTrue(no_data)
-        sweep, text, no_data = logica.ring_state(50.0, "50 %")
-        self.assertAlmostEqual(sweep, 180.0)
-        self.assertEqual(text, "50 %")
+
+    def test_ring_centre_is_the_value_not_the_label(self):
+        """The centre text carries «91 %», never the label (Home defect 2)."""
+        sweep, text, no_data = logica.ring_state(91.0)
+        self.assertAlmostEqual(sweep, 327.6)
+        self.assertEqual(text, "91 %")
         self.assertFalse(no_data)
+        _sweep, text, _no_data = logica.ring_state(31.4)
+        self.assertEqual(text, "31 %")
+        _sweep, text, _no_data = logica.ring_state(50.9)
+        self.assertEqual(text, "51 %")
+
+    def test_lane_unit_defaults_to_tokens_per_second(self):
+        lane = logica.Lane(
+            label="d", color="accent", points=((0.0, 1.0),), low=0.0, high=2.0
+        )
+        self.assertEqual(lane.unit, "tok/s")
+
+    def test_lane_value_at_skips_gaps(self):
+        points = ((0.0, 1.0), (10.0, 2.0), (20.0, None), (30.0, 4.0))
+        self.assertEqual(logica.lane_value_at(points, 15.0), 2.0)
+        self.assertIsNone(logica.lane_value_at(((0.0, None),), 5.0))
+        self.assertIsNone(logica.lane_value_at((), 5.0))
+
+    def test_lane_current_follows_cursor_then_latest(self):
+        points = ((0.0, 1.0), (10.0, 2.0), (20.0, None))
+        self.assertEqual(logica.lane_current(points, 12.0), 2.0)
+        self.assertEqual(logica.lane_current(points), 2.0)
+        self.assertIsNone(logica.lane_current(((0.0, None),), None))
+
+    def test_lane_value_text_formats_big_numbers(self):
+        self.assertEqual(logica.lane_value_text(47.8), "47.8")
+        self.assertEqual(logica.lane_value_text(1046.0), "1\u202f046")
+        self.assertEqual(logica.lane_value_text(None), "sin datos")
+
+    def test_wall_clock_hm_is_wall_clock(self):
+        import time as _time
+
+        epoch = _time.mktime((2026, 1, 1, 14, 5, 0, 0, 0, -1))
+        self.assertEqual(logica.wall_clock_hm(epoch), "14:05")
+
+    def test_tick_labels_yield_to_the_ahora_corner(self):
+        self.assertTrue(logica.tick_label_visible(100.0, 560.0))
+        self.assertFalse(logica.tick_label_visible(540.0, 560.0))
+        self.assertFalse(logica.tick_label_visible(-4.0, 560.0))
 
     def test_dial_angle_mapping(self):
         self.assertAlmostEqual(logica.dial_angle(0.0), 150.0)
@@ -351,8 +399,8 @@ class WidgetSmokeTests(unittest.TestCase):
         from pc_ai_monitor.widgets.instrumentos import Ring
 
         widget = Ring()
-        widget.set_data(62.0, "62 %", "green")
-        widget.set_data(None, "")
+        widget.set_data(62.0, "green")
+        widget.set_data(None)
         widget.queue_draw()
         widget.redraw()
 
