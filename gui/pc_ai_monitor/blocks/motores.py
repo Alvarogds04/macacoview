@@ -39,14 +39,16 @@ class CommandResult:
     failure: str | None = None
 
 
-def _run_manager(*args: str) -> CommandResult:
-    """Ejecuta el administrador; esta función solo se usa desde workers."""
+def run_manager(
+    args: tuple[str, ...], timeout: int = COMMAND_TIMEOUT_S
+) -> CommandResult:
+    """Ejecuta el administrador con un plazo dado; solo se usa desde workers."""
     try:
         completed = subprocess.run(
             [MANAGER, *args],
             capture_output=True,
             text=True,
-            timeout=COMMAND_TIMEOUT_S,
+            timeout=timeout,
             check=False,
         )
     except FileNotFoundError:
@@ -61,6 +63,11 @@ def _run_manager(*args: str) -> CommandResult:
         completed.stdout.strip(),
         completed.stderr.strip(),
     )
+
+
+def _run_manager(*args: str) -> CommandResult:
+    """Ejecuta el administrador con el plazo común de las acciones."""
+    return run_manager(args)
 
 
 def _command_failure(result: CommandResult, action: str, model: str) -> str:
