@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Router: página reconstruida del diseño 07 (T5).
 
 Franja de KPIs, «Rutas en el tiempo» + «Decisiones» con filtros compartidos,

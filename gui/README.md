@@ -154,3 +154,14 @@ JEV/CLOUD/ENGRAM y sesiones. El historial de decisiones que alimenta el gráfico
 acumula el colector en `Snapshot.decisions` (sin repetidos por `(ts, sesión)`, hasta
 2000 entradas y 60 minutos). «flash» es el motor retirado: línea apagada, nunca una
 tarjeta. Sin router en :11009 la página se atenúa entera con su aviso.
+
+## Recursos y Tokens
+
+**Recursos** se lee de un vistazo: franja de KPIs, medidores de RAM, SWAP y
+LIBRE (cada uno con su color), un treemap del RSS por grupo —un clic en una
+ficha o en la leyenda abre sus procesos en la misma tarjeta—, los modelos
+locales en acordeón y el historial de 5 minutos. **Tokens** resume Pi, Codex
+CLI y Claude Code en tarjetas, un donut por proveedor que filtra la leyenda al
+clic (y la limpia al repetirlo), columnas por modelo y las ventanas de la
+suscripción Codex coloreadas por presión (≥ 70 % ámbar, ≥ 90 % rojo). Los
+números exactos quedan en las leyendas; las frases, en los tooltips.

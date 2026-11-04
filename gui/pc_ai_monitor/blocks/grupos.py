@@ -1,4 +1,9 @@
-"""Process groups: one donut plus a legend with exact values."""
+"""Process groups: a treemap plus a legend with exact values.
+
+The treemap is the picture (biggest block = biggest RSS); the legend keeps
+the exact numbers and is the click target: clicking a row — or a tile —
+opens that group's process list right below, in place.
+"""
 
 # pyright: reportAttributeAccessIssue=false
 
@@ -6,10 +11,15 @@ from gi.repository import Gtk
 
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks.recursos_vista import (
+    GroupTreemap,
+    top_processes,
+    treemap_slices,
+    visible_total,
+)
 from pc_ai_monitor.datos import GROUP_KEYS, Snapshot
 from pc_ai_monitor.formato import gib, percent, safe, whole
 from pc_ai_monitor.widgets import chips
-from pc_ai_monitor.widgets.graficos import Dona, Slice
 
 GROUP_LABELS = {
     "pi": "🥧 Pi",
@@ -25,16 +35,22 @@ class GroupsBlock(Block):
 
     def __init__(self) -> None:
         super().__init__()
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-
-        self._donut = Dona(size=170, thickness=22)
-        row.append(self._donut)
+        # ``_donut`` conserva el nombre que test_core fija; hoy es el treemap
+        # del diseño (misma interfaz: _slices / _center_value / _center_label).
+        self._donut = GroupTreemap(on_select=self._on_tile_selected)
+        self.body.append(self._donut)
 
         legend = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self._rows: dict[str, tuple[Gtk.Box, object, object]] = {}
         for key, label in GROUP_LABELS.items():
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             line.add_css_class("legend-row")
+
+            swatch = Gtk.Label()
+            swatch.set_markup(
+                f'<span foreground="{theme.active().chart_series(GROUP_KEYS.index(key))}">●</span>'
+            )
+            line.append(swatch)
 
             name = Gtk.Label(label=label, xalign=0)
             name.set_hexpand(True)
@@ -57,8 +73,7 @@ class GroupsBlock(Block):
             legend.append(line)
             self._rows[key] = (line, value, pct)
 
-        row.append(legend)
-        self.body.append(row)
+        self.body.append(legend)
 
         self._detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self._revealer = Gtk.Revealer()
@@ -73,23 +88,19 @@ class GroupsBlock(Block):
         self._snapshot = snapshot
         groups = snapshot.groups()
         hidden = set(snapshot.hidden_groups)
-        visible_keys = [key for key in GROUP_KEYS if key not in hidden]
         values = {
             key: safe((groups.get(key) or {}).get("rss_gib")) for key in GROUP_KEYS
         }
         # El color de cada serie queda anclado a su posición en GROUP_KEYS
         # aunque se oculten entradas: la paleta no se corre.
-        total = sum(values[key] for key in visible_keys)
+        total = visible_total(values, hidden)
 
-        slices = [
-            Slice(
-                label=GROUP_LABELS[key],
-                value=values[key],
-                color=theme.active().chart_series(index),
-            )
-            for index, key in enumerate(GROUP_KEYS)
-            if key not in hidden
-        ]
+        slices = treemap_slices(
+            values,
+            hidden=hidden,
+            colour_for=lambda key: theme.active().chart_series(GROUP_KEYS.index(key)),
+            label_for=lambda key: GROUP_LABELS[key],
+        )
         self._donut.set_data(slices, f"{gib(total, 2)}G", "RSS total")
 
         if self._selected and self._selected in hidden:
@@ -103,15 +114,17 @@ class GroupsBlock(Block):
             line.set_visible(key not in hidden)
             value.set_text(f"{gib(values[key], 2)}G")
             pct.set_text(percent(values[key], total))
+            line.set_tooltip_text(
+                f"{GROUP_LABELS[key]} · {gib(values[key], 2)} GiB · "
+                f"{percent(values[key], total, 1)} del RSS visible"
+            )
 
     def redraw(self) -> None:
         self._donut.queue_draw()
 
     # -- detalle en la misma pantalla ---------------------------------------
 
-    def _on_row_pressed(
-        self, _gesture, _count: int, _x: float, _y: float, key: str
-    ) -> None:
+    def _toggle(self, key: str) -> None:
         if self._selected == key and self._revealer.get_reveal_child():
             self._revealer.set_reveal_child(False)
             self._selected = ""
@@ -120,6 +133,17 @@ class GroupsBlock(Block):
         self._selected = key
         self._render_detail(key)
         self._revealer.set_reveal_child(True)
+
+    def _on_row_pressed(
+        self, _gesture, _count: int, _x: float, _y: float, key: str
+    ) -> None:
+        self._toggle(key)
+
+    def _on_tile_selected(self, slice_) -> None:
+        for key, label in GROUP_LABELS.items():
+            if label == slice_.label:
+                self._toggle(key)
+                return
 
     def _render_detail(self, key: str) -> None:
         while (child := self._detail.get_first_child()) is not None:
@@ -141,6 +165,9 @@ class GroupsBlock(Block):
             name = Gtk.Label(label=str(process.get("comm") or "—"), xalign=0)
             name.set_hexpand(True)
             name.set_ellipsize(3)
+            name.set_tooltip_text(
+                str(process.get("args") or process.get("comm") or "—")
+            )
             line.append(name)
 
             for text, width in (
@@ -161,5 +188,4 @@ class GroupsBlock(Block):
             return []
         entry = self._snapshot.groups().get(key) or {}
         wanted = {whole(pid) for pid in (entry.get("pids") or [])}
-        found = [p for p in self._snapshot.processes() if whole(p.get("pid")) in wanted]
-        return sorted(found, key=lambda p: safe(p.get("rss_kb")), reverse=True)[:10]
+        return top_processes(self._snapshot.processes(), wanted)

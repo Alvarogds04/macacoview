@@ -27,8 +27,17 @@ class HistoryBlock(Block):
         self._sparks: dict[str, Sparkline] = {}
         self._values: dict[str, Gtk.Label] = {}
         self._rows: dict[str, Gtk.Box] = {}
+        palette = theme.active()
+        # Colores del diseño 07: usada acento, disponible verde, y las dos
+        # series de grupos con la paleta de grupos.
+        colors = {
+            "used": palette.accent,
+            "avail": palette.green,
+            "pi": palette.chart_series(0),
+            "firefox": palette.chart_series(1),
+        }
 
-        for index, (key, label) in enumerate(SERIES):
+        for key, label in SERIES:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             self._rows[key] = row
 
@@ -37,7 +46,7 @@ class HistoryBlock(Block):
             name.add_css_class("muted")
             row.append(name)
 
-            spark = Sparkline(height=34, color=theme.active().chart_series(index))
+            spark = Sparkline(height=34, color=colors[key])
             row.append(spark)
             self._sparks[key] = spark
 
@@ -84,6 +93,10 @@ class HistoryBlock(Block):
         for key, values in series.items():
             self._sparks[key].set_data(values)
             self._values[key].set_text(f"{gib(values[-1])}G")
+            label = dict(SERIES)[key]
+            self._rows[key].set_tooltip_text(
+                f"{label}: {gib(values[-1])} GiB ahora · {len(values)} muestras"
+            )
 
     def redraw(self) -> None:
         for spark in self._sparks.values():

@@ -255,6 +255,13 @@ def load_external(directory: Path = GENTLE_PI_THEMES) -> int:
 # and small uppercase labels. Every colour comes from the @define-color block
 # built below, so switching theme is a one-provider swap.
 BASE_CSS = """
+/* Medidores (widgets/barras.py): cada tipo tiene su color; sin estas reglas
+   SWAP y LIBRE salían con el acento, igual que RAM. */
+progressbar.bar-blue > trough > progress { background-color: @theme_blue; }
+progressbar.bar-green > trough > progress { background-color: @theme_green; }
+progressbar.bar-warning > trough > progress { background-color: @theme_warning; }
+progressbar.bar-error > trough > progress { background-color: @theme_error; }
+
 /* Un botón destacado deshabilitado no debe parecer activo: libadwaita solo
    baja la opacidad y el acento seguía leyéndose como «se puede pulsar». */
 button.suggested-action:disabled,

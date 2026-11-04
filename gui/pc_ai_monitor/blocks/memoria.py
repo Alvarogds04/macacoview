@@ -28,7 +28,14 @@ class MemoryBlock(Block):
         swap_used = safe(memory.get("swap_used_gib"))
 
         self._ram.set(share(used, total), f"{gib(used)} / {gib(total)} GiB")
+        self._ram.set_tooltip_text(f"RAM en uso {gib(used)} GiB de {gib(total)}")
         self._swap.set(
             share(swap_used, swap_total), f"{gib(swap_used)} / {gib(swap_total)} GiB"
         )
+        self._swap.set_tooltip_text(
+            f"Swap en uso {gib(swap_used)} GiB de {gib(swap_total)}"
+        )
         self._free.set(share(available, total), f"{gib(available)} GiB")
+        self._free.set_tooltip_text(
+            "MemAvailable: lo que se puede usar sin presionar al sistema"
+        )

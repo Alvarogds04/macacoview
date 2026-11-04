@@ -53,8 +53,8 @@ class ModelCard(Gtk.Box):
 
         detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         detail.set_margin_top(8)
-        self._gtt = MeterRow("GTT", label_width=40, value_width=90)
-        self._rss = MeterRow("RSS", label_width=40, value_width=90, kind="blue")
+        self._gtt = MeterRow("GTT", label_width=40, value_width=90, kind="blue")
+        self._rss = MeterRow("RSS", label_width=40, value_width=90, kind="accent")
         self._cpu = MeterRow("CPU", label_width=40, value_width=90, kind="green")
         for meter in (self._gtt, self._rss, self._cpu):
             detail.append(meter)
@@ -96,6 +96,9 @@ class ModelCard(Gtk.Box):
             f"{model.get('model') or '—'} · PID {model.get('pid', '—')} · "
             f"puerto {port if port else '—'}"
         )
+        # S12: la frase completa también en el tooltip de la cabecera, que es
+        # lo que se lee sin abrir el detalle.
+        self.set_tooltip_text(self._facts.get_text())
 
 
 class ModelsBlock(Block):

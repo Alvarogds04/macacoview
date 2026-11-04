@@ -23,7 +23,9 @@ class KpiBlock(Block):
             "procs": KpiTile("—", "PROCESOS VIGILADOS"),
         }
         strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        strip.set_homogeneous(True)
         for tile in self._tiles.values():
+            tile.set_hexpand(True)
             strip.append(tile)
         self.body.append(strip)
 
@@ -32,6 +34,15 @@ class KpiBlock(Block):
         used = safe(memory.get("used_gib"))
         total = safe(memory.get("total_gib"))
         self._tiles["ram"].set_value(percent(used, total))
+        self._tiles["ram"].set_tooltip_text(
+            f"RAM en uso {gib(used)} GiB de {gib(total)}"
+        )
         self._tiles["total"].set_value(f"{gib(total)}G")
+        self._tiles["total"].set_tooltip_text(f"RAM total {gib(total)} GiB")
         self._tiles["models"].set_value(count(len(snapshot.models())))
+        self._tiles["models"].set_tooltip_text("Modelos locales cargados ahora mismo")
         self._tiles["procs"].set_value(count(len(snapshot.processes())))
+        self._tiles["procs"].set_tooltip_text(
+            f"Procesos que coinciden con los grupos monitoreados "
+            f"(de {count(len(snapshot.processes()))} en total)"
+        )
