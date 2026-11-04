@@ -23,7 +23,7 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 
 | ID | Task | Specs | Route | Commit |
 |---|---|---|---|---|
-| T0 | Commit the design artboards and this document | S1 | inline | — |
+| T0 | Commit the design artboards and this document | S1 | inline | 8fd620c |
 | T1 | Shell: MacacoView name, Home first/default, active row, sidebar badges, age pill, collector-error banner, `theme.register_css` | S2 S3 S10 | worker | — |
 | T2 | Cairo widgets: RAM blocks with reservation, motor band with markers, area lanes with shared cursor, ring, arc dial, lamp, version rail + stepper, port matrix (pure layout functions tested) | S3 S5 S7 S9 | worker | — |
 | T3 | Home page: cockpit from existing `*_logica` + T2 widgets; 15-min history buffer for decode/prefill/motor band | S3 S4 S5 S6 S9 S11 | worker | — |
@@ -42,3 +42,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 - L4 (user): wait for the uncommitted Motores work to be committed → owner committed `b7795d9..b1b66af` on main (139 tests OK); branch rebased onto `b1b66af`, suite 139 OK.
 - L5 (user): updates without backend → «Agregar los actualizadores que faltan» (B1, separate task in `pc-ai-local-models`, owned by the session that maintains that repo).
 - L6 (evidence): router `/status` today names engines `abito` (:11002) and `flash` (:11008, parado) while the Gufo engine serves on :11070 — naming mismatch to resolve in T5 with the router owner.
+- L7 (slice): 8fd620c is design assets only (HTML artboards ~9.8k lines, not reviewable code); code slices from T1 on stay at ~400 authored lines per commit.
