@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>MacacoView — 04 Cabina visual · medidores</title>
+<style>
+  :root {
+    /* Gentle palette from gui/pc_ai_monitor/theme.py (same as 01); muted raised to pass WCAG AA. */
+    --bg: #06080f; --element: #0b0d15; --subtle: #0d0f14; --border: #313342;
+    --text: #F3F6F9; --muted: #8B91A1;
+    --accent: #E0C15A; --blue: #7FB4CA; --green: #B7CC85; --warning: #DEBA87;
+    --error: #CB7C94; --selection: #232A40; --purple: #B99BF2; --track: #1b1e2a;
+    --ui: "Cantarell", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Ubuntu Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #020307; color: var(--text); font: 13px/1.4 var(--ui); }
+  .num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  svg text { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .board { width: 1440px; padding: 40px 48px 64px; }
+  .board > section { margin-bottom: 48px; }
+  .board-label { font: 700 11px/1 var(--ui); letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 0 0 14px; }
+
+  /* ---------- identity ---------- */
+  .identity { display: flex; align-items: center; gap: 40px; }
+  .icons { display: flex; align-items: flex-end; gap: 22px; }
+  .wordmark { font: 700 44px/1 var(--mono); letter-spacing: -.02em; }
+  .wordmark b { color: var(--accent); font-weight: 700; }
+  .legend { margin-left: auto; display: flex; gap: 18px; align-items: center; font: 12px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 16px; background: var(--element); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+  /* ---------- status lamps: colour + shape (circle ok, diamond warn, square down) ---------- */
+  .lamp { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; background: var(--green); box-shadow: 0 0 8px rgba(183,204,133,.55); }
+  .lamp.off { background: transparent; border: 1.5px solid var(--muted); box-shadow: none; }
+  .lamp.warn { background: var(--warning); border-radius: 1.5px; transform: rotate(45deg) scale(.9); box-shadow: 0 0 8px rgba(222,186,135,.5); }
+  .lamp.crit { background: var(--error); border-radius: 2px; box-shadow: 0 0 8px rgba(203,124,148,.55); }
+  .ok { color: var(--green); } .warn-c { color: var(--warning); } .crit-c { color: var(--error); } .muted { color: var(--muted); } .acc { color: var(--accent); }
+
+  /* ---------- window chrome (as 01) ---------- */
+  .win { background: var(--bg); border: 1px solid #3a3d4e; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.55); display: flex; flex-direction: column; }
+  .split { display: flex; flex: 1; min-height: 0; }
+  .sidebar { width: 168px; border-right: 1px solid var(--border); background: #080a12; display: flex; flex-direction: column; flex: none; }
+  .hb { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg); flex: none; }
+  .hb .mid { flex: 1; display: flex; justify-content: center; align-items: center; gap: 10px; }
+  .hb .title { font: 700 13px var(--ui); }
+  .hb-btn { width: 30px; height: 30px; border-radius: 6px; border: 0; background: transparent; color: var(--text); display: grid; place-items: center; cursor: pointer; }
+  .hb-btn:hover { background: var(--selection); }
+  .wc { display: flex; gap: 6px; }
+  .wc i { width: 22px; height: 22px; border-radius: 50%; background: #1b1e2a; display: block; }
+  .side-brand { display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+  .nav { list-style: none; margin: 6px; padding: 0; }
+  .navb { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font: 12px var(--ui); color: var(--text); background: none; border: 0; text-align: left; cursor: pointer; }
+  .navb:hover { background: #12151f; }
+  .navb svg { width: 14px; height: 14px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; }
+  .navb[aria-current="page"] { background: var(--selection); }
+  .navb .lamp { margin-left: auto; width: 7px; height: 7px; }
+  .nav hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+  .side-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--border); }
+  .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .scroll { flex: 1; overflow: hidden; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+  /* age-of-measurement pill: the single freshness indicator of a window */
+  .age { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #44502f; color: var(--green); border-radius: 999px; padding: 2px 10px 2px 6px; font: 600 12px var(--mono); background: var(--subtle); }
+  .age.warn { border-color: #5e4d33; color: var(--warning); }
+  .age svg { display: block; }
+
+  /* ---------- cards & controls ---------- */
+  .card { background: var(--element); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+  .btn { font: 600 13px var(--ui); color: var(--text); background: #1a1d29; border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  .btn:hover { background: #222636; }
+  .btn.suggested { background: var(--accent); border-color: var(--accent); color: #06080f; }
+  .btn.suggested:hover { background: #ecd078; }
+  .btn.ghost { background: transparent; }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .ico { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ico:hover { background: #222636; color: var(--text); }
+  .ico.crit { color: var(--error); border-color: #5a3341; }
+  kbd { font: 600 10px var(--mono); border: 1px solid #3a3d4e; border-radius: 4px; padding: 1px 5px; color: var(--muted); background: var(--subtle); }
+  .suggested kbd { color: #06080f; background: rgba(6,8,15,.14); border-color: rgba(6,8,15,.45); }
+
+  /* ---------- instruments ---------- */
+  .inst { min-width: 0; }
+  .inst svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .sweep { animation: sweep 1.6s linear infinite; }
+  .skelr { fill: #1c2030; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes sweep { from { stroke-dashoffset: 14; } to { stroke-dashoffset: -100; } }
+  @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+  /* RAM memory blocks, proportional to GiB */
+  .rambar { display: flex; gap: 3px; height: 100px; }
+  .rambar.s { height: 64px; }
+  .blk { position: relative; border-radius: 6px; min-width: 0; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; border: 1px solid var(--border); }
+  .blk .t { display: flex; align-items: center; gap: 7px; font: 700 14px var(--ui); white-space: nowrap; }
+  .blk .n { font: 600 15px var(--mono); }
+  .blk .cx { height: 3px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; }
+  .blk .cx i { display: block; height: 100%; background: currentColor; opacity: .75; }
+  .blk.on { background: linear-gradient(180deg, #2b2510, #15130a); border: 1.5px solid var(--accent); color: var(--text); box-shadow: inset 0 0 22px rgba(224,193,90,.18); }
+  .blk.on .cx { color: var(--accent); }
+  .blk.otros { background: repeating-linear-gradient(135deg, #151824 0 6px, #1b1f2e 6px 12px); }
+  .blk.ghost { border: 1.5px dashed #7a8094; background: transparent; color: var(--muted); }
+  .blk.libre { border: 1px dashed #2a2e3f; background: transparent; }
+  .blk.down { border: 1.5px dashed var(--error); background: rgba(203,124,148,.06); color: var(--error); }
+  .blk.new { background: linear-gradient(180deg, #232a40, #151a2a); border: 1.5px solid var(--blue); color: var(--text); }
+  .ramtotal { display: flex; justify-content: flex-end; font: 600 11px var(--mono); color: var(--muted); margin-bottom: 5px; }
+
+  .slots { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; }
+  .swbtn { flex-direction: column; gap: 8px; height: 100px; width: 150px; font-size: 16px; }
+
+  .perf { display: grid; grid-template-columns: 1fr 1fr 206px; gap: 12px; align-items: start; }
+  .cluster { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .strip { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; border-top: 1px solid #1f2230; padding-top: 10px; }
+  .reqs { display: flex; align-items: center; gap: 7px; }
+  .reqs .pill { width: 24px; height: 11px; border-radius: 6px; border: 1.5px solid var(--muted); }
+  .reqs .pill.on { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px rgba(224,193,90,.5); }
+  .reqs b { font: 700 18px var(--mono); margin-left: 4px; }
+  .rambars { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; font: 600 12px var(--mono); }
+  .rambars svg { display: block; width: 100%; height: 34px; }
+  .row2 { display: grid; grid-template-columns: 1fr 250px; gap: 12px; flex: 1; min-height: 0; }
+  .col { display: flex; flex-direction: column; gap: 10px; }
+  .perf-card { display: flex; flex-direction: column; gap: 10px; }
+  .grow { flex: 1; min-height: 120px; position: relative; }
+  .grow .inst { position: absolute; inset: 0; }
+  .grow .inst svg { width: 100%; height: 100%; }
+
+  .upd { display: flex; flex-direction: column; justify-content: space-between; gap: 12px; }
+  .crit3 { display: flex; justify-content: center; gap: 12px; }
+  .crit3 span { width: 38px; height: 30px; border-radius: 8px; border: 1px solid #44502f; display: grid; place-items: center; color: var(--green); background: var(--subtle); }
+  .ctxeq { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: center; }
+  .bar2 { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .bar2 i { display: block; height: 100%; border-radius: 4px; }
+  .bar2.w { background: transparent; }
+
+  .inv { display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 9px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 5px 4px 12px; font: 600 12px var(--mono); background: var(--subtle); }
+  .chip.on { border-color: #44502f; }
+  .chip .ico { width: 24px; height: 24px; border-radius: 50%; }
+
+  /* ---------- states ---------- */
+  .states { display: grid; grid-template-columns: repeat(2, 660px); gap: 20px 24px; }
+  .st { background: var(--element); border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 232px; }
+  .st .cap { display: flex; align-items: center; gap: 10px; margin: 0; font: 700 11px var(--ui); letter-spacing: .08em; color: var(--accent); text-transform: uppercase; }
+  .st .cap .age { margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .st .row4 { display: grid; grid-template-columns: 1fr 1fr 100px 100px; gap: 8px; align-items: center; }
+  .st.stale .inst { filter: saturate(0); }
+  .st .body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  .upd-row { display: grid; grid-template-columns: 230px 1fr 96px; gap: 18px; align-items: center; }
+  .stepper { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; }
+  .stepper li { position: relative; flex: 1; display: flex; justify-content: center; }
+  .stepper li + li::before { content: ""; position: absolute; right: 50%; left: -50%; top: 50%; height: 2px; background: #2a2e3f; z-index: 0; }
+  .stepper li.done + li::before, .stepper li.now::before { background: var(--green); }
+  .stepper .dot { position: relative; z-index: 1; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 2px solid #3a3e50; color: var(--muted); }
+  .stepper li.done .dot { background: var(--green); border-color: var(--green); color: #06080f; }
+  .stepper li.now .dot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 12px rgba(224,193,90,.45); }
+  .stepper li.now .dot svg { animation: spin 2.4s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .dialog { width: 560px; align-self: center; background: #11131d; border: 1px solid #3a3d4e; border-radius: 12px; padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .diff { display: grid; grid-template-columns: 1fr 26px; gap: 4px 10px; align-items: center; }
+  .diff .arrow { color: var(--muted); display: grid; place-items: center; }
+  .ctxrow { display: grid; grid-template-columns: auto 1fr 20px 1fr auto; gap: 8px; align-items: center; font: 600 12px var(--mono); }
+  .costrow { display: flex; align-items: center; justify-content: center; gap: 22px; font: 600 14px var(--mono); }
+  .costrow span { display: inline-flex; align-items: center; gap: 7px; }
+  .dialog .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  /* ---------- other pages ---------- */
+  .pages { display: grid; grid-template-columns: repeat(2, 664px); gap: 24px 16px; }
+  .mini { height: 430px; }
+  .mini .scroll { padding: 10px; }
+  .fill { flex: 1; min-height: 0; display: flex; }
+  .tm { display: flex; gap: 3px; flex: 1; min-height: 0; }
+  .tm > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 0; }
+  .cell { border-radius: 5px; padding: 6px 9px; border: 1px solid; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; min-height: 0; overflow: hidden; font: 700 12px var(--ui); }
+  .cell b { font: 600 12px var(--mono); }
+  .cell.big { font-size: 22px; padding: 12px 14px; }
+  .cell.big b { font-size: 34px; }
+  .sparkbox { margin-top: 8px; display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+  .sparkbox .inst svg { height: 64px; }
+  .sparkbox b { font: 700 18px var(--mono); }
+  .stack { display: flex; height: 120px; gap: 3px; width: 100%; }
+  .stack > i { display: block; border-radius: 6px; min-width: 0; }
+  .keys { display: flex; gap: 28px; justify-content: center; font: 700 17px var(--mono); }
+  .keys span { display: inline-flex; align-items: center; gap: 9px; }
+  .keys small { font: 600 13px var(--ui); color: var(--muted); }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .sessions { display: flex; gap: 22px; justify-content: center; }
+  .sessions span { position: relative; width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--green); display: grid; place-items: center; background: rgba(183,204,133,.12); }
+  .sessions span i { width: 12px; height: 12px; border-radius: 50%; background: var(--green); }
+  .centerc { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 30px; }
+  .tok { display: grid; grid-template-columns: 1fr 188px; gap: 10px; flex: 1; min-height: 0; }
+  .tokleft { display: grid; grid-template-columns: 250px 1fr; gap: 12px; align-items: center; }
+  .leg { display: flex; flex-direction: column; gap: 12px; font: 600 13px var(--mono); }
+  .leg span { display: flex; align-items: center; gap: 8px; }
+  .cols { display: flex; justify-content: space-around; align-items: flex-end; height: 100%; }
+  .cols div { display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; font: 600 12px var(--mono); color: var(--muted); }
+  .cols .col-t { width: 54px; flex: 1; border-radius: 6px; background: var(--track); display: flex; align-items: flex-end; overflow: hidden; }
+  .cols .col-t i { display: block; width: 100%; border-radius: 6px 6px 0 0; }
+  .cols b { font: 700 16px var(--mono); color: var(--text); }
+  .matrix { display: grid; grid-template-columns: repeat(5, 1fr); grid-auto-rows: 1fr; gap: 8px; flex: 1; min-height: 0; }
+  .port { border-radius: 8px; border: 1.5px solid #2f4a57; background: rgba(127,180,202,.1); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font: 700 16px var(--mono); color: var(--text); }
+  .port svg { width: 18px; height: 18px; }
+  .port.exp { border-color: var(--warning); background: rgba(222,186,135,.2); }
+  .port.exp svg { color: var(--warning); }
+  .port:not(.exp) svg { color: var(--blue); }
+  .hrow { display: grid; grid-template-columns: 118px 1fr 56px; gap: 10px; align-items: center; font: 600 13px var(--mono); }
+  .hrow .tr { height: 30px; background: var(--track); border-radius: 6px; overflow: hidden; }
+  .hrow .tr i { display: block; height: 100%; border-radius: 6px; min-width: 6px; }
+  .hrow b { text-align: right; }
+  .hlist { flex: 1; display: flex; flex-direction: column; justify-content: space-around; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main class="board" aria-label="MacacoView, dirección 04: cabina visual con medidores">
+
+<!-- ================= A. Identity ================= -->
+<section aria-label="Identidad">
+  <div class="identity">
+    <div class="icons" role="group" aria-label="Ícono de la app en 128, 48 y 16 px">
+      <svg width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Ícono MacacoView 128 px"><use href="#icon"/></svg>
+      <svg width="48" height="48" viewBox="0 0 128 128" role="img" aria-label="Ícono 48 px"><use href="#icon"/></svg>
+      <svg width="16" height="16" viewBox="0 0 16 16" role="img" aria-label="Ícono simbólico 16 px"><use href="#icon-symbolic"/></svg>
+    </div>
+    <div class="wordmark">macaco<b>view</b></div>
+    <div class="legend" role="group" aria-label="Color y forma de estado: verde círculo ok, ámbar rombo viejo, rojo cuadrado caído">
+      <span><i class="lamp"></i>ok</span><span><i class="lamp warn"></i>viejo</span><span><i class="lamp crit"></i>caído</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= B. Motores at real size ================= -->
+<section aria-labelledby="mot-h">
+  <p class="board-label" id="mot-h">Motores</p>
+  <div class="win" style="width:1180px;height:800px" role="region" aria-label="Ventana Motores, 1180 por 800">
+    <div class="split">
+      <nav class="sidebar" aria-label="Secciones">
+        <div class="hb"><div class="side-brand"><svg width="22" height="22" viewBox="0 0 128 128" role="img" aria-label="MacacoView"><use href="#icon"/></svg></div></div>
+        <ul class="nav">
+          <li><button class="navb" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="4" width="12" height="8" rx="1.5"/><path d="M5 8h2M9 8h2"/></svg>Motores<i class="lamp" role="img" aria-label="Gufo activo" title="Gufo activo"></i></button></li>
+          <li><button class="navb"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13V9M6 13V5M10 13V7M14 13V3"/></svg>Recursos</button></li>
+          <li><button class="navb"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h4l2-4 2 8 2-4h2"/></svg>Router</button></li>
+          <li><button class="navb"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5V8l4 2"/></svg>Tokens</button></li>
+          <li><button class="navb"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5h10M3 8h10M3 11h10"/><circle cx="5" cy="5" r=".8"/></svg>Puertos<i class="lamp warn" role="img" aria-label="2 puertos expuestos" title="2 puertos expuestos"></i></button></li>
+          <li><button class="navb"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5 6h6M9 9H5"/></svg>Procesos</button></li>
+          <hr>
+          <li><button class="navb" aria-label="Configuración" title="Configuración"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg></button></li>
+        </ul>
+        <div class="side-foot" id="sidefoot"></div>
+      </nav>
+      <div class="content">
+        <header class="hb" aria-label="Motores">
+          <button class="hb-btn" aria-label="Ocultar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
+          <div class="mid">
+            <span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="#2a3a2a" stroke-width="2"/><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" pathLength="30" stroke-dasharray="4 26" transform="rotate(-90 8 8)"/></svg>4 s</span>
+          </div>
+          <button class="hb-btn" aria-label="Menú principal"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button>
+          <div class="wc" aria-hidden="true"><i></i><i></i><i></i></div>
+        </header>
+        <div class="scroll">
+
+          <!-- Engine switch: two slots as memory blocks inside the 122 GiB RAM bar -->
+          <article class="card" aria-label="Motor activo: Gufo, 49.2 GiB de 122 GiB de RAM">
+            <div class="slots">
+              <div>
+                <div class="ramtotal" title="RAM total 122 GiB">122G</div>
+                <div id="ram-main"></div>
+              </div>
+              <button class="btn swbtn" aria-label="Cambiar a Abito" title="Cambiar a Abito (Qwen3.6-35B-A3B IQ4_XS · :11002 · ctx 65 536). Pide confirmación: ≈ 85 s sin motor local y se cortan los pedidos en curso."><span style="font-size:26px;line-height:1">⇄</span><kbd>Ctrl E</kbd></button>
+            </div>
+          </article>
+
+          <div class="row2">
+            <!-- Live performance -->
+            <article class="card perf-card" aria-label="Rendimiento en vivo de Gufo, ventana de 5 minutos">
+              <div class="perf">
+                <div id="g-decode"></div>
+                <div id="g-prefill"></div>
+                <div class="cluster">
+                  <div id="r-cache"></div>
+                  <div id="r-kv"></div>
+                  <div id="d-mtp"></div>
+                  <div id="l-gpu"></div>
+                </div>
+              </div>
+              <div class="grow" id="a-decode"></div>
+              <div class="strip">
+                <div class="reqs" role="img" aria-label="1 pedido en curso de 2 slots" title="pedidos en curso: 1 de 2 slots · prompt 1.4k tok">
+                  <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="var(--muted)" stroke-width="1.5" aria-hidden="true"><path d="M2 8h9M8 4.5L11.5 8 8 11.5M14 3v10"/></svg>
+                  <i class="pill on"></i><i class="pill"></i><b>1</b>
+                </div>
+                <div class="rambars" id="rambars"></div>
+              </div>
+            </article>
+
+            <!-- Engine update -->
+            <article class="card upd" aria-label="Actualización de Gufo: b6532 a b6587 disponible">
+              <div id="rail-main" title="Corriendo gufo:b6532 (rev a3f91c2, sha256:4be1…). Disponible gufo:b6587."></div>
+              <div class="crit3" role="img" aria-label="Criterios de reversión, todos en verde: salud, contexto, descarga" title="se revierte sólo si falla la salud, el contexto servido no coincide o falla la descarga; nunca por velocidad">
+                <span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M1.5 8h3l1.5-4 3 8 1.5-4h4"/></svg></span>
+                <span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 8h12M2 5v6M14 5v6"/></svg></span>
+                <span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 2v8M4.5 7L8 10.5 11.5 7M3 13.5h10"/></svg></span>
+              </div>
+              <div class="ctxeq" role="img" aria-label="Contexto servido 131 072 igual al configurado 131 072" title="contexto servido 131 072 = configurado 131 072">
+                <div class="bar2"><i style="width:100%;background:var(--green)"></i></div><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--green)" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>
+                <div class="bar2"><i style="width:100%;background:var(--blue)"></i></div><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--green)" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>
+              </div>
+              <button class="btn suggested" style="padding:10px 12px;font-size:14px" title="Actualizar Gufo a gufo:b6587. Pide confirmación: ≈ 85 s sin motor local, se cortan los pedidos en curso, el cambio de motor se bloquea mientras dura."><span>Actualizar</span><kbd>Ctrl U</kbd></button>
+            </article>
+          </div>
+
+          <!-- Inventory -->
+          <article class="card" aria-label="Motores locales" style="padding:10px 12px">
+            <div class="inv" id="inv"></div>
+          </article>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= C. States ================= -->
+<section aria-labelledby="st-h">
+  <p class="board-label" id="st-h">Estados</p>
+  <div class="states">
+    <article class="st" aria-label="Estado cargando: medidores con arcos vacíos" aria-busy="true"><p class="cap">cargando</p><div class="body"><div class="row4" id="s-load"></div></div></article>
+    <article class="st stale" aria-label="Estado medición vieja: medidores en gris, prefill y decode sin datos"><p class="cap">viejo<span class="age warn" role="img" aria-label="Edad de la medición: 3 minutos" title="edad de la medición"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/></svg>3 min</span></p><div class="body"><div class="row4" id="s-stale"></div></div></article>
+    <article class="st" aria-label="Estado motor caído: Gufo con lámpara roja y hueco vacío en la barra de RAM"><p class="cap crit-c">caído</p><div class="body"><div class="slots"><div id="s-down"></div><button class="btn suggested swbtn" style="width:150px;height:64px" title="Encender Gufo (:11070). Tarda ≈ 85 s en cargar."><span>Encender</span></button></div></div></article>
+    <article class="st" aria-label="Estado actualización en curso: paso 2 de 4, reiniciando"><p class="cap">actualizando</p><div class="body"><div class="upd-row"><div id="s-rail-up"></div><ol class="stepper" id="s-steps" aria-label="Pasos: descargar, reiniciar, verificar, listo o volver"></ol><div id="s-prog"></div></div></div></article>
+    <article class="st" aria-label="Estado revertido: b6587 rechazada, vuelve a b6532 por contexto distinto"><p class="cap warn-c">revertido</p><div class="body"><div class="upd-row" style="grid-template-columns:230px 1fr auto"><div id="s-rail-rb"></div><div class="ctxeq" id="s-ctx-rb" role="img" aria-label="Contexto servido 65 536, distinto del configurado 131 072" title="contexto servido 65 536 ≠ configurado 131 072 → vuelve a gufo:b6532"></div><div style="display:flex;gap:8px;align-items:center"><button class="ico" aria-label="Ver log" title="Ver log del intento"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 2.5h10v11H3zM5.5 6h5M5.5 9h5"/></svg></button><button class="btn ghost">Reintentar</button></div></div></div></article>
+    <article class="st" aria-label="Estado confirmación del cambio de motor"><p class="cap">confirmar</p>
+      <div class="dialog" role="dialog" aria-label="Cambiar a Abito: diferencia de memoria y contexto">
+        <div class="diff">
+          <div id="s-before" title="antes: Gufo 49.2 GiB"></div><span></span>
+          <span class="arrow" style="grid-column:1/3;height:16px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 2v11M3.5 9L8 13.5 12.5 9"/></svg></span>
+          <div id="s-after" title="después: Abito 19.8 GiB, quedan 80.5 GiB libres"></div><span></span>
+        </div>
+        <div class="ctxrow" role="img" aria-label="Contexto baja de 131 072 a 65 536" title="contexto 131 072 → 65 536">
+          <span>131k</span><div class="bar2"><i style="width:100%;background:var(--blue)"></i></div>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--muted)" stroke-width="1.8" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg>
+          <div class="bar2"><i style="width:50%;background:var(--warning)"></i></div><span class="warn-c">65k</span>
+        </div>
+        <div class="costrow">
+          <span title="carga ≈ 85 s sin motor local"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="var(--warning)" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>≈ 85 s</span>
+          <span title="los pedidos en curso se cortan" role="img" aria-label="Los pedidos en curso se cortan"><svg width="30" height="16" viewBox="0 0 30 16" fill="none" stroke="var(--error)" stroke-width="1.6" aria-hidden="true"><rect x="1" y="4.5" width="10" height="7" rx="3.5"/><rect x="19" y="4.5" width="10" height="7" rx="3.5"/><path d="M14 2l2 12" stroke-linecap="round"/></svg></span>
+        </div>
+        <div class="row"><button class="btn">Cancelar</button><button class="btn suggested">Cambiar</button></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ================= D. Other pages ================= -->
+<section aria-labelledby="pg-h">
+  <p class="board-label" id="pg-h">Páginas</p>
+  <div class="pages">
+
+    <!-- Recursos: Treemap (existing Cairo widget) + Sparkline (existing) -->
+    <div class="win mini" role="region" aria-label="Página Recursos: mapa de memoria por grupo e historial de RAM">
+      <div class="content">
+        <header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="mid"><span class="title">Recursos</span></div><span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición">4 s</span><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>
+        <div class="scroll">
+          <div class="card fill" style="flex-direction:column;padding:10px">
+            <div class="tm" role="img" aria-label="Treemap de memoria RSS: modelos 49.2 GiB, Pi 6.8, Otros 4.6, Firefox 4.3, Sistema 3.9, Hermes 2.1">
+              <div style="flex:49.2">
+                <div class="cell big" style="flex:1;background:rgba(224,193,90,.22);border-color:var(--accent)" title="modelos · 49.2 GiB"><span>modelos</span><b>49.2G</b></div>
+              </div>
+              <div style="flex:21.7">
+                <div class="cell" style="flex:6.8;background:rgba(143,184,221,.2);border-color:#8FB8DD" title="Pi · 6.8 GiB"><span>Pi</span><b>6.8G</b></div>
+                <div class="cell" style="flex:4.6;background:rgba(131,148,163,.22);border-color:#8394A3" title="Otros · 4.6 GiB"><span>Otros</span><b>4.6G</b></div>
+                <div class="cell" style="flex:4.3;background:rgba(185,155,242,.2);border-color:var(--purple)" title="Firefox · 4.3 GiB"><span>Firefox</span><b>4.3G</b></div>
+                <div class="cell" style="flex:3.9;background:rgba(163,181,214,.2);border-color:#A3B5D6" title="Sistema · 3.9 GiB"><span>Sistema</span><b>3.9G</b></div>
+                <div class="cell" style="flex:2.1;background:rgba(164,218,167,.2);border-color:#A4DAA7;flex-direction:row;align-items:center" title="Hermes · 2.1 GiB"><span>Hermes</span><b>2.1G</b></div>
+              </div>
+            </div>
+            <div class="sparkbox"><div class="inst" id="sp-ram"></div><b class="num" title="RAM en uso 70.9 de 122 GiB">70.9G</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Router: stacked bar (new widget) + session dots (new) -->
+    <div class="win mini" role="region" aria-label="Página Router: reparto local 87 por ciento, cloud 9, cola 4, tres sesiones activas">
+      <div class="content">
+        <header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="mid"><span class="title">Router</span></div><span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición">4 s</span><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>
+        <div class="scroll">
+          <div class="card fill" style="padding:18px 22px">
+            <div class="centerc">
+              <div class="stack" role="img" aria-label="Rutas: local 87 %, cloud 9 %, cola 4 %">
+                <i style="flex:87;background:var(--accent)" title="local (gufo) · 87 %"></i>
+                <i style="flex:9;background:var(--blue)" title="cloud · 9 %"></i>
+                <i style="flex:4;background:var(--purple)" title="cola · 4 %"></i>
+              </div>
+              <div class="keys">
+                <span><i class="sw" style="background:var(--accent)"></i>87%<small>local</small></span>
+                <span><i class="sw" style="background:var(--blue)"></i>9%<small>cloud</small></span>
+                <span><i class="sw" style="background:var(--purple)"></i>4%<small>cola</small></span>
+              </div>
+              <div class="sessions" role="img" aria-label="3 sesiones activas" title="3 sesiones activas"><span><i></i></span><span><i></i></span><span><i></i></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tokens: Dona (existing) + Columnas (existing) -->
+    <div class="win mini" role="region" aria-label="Página Tokens: dona por proveedor y ventanas de Codex">
+      <div class="content">
+        <header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="mid"><span class="title">Tokens</span></div><span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición">4 s</span><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>
+        <div class="scroll">
+          <div class="tok">
+            <div class="card tokleft">
+              <div class="inst" id="dn-tok"></div>
+              <div class="leg">
+                <span><i class="sw" style="background:var(--accent)"></i>gufo 11.4M</span>
+                <span><i class="sw" style="background:var(--blue)"></i>codex 4.4M</span>
+                <span><i class="sw" style="background:var(--purple)"></i>anthropic 2.6M</span>
+              </div>
+            </div>
+            <div class="card" style="padding:14px 10px 10px">
+              <div class="cols" role="img" aria-label="Ventanas de Codex: 5 horas 38 %, semanal 61 %" title="suscripción Codex">
+                <div title="ventana 5 h · 38 %"><b>38%</b><span class="col-t"><i style="height:38%;background:var(--green)"></i></span>5 h</div>
+                <div title="ventana semanal · 61 %"><b>61%</b><span class="col-t"><i style="height:61%;background:var(--warning)"></i></span>7 d</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Puertos: port matrix (new widget) -->
+    <div class="win mini" role="region" aria-label="Página Puertos: 9 puertos escuchando, 2 expuestos en todas las interfaces (22 y 5353)">
+      <div class="content">
+        <header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="mid"><span class="title">Puertos</span></div><span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición">4 s</span><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>
+        <div class="scroll">
+          <div class="card fill" style="flex-direction:column;gap:10px;padding:10px">
+            <div class="matrix" id="matrix" role="img" aria-label="9 puertos: 7 solo local, 2 en todas las interfaces (22 y 5353)"></div>
+            <div class="keys" style="font-size:13px;gap:22px"><span><i class="sw" style="background:rgba(127,180,202,.5);border:1.5px solid var(--blue)"></i>local</span><span><i class="sw" style="background:rgba(222,186,135,.6);border:1.5px solid var(--warning)"></i>todas</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Procesos: horizontal bars (new orientation of Columnas) -->
+    <div class="win mini" role="region" aria-label="Página Procesos: top 5 por RAM, llama-server 49.2 GiB">
+      <div class="content">
+        <header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="mid"><span class="title">Procesos</span></div><span class="age" role="img" aria-label="Edad de la medición: 4 segundos" title="edad de la medición">4 s</span><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>
+        <div class="scroll">
+          <div class="card fill" style="padding:14px 16px">
+            <div class="hlist" role="img" aria-label="Procesos por RAM: llama-server 49.2 GiB, firefox 2.8, node 1.9, hermes 1.6, gnome-shell 1.1">
+              <div class="hrow" title="PID 48211 · llama-server -m qwen3.8-flash-next-Q4_K_XL.gguf --port 11070 -c 131072"><span>llama-server</span><span class="tr"><i style="width:100%;background:var(--accent)"></i></span><b>49.2G</b></div>
+              <div class="hrow" title="PID 3120 · firefox"><span>firefox</span><span class="tr"><i style="width:5.7%;background:var(--blue)"></i></span><b>2.8G</b></div>
+              <div class="hrow" title="PID 41877 · node pi --session 7f2c"><span>node</span><span class="tr"><i style="width:3.9%;background:var(--blue)"></i></span><b>1.9G</b></div>
+              <div class="hrow" title="PID 2214 · hermes serve --port 7420"><span>hermes</span><span class="tr"><i style="width:3.3%;background:var(--blue)"></i></span><b>1.6G</b></div>
+              <div class="hrow" title="PID 1873 · gnome-shell"><span>gnome-shell</span><span class="tr"><i style="width:2.2%;background:var(--blue)"></i></span><b>1.1G</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</main>
+
+<!-- shared icon symbols (copied from 01) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ig" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1e2e"/><stop offset="1" stop-color="#06080f"/></linearGradient>
+    <symbol id="icon" viewBox="0 0 128 128">
+      <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#ig)" stroke="#313342" stroke-width="2"/>
+      <circle cx="28" cy="58" r="13" fill="#7a5a40"/><circle cx="28" cy="58" r="6.5" fill="#d79c86"/>
+      <circle cx="100" cy="58" r="13" fill="#7a5a40"/><circle cx="100" cy="58" r="6.5" fill="#d79c86"/>
+      <circle cx="64" cy="60" r="38" fill="#8a6848"/>
+      <path d="M64 34c-16 0-27 9-27 22 0 9 4 15 9 20 4 4 6 9 18 9s14-5 18-9c5-5 9-11 9-20 0-13-11-22-27-22z" fill="#e3ad97"/>
+      <circle cx="51" cy="54" r="9" fill="#06080f"/><circle cx="77" cy="54" r="9" fill="#06080f"/>
+      <circle cx="51" cy="54" r="5.5" fill="none" stroke="#E0C15A" stroke-width="2.4"/><circle cx="77" cy="54" r="5.5" fill="none" stroke="#E0C15A" stroke-width="2.4"/>
+      <polyline points="44,76 53,76 57,69 62,82 67,72 71,76 84,76" fill="none" stroke="#06080f" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-symbolic" viewBox="0 0 16 16">
+      <circle cx="3" cy="7.5" r="1.8" fill="#F3F6F9"/><circle cx="13" cy="7.5" r="1.8" fill="#F3F6F9"/>
+      <circle cx="8" cy="8" r="5.6" fill="#F3F6F9"/>
+      <circle cx="6.2" cy="7" r="1.1" fill="#06080f"/><circle cx="9.8" cy="7" r="1.1" fill="#06080f"/>
+      <polyline points="5.2,10.4 6.8,10.4 7.6,9.2 8.4,11.2 9.2,10.4 10.8,10.4" fill="none" stroke="#06080f" stroke-width="1"/>
+    </symbol>
+  </defs>
+</svg>
+
+<script>
+(function () {
+  'use strict';
+  const NS = 'http://www.w3.org/2000/svg';
+  const C = { accent: '#E0C15A', blue: '#7FB4CA', green: '#B7CC85', warn: '#DEBA87', err: '#CB7C94', text: '#F3F6F9', muted: '#8B91A1', track: '#1b1e2a', grey: '#4a4e5e', purple: '#B99BF2' };
+
+  // ---- tiny DOM helpers: everything is built with createElement(NS), never with markup strings ----
+  function S(tag, attrs, text) {
+    const e = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function H(tag, attrs, text) {
+    const e = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function mount(id, node) { document.getElementById(id).replaceChildren(node); }
+  function wrap(svg, title) { const w = H('div', { class: 'inst' }); if (title) w.setAttribute('title', title); w.append(svg); return w; }
+
+  // ---- geometry ----
+  function pt(cx, cy, r, deg) { const a = deg * Math.PI / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; }
+  function arc(cx, cy, r, d0, d1) {
+    const p = pt(cx, cy, r, d0), q = pt(cx, cy, r, d1);
+    return 'M' + p[0].toFixed(2) + ' ' + p[1].toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + ((d1 - d0) > 180 ? 1 : 0) + ' 1 ' + q[0].toFixed(2) + ' ' + q[1].toFixed(2);
+  }
+
+  // ---- ArcGauge (NEW Cairo widget): 240° dial, needle at value, 5-min range as a band on the arc ----
+  const A0 = 150, SWEEP = 240;
+  const PRESET = {
+    L: { w: 230, h: 186, cx: 115, cy: 102, r: 80, sw: 12, inner: 66, tick: [91, 97], needle: 68, hub: 7, numY: 150, numFs: 30, lblY: 173, lblFs: 12 },
+    S: { w: 100, h: 100, cx: 50, cy: 44, r: 33, sw: 7, inner: 0, tick: null, needle: 27, hub: 4, numY: 70, numFs: 16, lblY: 90, lblFs: 11 }
+  };
+  function gauge(c) {
+    const P = PRESET[c.size || 'L'];
+    const mode = c.mode || 'live';
+    const live = mode === 'live';
+    const col = mode === 'stale' ? C.grey : c.color;
+    const ang = function (v) { return A0 + SWEEP * Math.max(0, Math.min(1, v / c.max)); };
+    const svg = S('svg', { viewBox: '0 0 ' + P.w + ' ' + P.h, role: 'img', 'aria-label': c.aria });
+    if (P.tick) {
+      for (let i = 0; i <= 8; i++) {
+        const a = A0 + SWEEP * i / 8, p = pt(P.cx, P.cy, P.tick[0], a), q = pt(P.cx, P.cy, P.tick[1] + (i % 2 ? 0 : 2), a);
+        svg.append(S('line', { x1: p[0].toFixed(1), y1: p[1].toFixed(1), x2: q[0].toFixed(1), y2: q[1].toFixed(1), stroke: '#3a3e50', 'stroke-width': i % 2 ? 1 : 1.6 }));
+      }
+    }
+    const d = arc(P.cx, P.cy, P.r, A0, A0 + SWEEP);
+    svg.append(S('path', { d: d, fill: 'none', stroke: C.track, 'stroke-width': P.sw, 'stroke-linecap': 'round' }));
+    if (mode === 'loading') {
+      svg.append(S('path', { d: d, class: 'sweep', fill: 'none', stroke: C.blue, 'stroke-opacity': .55, 'stroke-width': P.sw, 'stroke-linecap': 'round', pathLength: 100, 'stroke-dasharray': '14 100' }));
+      svg.append(S('rect', { class: 'skelr', x: P.cx - 40, y: P.numY - 24, width: 80, height: 26, rx: 5 }));
+      svg.append(S('rect', { class: 'skelr', x: P.cx - 22, y: P.lblY - 10, width: 44, height: 10, rx: 4 }));
+      return wrap(svg, c.title);
+    }
+    if (live && c.lo != null) svg.append(S('path', { d: arc(P.cx, P.cy, P.r, ang(c.lo), ang(c.hi)), fill: 'none', stroke: col, 'stroke-opacity': .9, 'stroke-width': P.sw }));
+    if (live && P.inner) svg.append(S('path', { d: arc(P.cx, P.cy, P.inner, A0, ang(c.value)), fill: 'none', stroke: col, 'stroke-opacity': .55, 'stroke-width': 3, 'stroke-linecap': 'round' }));
+    if (live) {
+      const a = ang(c.value) * Math.PI / 180, tip = pt(P.cx, P.cy, P.needle, ang(c.value));
+      const bw = P.hub * .55, bx = Math.cos(a + Math.PI / 2) * bw, by = Math.sin(a + Math.PI / 2) * bw;
+      svg.append(S('polygon', { points: tip[0].toFixed(1) + ',' + tip[1].toFixed(1) + ' ' + (P.cx + bx).toFixed(1) + ',' + (P.cy + by).toFixed(1) + ' ' + (P.cx - bx).toFixed(1) + ',' + (P.cy - by).toFixed(1), fill: C.text, stroke: C.text, 'stroke-linejoin': 'round' }));
+      svg.append(S('circle', { cx: P.cx, cy: P.cy, r: P.hub, fill: '#06080f', stroke: C.text, 'stroke-width': 2 }));
+      svg.append(S('text', { x: P.cx, y: P.numY, 'text-anchor': 'middle', 'font-size': P.numFs, 'font-weight': 700, fill: C.text }, c.num));
+    } else {
+      svg.append(S('text', { x: P.cx, y: P.numY - 4, 'text-anchor': 'middle', 'font-size': c.size === 'S' ? 11 : 16, fill: C.muted }, 'sin datos'));
+    }
+    const lbl = S('text', { x: P.cx, y: P.lblY, 'text-anchor': 'middle', 'font-size': P.lblFs, fill: C.muted });
+    if (c.label) lbl.append(S('tspan', { 'font-weight': 700 }, c.label));
+    if (c.unit) lbl.append(S('tspan', { dx: 8 }, c.unit));
+    svg.append(lbl);
+    return wrap(svg, c.title);
+  }
+
+  // ---- Ring: single-value donut (Dona widget with one slice + track) ----
+  function ring(c) {
+    const cx = 50, cy = 50, r = 38, sw = 10, mode = c.mode || 'live';
+    const svg = S('svg', { viewBox: '0 0 100 100', role: 'img', 'aria-label': c.aria });
+    svg.append(S('circle', { cx: cx, cy: cy, r: r, fill: 'none', stroke: C.track, 'stroke-width': sw }));
+    if (mode === 'loading') {
+      svg.append(S('circle', { cx: cx, cy: cy, r: r, class: 'sweep', fill: 'none', stroke: C.blue, 'stroke-opacity': .55, 'stroke-width': sw, 'stroke-linecap': 'round', pathLength: 100, 'stroke-dasharray': '14 100', transform: 'rotate(-90 50 50)' }));
+      svg.append(S('rect', { class: 'skelr', x: 33, y: 41, width: 34, height: 16, rx: 4 }));
+      return wrap(svg, c.title);
+    }
+    const col = mode === 'stale' ? C.grey : c.color;
+    svg.append(c.pct >= .999
+      ? S('circle', { cx: cx, cy: cy, r: r, fill: 'none', stroke: col, 'stroke-width': sw })
+      : S('path', { d: arc(cx, cy, r, -90, -90 + 360 * c.pct), fill: 'none', stroke: col, 'stroke-width': sw, 'stroke-linecap': 'round' }));
+    svg.append(S('text', { x: cx, y: c.label ? 54 : 57, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 700, fill: mode === 'stale' ? C.muted : C.text }, c.num));
+    if (c.label) svg.append(S('text', { x: cx, y: 70, 'text-anchor': 'middle', 'font-size': 10.5, 'font-weight': 700, fill: C.muted }, c.label));
+    return wrap(svg, c.title);
+  }
+
+  // ---- Area chart (NEW: Sparkline + filled area + range band + end dot) ----
+  let uid = 0;
+  function area(c) {
+    const w = c.w, h = c.h, n = c.data.length, id = 'ag' + (uid++);
+    const x = function (i) { return 4 + i * (w - 8) / (n - 1); };
+    const y = function (v) { return h - 6 - (v - c.min) / (c.max - c.min) * (h - 12); };
+    const svg = S('svg', { viewBox: '0 0 ' + w + ' ' + h, preserveAspectRatio: 'none', role: 'img', 'aria-label': c.aria });
+    const defs = S('defs'), g = S('linearGradient', { id: id, x1: 0, y1: 0, x2: 0, y2: 1 });
+    g.append(S('stop', { offset: 0, 'stop-color': c.color, 'stop-opacity': .38 }), S('stop', { offset: 1, 'stop-color': c.color, 'stop-opacity': 0 }));
+    defs.append(g); svg.append(defs);
+    if (c.grid) [0, .5, 1].forEach(function (f) { svg.append(S('line', { x1: 0, x2: w, y1: (6 + f * (h - 12)).toFixed(1), y2: (6 + f * (h - 12)).toFixed(1), stroke: '#232738', 'stroke-dasharray': '3 5' })); });
+    if (c.lo != null) svg.append(S('rect', { x: 0, width: w, y: y(c.hi).toFixed(1), height: (y(c.lo) - y(c.hi)).toFixed(1), fill: c.color, 'fill-opacity': .08 }));
+    const pts = c.data.map(function (v, i) { return x(i).toFixed(1) + ',' + y(v).toFixed(1); });
+    svg.append(S('polygon', { points: pts.join(' ') + ' ' + x(n - 1).toFixed(1) + ',' + h + ' ' + x(0).toFixed(1) + ',' + h, fill: 'url(#' + id + ')' }));
+    svg.append(S('polyline', { points: pts.join(' '), fill: 'none', stroke: c.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' }));
+    const lx = x(n - 1), ly = y(c.data[n - 1]);
+    svg.append(S('circle', { cx: lx.toFixed(1), cy: ly.toFixed(1), r: 4.5, fill: c.color, stroke: '#06080f', 'stroke-width': 2 }));
+    return wrap(svg, c.title);
+  }
+
+  // ---- Donut by provider (Dona widget) ----
+  function donut(segs, size, centerText) {
+    const cx = size / 2, r = size / 2 - 22, sw = 30, total = segs.reduce(function (a, s) { return a + s.v; }, 0);
+    const svg = S('svg', { viewBox: '0 0 ' + size + ' ' + size, role: 'img', 'aria-label': 'Tokens por proveedor: gufo local 11.4 millones, openai-codex 4.4, anthropic 2.6' });
+    let a = -90;
+    segs.forEach(function (s) {
+      const span = s.v / total * 360;
+      svg.append(S('path', { d: arc(cx, cx, r, a + 1.5, a + span - 1.5), fill: 'none', stroke: s.color, 'stroke-width': sw }));
+      a += span;
+    });
+    svg.append(S('text', { x: cx, y: cx + 10, 'text-anchor': 'middle', 'font-size': 32, 'font-weight': 700, fill: C.text }, centerText));
+    return wrap(svg, 'local gufo 11.4M · openai-codex 4.4M · anthropic 2.6M');
+  }
+
+  // ---- RAM memory blocks (NEW widget): width proportional to GiB of 122 ----
+  function ramBar(segs, small) {
+    const bar = H('div', { class: 'rambar' + (small ? ' s' : ''), role: 'img', 'aria-label': segs.aria });
+    segs.items.forEach(function (s) {
+      const b = H('div', { class: 'blk ' + s.cls, title: s.title || '' });
+      b.style.flex = String(s.gib);
+      if (s.name) {
+        const t = H('div', { class: 't' });
+        t.append(H('i', { class: 'lamp' + (s.lamp ? ' ' + s.lamp : '') }), document.createTextNode(s.name));
+        b.append(t);
+        if (s.num) b.append(H('div', { class: 'n' }, s.num));
+        if (s.ctx) { const cx = H('div', { class: 'cx' }); const f = H('i'); f.style.width = (s.ctx * 100) + '%'; cx.append(f); b.append(cx); }
+      }
+      bar.append(b);
+    });
+    return bar;
+  }
+  const GUFO = 49.2, ABITO = 19.8, OTROS = 21.7, TOTAL = 122;
+
+  // ---- Version rail (NEW): running ● ── ○ available ----
+  function rail(c) {
+    const svg = S('svg', { viewBox: '0 0 230 64', role: 'img', 'aria-label': c.aria });
+    const xa = 34, xb = 196, y = 22;
+    svg.append(S('line', { x1: xa + 12, x2: xb - 12, y1: y, y2: y, stroke: '#3a3e50', 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-dasharray': c.mode === 'up' ? 'none' : '2 7' }));
+    if (c.mode === 'up') svg.append(S('line', { x1: xa + 12, x2: 120, y1: y, y2: y, stroke: C.accent, 'stroke-width': 3, 'stroke-linecap': 'round' }));
+    else if (c.mode !== 'rb') svg.append(S('path', { d: 'M108 14l8 8-8 8', fill: 'none', stroke: C.muted, 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    svg.append(S('circle', { cx: xa, cy: y, r: 12, fill: C.green, 'fill-opacity': .18 }), S('circle', { cx: xa, cy: y, r: 7, fill: C.green }));
+    const bcol = c.mode === 'rb' ? C.warn : C.accent;
+    svg.append(S('circle', { cx: xb, cy: y, r: 11, fill: 'none', stroke: bcol, 'stroke-width': 2.5, 'stroke-dasharray': c.mode === 'rb' ? '4 3' : 'none' }));
+    if (c.mode === 'rb') svg.append(S('path', { d: 'M189 15l14 14M203 15l-14 14', stroke: C.warn, 'stroke-width': 2.6, 'stroke-linecap': 'round' }));
+    svg.append(S('text', { x: xa, y: 56, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 600, fill: C.text }, 'b6532'));
+    const t = S('text', { x: xb, y: 56, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 600, fill: bcol }, 'b6587');
+    if (c.mode === 'rb') t.setAttribute('text-decoration', 'line-through');
+    svg.append(t);
+    return wrap(svg, c.title);
+  }
+
+  // ---- icons (stroke paths on a 16 grid) ----
+  const ICON = {
+    check: 'M3 8.5l3.2 3.2L13 4.5', refresh: 'M13 8a5 5 0 1 1-1.6-3.7M13 2.5v3h-3', shield: 'M8 1.8l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6v-4zM5.8 8l1.6 1.6 3-3.2', flag: 'M4 14V2.5M4 3h8l-1.6 2.6L12 8.2H4',
+    power: 'M8 2v6M4.6 4.2a5.5 5.5 0 1 0 6.8 0', play: 'M5 3l8 5-8 5z'
+  };
+  function icon(name, size) { const s = S('svg', { width: size || 14, height: size || 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' }); s.append(S('path', { d: ICON[name] })); return s; }
+
+  // =============== MOTORES ===============
+  const GAUGE_DECODE = { size: 'L', max: 80, value: 47.8, lo: 41.2, hi: 54.0, color: C.accent, num: '47.8', unit: 'tok/s', label: 'decode',
+    aria: 'Decode 47.8 tokens por segundo, rango de 5 minutos 41.2 a 54.0', title: 'decode 47.8 tok/s · rango 5 min 41.2–54.0 · derivado de contadores' };
+  const GAUGE_PREFILL = { size: 'L', max: 1500, value: 1046, lo: 912, hi: 1098, color: C.blue, num: '1 046', unit: 'tok/s', label: 'prefill',
+    aria: 'Prefill 1 046 tokens por segundo, rango de 5 minutos 912 a 1 098', title: 'prefill 1 046 tok/s · rango 5 min 912–1 098 · derivado de contadores' };
+  const RING_CACHE = { pct: .91, color: C.green, num: '91%', label: 'caché', aria: 'Caché de prompt 91 por ciento, 12.8k de 14.1k tokens', title: 'caché de prompt 91 % · 12.8k de 14.1k tok' };
+  const RING_KV = { pct: .31, color: C.blue, num: '31%', label: 'KV', aria: 'Ventana KV 31 por ciento, 41 216 de 131 072 tokens', title: 'ventana KV 31 % · 41 216 / 131 072 tok' };
+
+  mount('ram-main', ramBar({
+    aria: 'RAM de 122 GiB: Gufo activo 49.2, otros procesos 21.7, Abito apagado 19.8 si se enciende, libre 31.3',
+    items: [
+      { cls: 'on', gib: GUFO, name: 'Gufo', num: '49.2G', lamp: '', ctx: 1, title: 'Gufo · Qwen3.8-Flash-Next Q4_K_XL · 48 capas híbridas · ctx 131 072 · :11070 · 49.2 GiB · listo, serving' },
+      { cls: 'otros', gib: OTROS, title: 'Otros procesos · 21.7 GiB' },
+      { cls: 'ghost', gib: ABITO, name: 'Abito', lamp: 'off', ctx: .5, title: 'Abito · Qwen3.6-35B-A3B IQ4_XS · ctx 65 536 · :11002 · ~19.8 GiB al cargar · detenido' },
+      { cls: 'libre', gib: TOTAL - GUFO - OTROS - ABITO, title: 'Libre · 31.3 GiB' }
+    ]
+  }));
+  mount('g-decode', gauge(GAUGE_DECODE));
+  mount('g-prefill', gauge(GAUGE_PREFILL));
+  mount('r-cache', ring(RING_CACHE));
+  mount('r-kv', ring(RING_KV));
+  mount('d-mtp', gauge({ size: 'S', max: 1, value: .71, color: C.blue, num: '0.71', label: 'MTP', aria: 'Aceptación de especulación MTP 0.71', title: 'aceptación MTP 0.71 · derivado de gufo_spec_*' }));
+  (function () {
+    const svg = S('svg', { viewBox: '0 0 100 100', role: 'img', 'aria-label': 'GPU sana, 0 pérdidas de dispositivo' });
+    svg.append(S('circle', { cx: 50, cy: 42, r: 26, fill: C.green, 'fill-opacity': .12 }), S('circle', { cx: 50, cy: 42, r: 18, fill: C.green, 'fill-opacity': .28 }), S('circle', { cx: 50, cy: 42, r: 10, fill: C.green }));
+    svg.append(S('path', { d: 'M45 42l3.6 3.6L55.5 38', fill: 'none', stroke: '#06080f', 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    // chip glyph instead of a text label (name lives in aria-label / tooltip)
+    svg.append(S('g', { fill: 'none', stroke: C.muted, 'stroke-width': 1.8, 'stroke-linecap': 'round' }, null));
+    const chip = svg.lastChild;
+    chip.append(S('rect', { x: 40, y: 72, width: 20, height: 16, rx: 3 }), S('path', { d: 'M44 72v-4M50 72v-4M56 72v-4M44 88v4M50 88v4M56 88v4' }));
+    mount('l-gpu', wrap(svg, 'GPU sana · 0 pérdidas de dispositivo'));
+  })();
+
+  // 5-minute decode series (30 readings, 10 s apart); range 41.2–54.0, last 47.8
+  const DECODE = [45.1, 46.3, 47.9, 49.8, 51.2, 52.6, 54.0, 52.9, 50.4, 48.7, 46.2, 44.1, 42.5, 41.2, 42.8, 44.6, 46.9, 48.8, 50.7, 51.9, 50.2, 48.4, 46.7, 45.3, 46.1, 47.5, 49.0, 48.3, 47.2, 47.8];
+  const box = document.getElementById('a-decode').getBoundingClientRect();   // draw at real pixel size: no stretched dot
+  mount('a-decode', area({ w: Math.round(box.width), h: Math.round(box.height), data: DECODE, min: 36, max: 58, lo: 41.2, hi: 54.0, color: C.accent, grid: true, aria: 'Decode de los últimos 5 minutos: entre 41.2 y 54.0 tokens por segundo, ahora 47.8', title: 'decode · últimos 5 min' }));
+
+  // RAM headroom: two thin bars with floor markers (min 20 / min 24 GiB), scale 0–122
+  (function () {
+    const W = 520, sc = function (g) { return g / TOTAL * W; };
+    const svg = S('svg', { viewBox: '0 0 ' + W + ' 34', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Margen de RAM: disponible 51.1 GiB con mínimo 20, conservador 46.3 con mínimo 24' });
+    [[4, 51.1, 20], [21, 46.3, 24]].forEach(function (r) {
+      svg.append(S('rect', { x: 0, y: r[0], width: W, height: 9, rx: 4.5, fill: C.track }));
+      svg.append(S('rect', { x: 0, y: r[0], width: sc(r[2]), height: 9, rx: 4.5, fill: C.err, 'fill-opacity': .3 }));
+      svg.append(S('rect', { x: sc(r[2]), y: r[0], width: sc(r[1]) - sc(r[2]), height: 9, fill: C.green }));
+      svg.append(S('rect', { x: sc(r[2]) - 1.5, y: r[0] - 3, width: 3, height: 15, rx: 1, fill: C.text }));
+    });
+    const box = document.getElementById('rambars');
+    const left = H('div', { class: 'inst', title: 'disponible 51.1 GiB (mínimo 20) · conservador 46.3 GiB (mínimo 24)' });
+    left.append(svg);
+    box.replaceChildren(left, H('div', { class: 'num ok', style: 'text-align:right' }, '51.1G'));
+  })();
+
+  mount('rail-main', rail({ mode: 'idle', aria: 'Versión corriendo b6532; disponible b6587' }));
+
+  (function () {
+    const inv = document.getElementById('inv');
+    [['gufo', true, 'gufo · alias flash · :11070 · ctx 131 072 · encendido', 'Apagar gufo'], ['abito', false, 'abito · alias base · :11002 · ctx 65 536 · detenido', 'Encender abito (bloqueado: otro modelo grande está encendido)'], ['embed', true, 'embed-small · alias embed · :11012 · ctx 8 192 · encendido', 'Apagar embed-small']].forEach(function (e) {
+      const chip = H('span', { class: 'chip' + (e[1] ? ' on' : ''), title: e[2] });
+      const b = H('button', { class: 'ico' + (e[1] ? ' crit' : ''), 'aria-label': e[3], title: e[3] });
+      if (!e[1]) b.setAttribute('disabled', '');
+      b.append(icon(e[1] ? 'power' : 'play', 12));
+      chip.append(H('i', { class: 'lamp' + (e[1] ? '' : ' off') }), document.createTextNode(e[0]), b);
+      inv.append(chip);
+    });
+  })();
+
+  // sidebar foot: RAM headroom as a mini bar (no text)
+  (function () {
+    const svg = S('svg', { viewBox: '0 0 144 12', width: '100%', height: 12, role: 'img', 'aria-label': 'RAM libre 51.1 GiB, mínimo 20' });
+    svg.append(S('rect', { x: 0, y: 3, width: 144, height: 6, rx: 3, fill: C.track }), S('rect', { x: 0, y: 3, width: 144 * 51.1 / TOTAL, height: 6, rx: 3, fill: C.green }), S('rect', { x: 144 * 20 / TOTAL - 1, y: 0, width: 2, height: 12, fill: C.text }));
+    const w = H('div', { title: 'RAM libre 51.1 GiB · mínimo 20' }); w.append(svg);
+    document.getElementById('sidefoot').append(w);
+  })();
+
+  // =============== STATES ===============
+  const GL = function (base, mode) { return Object.assign({}, base, { mode: mode, aria: base.label + (mode === 'loading' ? ': cargando' : ': sin datos recientes'), title: base.label + (mode === 'loading' ? ' · leyendo /metrics' : ' · sin datos recientes') }); };
+  document.getElementById('s-load').replaceChildren(
+    gauge(GL(GAUGE_DECODE, 'loading')), gauge(GL(GAUGE_PREFILL, 'loading')),
+    ring({ mode: 'loading', aria: 'Caché de prompt: cargando' }), ring({ mode: 'loading', aria: 'Ventana KV: cargando' }));
+  document.getElementById('s-stale').replaceChildren(
+    gauge(GL(GAUGE_DECODE, 'stale')), gauge(GL(GAUGE_PREFILL, 'stale')),
+    ring(Object.assign({}, RING_CACHE, { mode: 'stale', label: '' })), ring(Object.assign({}, RING_KV, { mode: 'stale', label: '' })));
+
+  mount('s-down', ramBar({
+    aria: 'RAM: hueco vacío de Gufo caído (lámpara roja), otros 21.7, Abito apagado, libre',
+    items: [
+      { cls: 'down', gib: GUFO, name: 'Gufo', lamp: 'crit', title: 'Gufo no responde en :11070 · salió con código 137 (OOM killer) hace 40 s' },
+      { cls: 'otros', gib: OTROS, title: 'Otros procesos · 21.7 GiB' },
+      { cls: 'ghost', gib: ABITO, name: 'Abito', lamp: 'off', title: 'Abito · detenido · entraría en memoria' },
+      { cls: 'libre', gib: TOTAL - GUFO - OTROS - ABITO, title: 'Libre' }
+    ]
+  }, true));
+
+  mount('s-rail-up', rail({ mode: 'up', aria: 'Actualizando b6532 a b6587', title: 'gufo:b6532 → gufo:b6587' }));
+  (function () {
+    const steps = [['done', 'check', 'descargar · listo (18 s)'], ['now', 'refresh', 'reiniciar Gufo (≈ 85 s) · esperando salud'], ['todo', 'shield', 'verificar: salud, /v1/models y contexto = 131 072'], ['todo', 'flag', 'listo, o volver a gufo:b6532']];
+    document.getElementById('s-steps').replaceChildren.apply(document.getElementById('s-steps'), steps.map(function (s, i) {
+      const li = H('li', { class: s[0], title: s[2], 'aria-label': 'Paso ' + (i + 1) + ': ' + s[2] }), d = H('span', { class: 'dot' }); d.append(icon(s[1], 15)); li.append(d); return li;
+    }));
+    const svg = S('svg', { viewBox: '0 0 100 100', role: 'img', 'aria-label': 'Progreso 58 por ciento, 41 segundos' });
+    svg.append(S('circle', { cx: 50, cy: 50, r: 38, fill: 'none', stroke: C.track, 'stroke-width': 10 }), S('path', { d: arc(50, 50, 38, -90, -90 + 360 * .58), fill: 'none', stroke: C.accent, 'stroke-width': 10, 'stroke-linecap': 'round' }));
+    svg.append(S('text', { x: 50, y: 56, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 700, fill: C.text }, '0:41'));
+    mount('s-prog', wrap(svg, 'progreso 58 % · 0:41'));
+  })();
+
+  mount('s-rail-rb', rail({ mode: 'rb', aria: 'Revertida: b6587 rechazada, vuelve a b6532', title: 'gufo:b6587 rechazada → vuelve a gufo:b6532' }));
+  (function () {
+    const box = document.getElementById('s-ctx-rb');
+    const ok = H('div', { class: 'bar2' }), a = H('i'); a.style.width = '100%'; a.style.background = 'var(--green)'; ok.append(a);
+    const bad = H('div', { class: 'bar2' }), b = H('i'); b.style.width = '50%'; b.style.background = 'var(--warning)'; bad.append(b);
+    const okI = S('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: C.green, 'stroke-width': 2, 'aria-hidden': 'true' }); okI.append(S('path', { d: ICON.check }));
+    const badI = S('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: C.warn, 'stroke-width': 2, 'stroke-linecap': 'round', 'aria-hidden': 'true' }); badI.append(S('path', { d: 'M4 4l8 8M12 4l-8 8' }));
+    box.replaceChildren(ok, okI, bad, badI);
+  })();
+
+  mount('s-before', ramBar({ aria: 'Antes: Gufo 49.2 GiB', items: [
+    { cls: 'on', gib: GUFO, name: 'Gufo', lamp: '' }, { cls: 'otros', gib: OTROS }, { cls: 'libre', gib: TOTAL - GUFO - OTROS }] }, true));
+  mount('s-after', ramBar({ aria: 'Después: Abito 19.8 GiB, libre 80.5', items: [
+    { cls: 'new', gib: ABITO, name: 'Abito', lamp: '' }, { cls: 'otros', gib: OTROS }, { cls: 'libre', gib: TOTAL - ABITO - OTROS }] }, true));
+
+  // =============== PAGES ===============
+  mount('sp-ram', area({ w: 600, h: 64, data: [69.8, 70.1, 70.4, 70.2, 70.9, 71.4, 70.6, 70.9, 70.7, 70.9], min: 69.4, max: 71.8, color: C.blue, aria: 'Historial de RAM en uso, 5 minutos: entre 69.8 y 71.4 GiB, ahora 70.9', title: 'RAM en uso · 5 min' }));
+  mount('dn-tok', donut([{ v: 11.4, color: C.accent }, { v: 4.4, color: C.blue }, { v: 2.6, color: C.purple }], 280, '18.4M'));
+
+  (function () {
+    const ports = [[22, 1, 'TCP · ssh · sshd · todas las interfaces'], [631, 0, 'TCP · ipp · cupsd · local'], [5353, 1, 'UDP · mdns · avahi-daemon · todas las interfaces'],
+      [7420, 0, 'TCP · hermes · local'], [7600, 0, 'TCP · open-pencil · local'], [9222, 0, 'TCP · chrome devtools · chromium · local'], [11009, 0, 'TCP · router · abito-router · local'],
+      [11012, 0, 'TCP · embed-small · llama-server · local'], [11070, 0, 'TCP · gufo · llama-server · local']];
+    const m = document.getElementById('matrix');
+    m.replaceChildren.apply(m, ports.map(function (p) {
+      const d = H('div', { class: 'port' + (p[1] ? ' exp' : ''), title: p[0] + ' · ' + p[2] });
+      const s = S('svg', { viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+      // exposed: open globe; local: closed lock
+      if (p[1]) { s.append(S('circle', { cx: 8, cy: 8, r: 6 }), S('path', { d: 'M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12' })); }
+      else { s.append(S('rect', { x: 3.5, y: 7, width: 9, height: 6.5, rx: 1.5 }), S('path', { d: 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2' })); }
+      d.append(s, document.createTextNode(String(p[0])));
+      return d;
+    }));
+  })();
+})();
+</script>
+</body>
+</html>

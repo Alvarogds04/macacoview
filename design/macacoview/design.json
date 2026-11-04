@@ -1,0 +1,41 @@
+{
+  "title": "MacacoView",
+  "brief": "Visual redesign of pc-ai-monitor as MacacoView (GTK4 + libadwaita). 01 plus visual alternatives: 04 and 05 (~85% less text), and 06 combining 01 + 04 + 05 at ~60% less text.",
+  "artboards": [
+    {
+      "file": "01-cabina-densa.html",
+      "title": "Cabina densa",
+      "tradeoff": "Today's shell, densest and cheapest to build; everything in words and numbers (6 625 chars)",
+      "width": 1440,
+      "height": 3585
+    },
+    {
+      "file": "04-cabina-visual-medidores.html",
+      "title": "Cabina visual · medidores",
+      "tradeoff": "Instruments instead of words: arc gauges, rings, RAM blocks, version rail; -88% text, details in tooltips; several new Cairo widgets",
+      "width": 1440,
+      "height": 3472
+    },
+    {
+      "file": "05-cabina-visual-linea-de-tiempo.html",
+      "title": "Cabina visual · línea de tiempo",
+      "tradeoff": "Six lanes on one 15-min axis with events and a shared cursor; -88% text; heaviest to build, needs a 15-min history buffer",
+      "width": 1440,
+      "height": 3374
+    },
+    {
+      "file": "06-cabina-combinada.html",
+      "title": "Cabina combinada (01 + 04 + 05)",
+      "tradeoff": "01's shell and exact values, 04's instruments for now, 05's motor band and decode/prefill lanes; ~74% less text than 01 with labels and units kept; builds most new widgets of 04 and 05",
+      "width": 1440,
+      "height": 3262
+    },
+    {
+      "file": "07-cabina-combinada-animada.html",
+      "title": "Cabina combinada · animada (prototipo)",
+      "tradeoff": "Live prototype of 06: one simulation clock, demo remote (play/pause, 1×/5×/20×) and 10 scenarios; Motores carries every element of today's real blocks; the other pages arrive in a second pass",
+      "width": 1440,
+      "height": 1200
+    }
+  ]
+}

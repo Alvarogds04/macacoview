@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>MacacoView — 01 Cabina densa</title>
+<style>
+  :root {
+    /* Gentle palette from gui/pc_ai_monitor/theme.py; muted raised to pass WCAG AA. */
+    --bg: #06080f; --element: #0b0d15; --subtle: #0d0f14; --border: #313342;
+    --text: #F3F6F9; --muted: #8B91A1; --muted-dim: #5C6170;
+    --accent: #E0C15A; --blue: #7FB4CA; --green: #B7CC85; --warning: #DEBA87;
+    --error: #CB7C94; --selection: #232A40;
+    --ui: "Cantarell", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Ubuntu Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #020307; color: var(--text); font: 13px/1.4 var(--ui); }
+  .num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .board { width: 1440px; padding: 40px 48px 64px; }
+  .board > section { margin-bottom: 48px; }
+  .board-label { font: 700 11px/1 var(--ui); letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 0 0 14px; }
+  .board-note { color: var(--muted); max-width: 900px; margin: 6px 0 0; }
+
+  /* ---------- identity ---------- */
+  .identity { display: grid; grid-template-columns: auto 1fr auto; gap: 40px; align-items: center; }
+  .icons { display: flex; align-items: flex-end; gap: 22px; }
+  .wordmark { font: 700 44px/1 var(--mono); letter-spacing: -.02em; }
+  .wordmark b { color: var(--accent); font-weight: 700; }
+  .tagline { color: var(--muted); margin-top: 10px; font-size: 14px; }
+  .tradeoff { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; max-width: 360px; background: var(--element); }
+  .tradeoff h2 { margin: 0 0 6px; font-size: 13px; }
+  .tradeoff p { margin: 0; color: var(--muted); }
+
+  /* ---------- window chrome ---------- */
+  .win { background: var(--bg); border: 1px solid #3a3d4e; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.55); display: flex; flex-direction: column; }
+  .split { display: flex; flex: 1; min-height: 0; }
+  .sidebar { width: 168px; border-right: 1px solid var(--border); background: #080a12; display: flex; flex-direction: column; }
+  .hb { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg); flex: none; }
+  .hb .title { flex: 1; text-align: center; line-height: 1.15; }
+  .hb .title strong { display: block; font-size: 13px; }
+  .hb .title span { display: block; font-size: 11px; color: var(--muted); }
+  .hb-btn { width: 30px; height: 30px; border-radius: 6px; border: 0; background: transparent; color: var(--text); display: grid; place-items: center; }
+  .hb-btn:hover { background: var(--selection); }
+  .wc { display: flex; gap: 6px; }
+  .wc i { width: 22px; height: 22px; border-radius: 50%; background: #1b1e2a; display: block; }
+  .side-brand { display: flex; align-items: center; gap: 8px; padding: 0 12px; font: 700 13px var(--mono); }
+  .side-brand b { color: var(--accent); }
+  .nav { list-style: none; margin: 6px; padding: 0; }
+  .nav li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; font-size: 12px; color: var(--text); }
+  .nav li svg { width: 14px; height: 14px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; }
+  .nav li[aria-current="page"] { background: var(--selection); }
+  .nav li .badge { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+  .nav li .badge.ok { color: var(--green); }
+  .nav hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+  .side-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--border); font: 11px var(--mono); color: var(--muted); }
+  .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .scroll { flex: 1; overflow: hidden; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+  /* ---------- cards ---------- */
+  .card { background: var(--element); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .head h3 { margin: 0; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
+  .head .meta { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; vertical-align: 1px; }
+  .dot.off { background: transparent; border: 1.5px solid var(--muted); }
+  .dot.warn { background: var(--warning); }
+  .dot.crit { background: var(--error); }
+  .ok { color: var(--green); } .warn { color: var(--warning); } .crit { color: var(--error); } .muted { color: var(--muted); } .acc { color: var(--accent); }
+  .btn { font: 600 12px var(--ui); color: var(--text); background: #1a1d29; border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; }
+  .btn:hover { background: #222636; }
+  .btn.suggested { background: var(--accent); border-color: var(--accent); color: #06080f; }
+  .btn.destructive { background: transparent; color: var(--error); border-color: #5a3341; }
+  .btn[disabled] { opacity: .45; }
+  .chip { font: 11px var(--mono); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; color: var(--muted); background: var(--subtle); white-space: nowrap; }
+  .chip.warn { color: var(--warning); border-color: #5e4d33; }
+  .chip.crit { color: var(--error); border-color: #5a3341; }
+  .chip.ok { color: var(--green); border-color: #44502f; }
+
+  /* engine switch */
+  .switch { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 12px; align-items: stretch; }
+  .eng { border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; background: var(--subtle); display: grid; grid-template-columns: 1fr auto; row-gap: 2px; }
+  .eng.active { border-color: var(--accent); background: #12120d; }
+  .eng .name { font: 700 15px var(--ui); }
+  .eng .name small { font: 600 10px var(--ui); letter-spacing: .08em; color: var(--accent); margin-left: 8px; }
+  .eng .state { font: 12px var(--mono); text-align: right; }
+  .eng .spec { grid-column: 1 / -1; font: 11.5px var(--mono); color: var(--muted); }
+  .swap { align-self: center; color: var(--muted); font: 18px var(--mono); }
+  .switch-actions { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 180px; }
+  .switch-actions .muted { font-size: 11px; }
+
+  /* performance panel */
+  .perf { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .tile { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px 6px; background: var(--subtle); min-width: 0; }
+  .tile .lbl { font: 700 10px var(--ui); letter-spacing: .07em; color: var(--muted); }
+  .tile .val { font: 700 22px/1.15 var(--mono); font-variant-numeric: tabular-nums; }
+  .tile .val small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+  .tile .sub { font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile svg.spark { display: block; width: 100%; height: 22px; margin-top: 3px; }
+  .tile .sub.wrap { white-space: normal; overflow: visible; text-overflow: clip; }
+  .tile .val.nd { font: 600 13px/1.7 var(--mono); color: var(--muted); }
+  .meter { position: relative; height: 6px; border-radius: 3px; background: #1b1e2a; overflow: hidden; margin: 6px 0 4px; }
+  .meter i { display: block; height: 100%; background: var(--blue); }
+  .meter i.floor { background: var(--green); }
+  .meter b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); }
+
+  /* update card */
+  table.kv { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.kv th { text-align: left; font: 700 10px var(--ui); letter-spacing: .07em; color: var(--muted); padding: 0 0 5px; }
+  table.kv td { padding: 5px 0; border-top: 1px solid #1f2230; }
+  table.kv td.num { text-align: right; padding-left: 10px; }
+  .upd-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .upd-foot .muted { font-size: 11px; flex: 1; }
+
+  .grid-2 { display: grid; grid-template-columns: 1.85fr 1fr; gap: 12px; }
+  .inv-row { display: grid; grid-template-columns: 150px 1fr auto auto; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid #1f2230; font-size: 12px; }
+  .inv-row:first-of-type { border-top: 0; }
+
+  /* states & dialogs */
+  .states { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .state-label { font: 700 11px var(--ui); color: var(--accent); letter-spacing: .08em; margin: 0 0 6px; }
+  .skel { background: linear-gradient(90deg, #151826 0%, #1f2333 50%, #151826 100%); background-size: 200% 100%; border-radius: 4px; height: 22px; animation: shimmer 1.4s linear infinite; }
+  .skel.s { height: 10px; margin-top: 6px; width: 70%; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  .stale-banner { display: flex; gap: 8px; align-items: center; border: 1px dashed #5e4d33; border-radius: 6px; padding: 5px 10px; font: 11.5px var(--mono); color: var(--warning); margin-bottom: 8px; }
+  .alert { border: 1px solid #5a3341; background: #160d12; border-radius: 6px; padding: 7px 10px; font-size: 12px; margin-bottom: 8px; }
+  .alert.warn { border-color: #5e4d33; background: #15110a; }
+  .steps { list-style: none; margin: 8px 0 0; padding: 0; font: 12px var(--mono); }
+  .steps li { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; padding: 3px 0; }
+  .steps li.now { color: var(--accent); }
+  .steps li.todo { color: var(--muted); }
+  .bar { height: 4px; background: #1b1e2a; border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .bar i { display: block; height: 100%; width: 58%; background: var(--accent); }
+  .dialog { width: 420px; background: #11131d; border: 1px solid #3a3d4e; border-radius: 12px; padding: 20px 22px 16px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .dialog h4 { margin: 0 0 8px; font-size: 15px; text-align: center; }
+  .dialog p { margin: 0 0 6px; color: var(--muted); text-align: center; }
+  .dialog ul { margin: 8px 0 14px; padding-left: 18px; font: 12px var(--mono); color: var(--text); }
+  .dialog .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .dialog .btn { padding: 8px; }
+
+  /* other pages */
+  .pages { display: grid; grid-template-columns: repeat(2, 664px); gap: 24px 32px; }
+  .mini { height: 430px; }
+  .mini .scroll { padding: 10px; gap: 10px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .kpi { border: 1px solid var(--border); border-radius: 8px; background: var(--element); padding: 6px 10px; }
+  .kpi .v { font: 700 19px var(--mono); font-variant-numeric: tabular-nums; }
+  .kpi .l { font: 600 10px var(--ui); letter-spacing: .06em; color: var(--muted); }
+  table.t { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.t th { text-align: left; font: 700 10px var(--ui); letter-spacing: .07em; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  table.t th.sorted::after { content: " ▾"; color: var(--accent); }
+  table.t td { padding: 3.5px 6px; border-bottom: 1px solid #191c28; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+  table.t td.r, table.t th.r { text-align: right; }
+  .kvg { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 3px 12px; font-size: 11.5px; }
+  .kvg dt { color: var(--muted); } .kvg dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .hbar { display: grid; grid-template-columns: 120px 1fr 60px 44px; gap: 8px; align-items: center; font-size: 11.5px; padding: 2px 0; }
+  .hbar .track { height: 8px; background: #1b1e2a; border-radius: 4px; overflow: hidden; }
+  .hbar .track i { display: block; height: 100%; }
+  @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+</style>
+</head>
+<body>
+<main class="board" aria-label="Dirección 01: Cabina densa">
+
+<!-- ================= A. Identity ================= -->
+<section aria-labelledby="id-h">
+  <p class="board-label" id="id-h">01 · Cabina densa — identidad</p>
+  <div class="identity">
+    <div class="icons" aria-label="Ícono de la app en 128, 48 y 16 px">
+      <svg width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Ícono MacacoView 128 px"><use href="#icon"/></svg>
+      <svg width="48" height="48" viewBox="0 0 128 128" role="img" aria-label="Ícono 48 px"><use href="#icon"/></svg>
+      <svg width="16" height="16" viewBox="0 0 16 16" role="img" aria-label="Ícono simbólico 16 px"><use href="#icon-symbolic"/></svg>
+    </div>
+    <div>
+      <div class="wordmark">macaco<b>view</b></div>
+      <div class="tagline">Lo que corre en esta máquina: motores, procesos, puertos y memoria, en vivo.</div>
+      <div class="tagline mono" style="font-size:12px">ventana: «MacacoView» · subtítulo: página + motor activo · app id: local.pcai.monitor.gnome (se mantiene)</div>
+    </div>
+    <div class="tradeoff">
+      <h2>Optimiza densidad y costo de implementación</h2>
+      <p>Evolución del shell actual: misma barra lateral, mismas tarjetas con borde fino y números mono. Todo entra en 1180×800 sin scroll en Motores. Pierde: modo claro y algo de aire.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= B. Motores at real size ================= -->
+<section aria-labelledby="mot-h">
+  <p class="board-label" id="mot-h">Motores · tamaño real 1180 × 800 (default de la ventana)</p>
+  <div class="win" style="width:1180px;height:800px">
+    <div class="split">
+      <nav class="sidebar" aria-label="Secciones">
+        <div class="hb"><div class="side-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true"><use href="#icon"/></svg>macaco<b>view</b></div></div>
+        <ul class="nav">
+          <li aria-current="page"><svg viewBox="0 0 16 16"><rect x="2" y="4" width="12" height="8" rx="1.5"/><path d="M5 8h2M9 8h2"/></svg>Motores<span class="badge ok">gufo</span></li>
+          <li><svg viewBox="0 0 16 16"><path d="M2 13V9M6 13V5M10 13V7M14 13V3"/></svg>Recursos<span class="badge">51G</span></li>
+          <li><svg viewBox="0 0 16 16"><path d="M2 8h4l2-4 2 8 2-4h2"/></svg>Router<span class="badge">87%</span></li>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5V8l4 2"/></svg>Tokens</li>
+          <li><svg viewBox="0 0 16 16"><path d="M3 5h10M3 8h10M3 11h10"/><circle cx="5" cy="5" r=".8"/></svg>Puertos<span class="badge warn">2</span></li>
+          <li><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg>Procesos</li>
+          <hr>
+          <li><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>Configuración</li>
+        </ul>
+        <div class="side-foot">RAM libre <span class="ok">51.1G</span><br>actualizado hace 1 s</div>
+      </nav>
+      <div class="content">
+        <header class="hb">
+          <button class="hb-btn" aria-label="Ocultar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
+          <div class="title"><strong>Motores</strong><span>MacacoView · gufo activo</span></div>
+          <button class="hb-btn" aria-label="Menú principal"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg></button>
+          <div class="wc" aria-hidden="true"><i></i><i></i><i></i></div>
+        </header>
+        <div class="scroll">
+
+          <!-- Card 1: engine switch -->
+          <article class="card" aria-labelledby="sw-h">
+            <div class="head"><h3 id="sw-h">MOTOR ACTIVO</h3><span class="meta">uno solo a la vez · memoria mínima 20 GiB</span></div>
+            <div class="switch">
+              <div class="eng active">
+                <div class="name">Gufo<small>ACTIVO</small></div><div class="state ok"><span class="dot"></span>listo · serving · :11070</div>
+                <div class="spec">Qwen3.8-Flash-Next Q4_K_XL · 48 capas híbridas · ctx 131 072 · 49.2 GiB</div>
+              </div>
+              <div class="swap" aria-hidden="true">⇄</div>
+              <div class="eng">
+                <div class="name">Abito</div><div class="state muted"><span class="dot off"></span>detenido · :11002</div>
+                <div class="spec">Qwen3.6-35B-A3B IQ4_XS · ctx 65 536 · ~19.8 GiB al cargar</div>
+              </div>
+              <div class="switch-actions">
+                <button class="btn">Cambiar a Abito…</button>
+                <span class="muted">≈ 85 s sin motor local; los pedidos en curso se cortan</span>
+              </div>
+            </div>
+          </article>
+
+          <div class="grid-2">
+            <!-- Card 3: live performance -->
+            <article class="card" aria-labelledby="perf-h">
+              <div class="head"><h3 id="perf-h">RENDIMIENTO EN VIVO · GUFO</h3><span class="meta">última medición hace 4 s · ventana 5 min</span></div>
+              <div class="perf">
+                <div class="tile"><div class="lbl">PEDIDOS EN CURSO</div><div class="val">1</div><div class="sub wrap">slot ocupado · prompt 1.4k tok</div></div>
+                <div class="tile"><div class="lbl">PREFILL</div><div class="val">1 046<small>tok/s</small></div><div class="sub" title="derivado de contadores entre las dos últimas lecturas">derivado</div><svg class="spark" data-spark="980,1010,1060,1098,940,912,1030,1046,1020,1070,1046" data-color="--blue" aria-hidden="true"></svg></div>
+                <div class="tile"><div class="lbl">DECODE</div><div class="val">47.8<small>tok/s</small></div><div class="sub" title="derivado de contadores entre las dos últimas lecturas">derivado</div><svg class="spark" data-spark="44,46,52,54,49,41.2,45,47,48.5,50,47.8" data-color="--accent" aria-hidden="true"></svg></div>
+                <div class="tile"><div class="lbl">CACHÉ DE PROMPT</div><div class="val">91<small>%</small></div><div class="sub wrap">12.8k de 14.1k tok cacheados</div><svg class="spark" data-spark="70,82,88,90,91,86,93,91,92,90,91" data-color="--green" aria-hidden="true"></svg></div>
+                <div class="tile"><div class="lbl">VENTANA KV</div><div class="val">31<small>%</small></div><div class="meter"><i style="width:31%"></i></div><div class="sub wrap">41 216 / 131 072 tok</div></div>
+                <div class="tile"><div class="lbl">ESPECULACIÓN (MTP)</div><div class="val">0.71<small>acept.</small></div><div class="sub wrap">derivado de gufo_spec_*</div><svg class="spark" data-spark=".66,.69,.72,.74,.70,.68,.71,.73,.71,.70,.71" data-color="--blue" aria-hidden="true"></svg></div>
+                <div class="tile"><div class="lbl">MARGEN DE RAM</div><div class="val ok">51.1<small>GiB</small></div><div class="meter"><i class="floor" style="width:42%"></i><b style="left:16.4%" title="mínimo 20 GiB"></b></div><div class="sub">mín. 20 GiB</div><div class="sub">conserv. 46.3/24</div></div>
+                <div class="tile"><div class="lbl">GPU</div><div class="val ok">sana</div><div class="sub wrap">0 pérdidas de dispositivo</div></div>
+              </div>
+            </article>
+
+            <!-- Card 2: engine update -->
+            <article class="card" aria-labelledby="up-h">
+              <div class="head"><h3 id="up-h">ACTUALIZACIÓN</h3><span class="meta">hace 12 min</span></div>
+              <table class="kv">
+                <thead><tr><th scope="col">CAMPO</th><th scope="col" style="text-align:right">VALOR</th></tr></thead>
+                <tbody>
+                  <tr><td>tag</td><td class="num">gufo:b6532 → <span class="acc">gufo:b6587</span></td></tr>
+                  <tr><td>versión</td><td class="num">b6532</td></tr>
+                  <tr><td>revisión</td><td class="num">a3f91c2</td></tr>
+                  <tr><td>imagen</td><td class="num">sha256:4be1…</td></tr>
+                  <tr><td>contexto servido</td><td class="num">131 072 <span class="ok">· coincide</span></td></tr>
+                </tbody>
+              </table>
+              <div class="upd-foot">
+                <span class="muted">Reinicia Gufo (≈ 85 s, se cortan los pedidos en curso). Si no queda sano o el contexto no coincide, vuelve sola a gufo:b6532.</span>
+                <button class="btn suggested">Actualizar…</button>
+              </div>
+            </article>
+          </div>
+
+          <!-- existing inventory, kept -->
+          <article class="card" aria-labelledby="inv-h">
+            <div class="head"><h3 id="inv-h">MOTORES LOCALES</h3><span class="meta">informado por local-ai-models</span></div>
+            <div class="inv-row"><strong>gufo</strong><span class="mono muted">alias flash · :11070 · ctx 131072</span><span class="ok mono"><span class="dot"></span>encendido</span><span><button class="btn destructive">Apagar</button></span></div>
+            <div class="inv-row"><strong>abito</strong><span class="mono muted">alias base · :11002 · ctx 65536</span><span class="muted mono"><span class="dot off"></span>detenido</span><span><button class="btn" disabled title="el otro modelo grande está encendido">Encender</button></span></div>
+            <div class="inv-row"><strong>embed-small</strong><span class="mono muted">alias embed · :11012 · ctx 8192</span><span class="ok mono"><span class="dot"></span>encendido</span><span><button class="btn destructive">Apagar</button></span></div>
+          </article>
+
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="board-note">La tarjeta «MEMORIA DISPONIBLE» de hoy se absorbe en «Margen de RAM» del panel de rendimiento y en el pie de la barra lateral: el mismo dato no aparece dos veces en la página.</p>
+</section>
+
+<!-- ================= C. States ================= -->
+<section aria-labelledby="st-h">
+  <p class="board-label" id="st-h">Estados que importan · tarjetas a tamaño real</p>
+  <div class="states">
+
+    <div>
+      <p class="state-label">CARGANDO (primer pulso, /metrics todavía no respondió)</p>
+      <article class="card">
+        <div class="head"><h3>RENDIMIENTO EN VIVO</h3><span class="meta">leyendo /metrics…</span></div>
+        <div class="perf" aria-busy="true">
+          <div class="tile"><div class="lbl">PEDIDOS EN CURSO</div><div class="skel"></div><div class="skel s"></div></div>
+          <div class="tile"><div class="lbl">PREFILL</div><div class="skel"></div><div class="skel s"></div></div>
+          <div class="tile"><div class="lbl">DECODE</div><div class="skel"></div><div class="skel s"></div></div>
+          <div class="tile"><div class="lbl">CACHÉ DE PROMPT</div><div class="skel"></div><div class="skel s"></div></div>
+        </div>
+        <div class="upd-foot"><span class="muted">Con la primera lectura, prefill y decode pasan a «sin datos recientes» hasta tener dos lecturas.</span></div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">MEDICIÓN VIEJA (sin pedidos hace 3 min)</p>
+      <article class="card">
+        <div class="head"><h3>RENDIMIENTO EN VIVO · GUFO</h3><span class="meta warn">última lectura hace 3 min 12 s</span></div>
+        <div class="stale-banner">◷ Sin tráfico: prefill y decode necesitan dos lecturas con pedidos entre medio.</div>
+        <div class="perf" style="grid-template-columns:repeat(5,1fr)">
+          <div class="tile"><div class="lbl">PREFILL</div><div class="val nd">sin datos recientes</div></div>
+          <div class="tile"><div class="lbl">DECODE</div><div class="val nd">sin datos recientes</div></div>
+          <div class="tile"><div class="lbl">CACHÉ DE PROMPT</div><div class="val">91<small>%</small></div><div class="sub wrap">12.8k de 14.1k tok cacheados</div></div>
+          <div class="tile"><div class="lbl">VENTANA KV</div><div class="val">31<small>%</small></div><div class="meter"><i style="width:31%"></i></div><div class="sub wrap">41 216 / 131 072 tok</div></div>
+          <div class="tile"><div class="lbl">MARGEN DE RAM</div><div class="val ok">51.3<small>GiB</small></div><div class="sub">en vivo</div></div>
+        </div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">MOTOR CAÍDO</p>
+      <article class="card">
+        <div class="head"><h3>MOTOR ACTIVO</h3><span class="meta">uno solo a la vez</span></div>
+        <div class="alert"><span class="crit"><span class="dot crit"></span><strong>Gufo no responde en :11070</strong></span> — el proceso salió con código 137 hace 40 s (OOM killer). Pi está derivando a cloud con confirmación.</div>
+        <div class="switch">
+          <div class="eng" style="border-color:#5a3341"><div class="name">Gufo</div><div class="state crit"><span class="dot crit"></span>caído</div><div class="spec">último decode 47.8 tok/s · RAM libre ahora 71.0 GiB</div></div>
+          <div class="swap" aria-hidden="true">⇄</div>
+          <div class="eng"><div class="name">Abito</div><div class="state muted"><span class="dot off"></span>detenido</div><div class="spec">entra en memoria: quedarían 51.2 GiB</div></div>
+          <div class="switch-actions"><button class="btn suggested">Encender Gufo</button><button class="btn">Encender Abito</button></div>
+        </div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">ACTUALIZACIÓN REVERTIDA</p>
+      <article class="card">
+        <div class="head"><h3>ACTUALIZACIÓN</h3><span class="meta">hace 2 min</span></div>
+        <div class="alert warn"><strong class="warn">Revertida a gufo:b6532.</strong> gufo:b6587 levantó con contexto 65 536; el configurado es 131 072. Volvió a gufo:b6532.</div>
+        <table class="kv"><tbody>
+          <tr><td>tag</td><td class="num">gufo:b6532</td><td class="num warn">gufo:b6587 ✕ rechazada</td></tr>
+          <tr><td>contexto servido</td><td class="num">131 072</td><td class="num warn">65 536 ✕</td></tr>
+        </tbody></table>
+        <div class="upd-foot"><span class="muted">El log del intento queda en ~/.local/state/local-ai-models/update.log</span><button class="btn">Ver log</button><button class="btn">Reintentar…</button></div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">ACTUALIZACIÓN EN CURSO</p>
+      <article class="card">
+        <div class="head"><h3>ACTUALIZACIÓN</h3><span class="meta acc">gufo:b6532 → gufo:b6587 · 0:59</span></div>
+        <ol class="steps" aria-label="Pasos de la actualización">
+          <li><span class="ok">✓</span>descargar gufo:b6587<span class="muted">18 s</span></li>
+          <li class="now"><span>●</span>reiniciar Gufo (≈ 85 s)<span>esperando salud · 0:41</span></li>
+          <li class="todo"><span>○</span>verificar: salud, /v1/models y contexto = 131 072<span></span></li>
+          <li class="todo"><span>○</span>listo, o volver a gufo:b6532<span></span></li>
+        </ol>
+        <div class="bar" role="progressbar" aria-valuenow="58" aria-valuemin="0" aria-valuemax="100" aria-label="Progreso de la actualización"><i></i></div>
+        <div class="upd-foot"><span class="muted">El cambio de motor queda bloqueado mientras dura.</span><button class="btn" disabled>Cambiar a Abito…</button></div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">VERSIÓN DISPONIBLE DESCONOCIDA</p>
+      <article class="card">
+        <div class="head"><h3>ACTUALIZACIÓN</h3><span class="meta">hace 12 min</span></div>
+        <div class="alert warn"><strong class="warn">No se pudo consultar la versión disponible:</strong> registry no responde (timeout 10 s)</div>
+        <table class="kv"><tbody>
+          <tr><td>tag</td><td class="num">gufo:b6532</td><td class="num muted">disponible: desconocida</td></tr>
+        </tbody></table>
+        <div class="upd-foot"><span class="muted">Gufo sigue sano en gufo:b6532.</span><button class="btn suggested" disabled>Actualizar…</button></div>
+      </article>
+    </div>
+
+    <div>
+      <p class="state-label">CONFIRMACIONES (Adw.AlertDialog)</p>
+      <div style="display:flex;gap:16px">
+        <div class="dialog" role="dialog" aria-labelledby="d1">
+          <h4 id="d1">¿Cambiar a Abito?</h4>
+          <p>Se apaga Gufo y se carga Abito.</p>
+          <ul><li>≈ 85 s sin motor local</li><li>se cortan los pedidos en curso</li><li>contexto baja a 65 536</li><li>quedan 70.4 GiB libres</li></ul>
+          <div class="row"><button class="btn">Cancelar</button><button class="btn suggested">Cambiar</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="dialog" role="dialog" aria-labelledby="d2" style="margin-top:16px">
+    <h4 id="d2">¿Actualizar Gufo a gufo:b6587?</h4>
+    <p>≈ 85 s sin motor local y se cortan los pedidos en curso. Si no queda sano o el contexto no coincide, vuelve sola a gufo:b6532.</p>
+    <ul><li>el cambio de motor se bloquea mientras dura</li></ul>
+    <div class="row"><button class="btn">Cancelar</button><button class="btn suggested">Actualizar</button></div>
+  </div>
+</section>
+
+<!-- ================= D. Other pages ================= -->
+<section aria-labelledby="pg-h">
+  <p class="board-label" id="pg-h">Las otras cinco páginas · recorte superior de la ventana, escala real</p>
+  <div class="pages" id="pages"></div>
+  <p class="board-note">Modo claro: no se propone en esta dirección. La app hoy fuerza PREFER_DARK y los cuatro temas (Gentle, Cute, Sexy, Ghostly) son oscuros; esta cabina vive en esos temas sin cambios. Ver 02 para claro.</p>
+</section>
+
+</main>
+
+<!-- shared icon symbols -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="ig" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1e2e"/><stop offset="1" stop-color="#06080f"/></linearGradient>
+    <symbol id="icon" viewBox="0 0 128 128">
+      <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#ig)" stroke="#313342" stroke-width="2"/>
+      <circle cx="28" cy="58" r="13" fill="#7a5a40"/><circle cx="28" cy="58" r="6.5" fill="#d79c86"/>
+      <circle cx="100" cy="58" r="13" fill="#7a5a40"/><circle cx="100" cy="58" r="6.5" fill="#d79c86"/>
+      <circle cx="64" cy="60" r="38" fill="#8a6848"/>
+      <path d="M64 34c-16 0-27 9-27 22 0 9 4 15 9 20 4 4 6 9 18 9s14-5 18-9c5-5 9-11 9-20 0-13-11-22-27-22z" fill="#e3ad97"/>
+      <circle cx="51" cy="54" r="9" fill="#06080f"/><circle cx="77" cy="54" r="9" fill="#06080f"/>
+      <circle cx="51" cy="54" r="5.5" fill="none" stroke="#E0C15A" stroke-width="2.4"/><circle cx="77" cy="54" r="5.5" fill="none" stroke="#E0C15A" stroke-width="2.4"/>
+      <polyline points="44,76 53,76 57,69 62,82 67,72 71,76 84,76" fill="none" stroke="#06080f" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-symbolic" viewBox="0 0 16 16">
+      <circle cx="3" cy="7.5" r="1.8" fill="#F3F6F9"/><circle cx="13" cy="7.5" r="1.8" fill="#F3F6F9"/>
+      <circle cx="8" cy="8" r="5.6" fill="#F3F6F9"/>
+      <circle cx="6.2" cy="7" r="1.1" fill="#06080f"/><circle cx="9.8" cy="7" r="1.1" fill="#06080f"/>
+      <polyline points="5.2,10.4 6.8,10.4 7.6,9.2 8.4,11.2 9.2,10.4 10.8,10.4" fill="none" stroke="#06080f" stroke-width="1"/>
+    </symbol>
+  </defs>
+</svg>
+
+<script>
+(function () {
+  const css = getComputedStyle(document.documentElement);
+  // Sparklines: same contract as widgets/graficos.py Sparkline (Cairo polyline).
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function drawSpark(svg, w, h, color) {
+    const v = svg.dataset.spark.split(',').map(Number);
+    const min = Math.min.apply(null, v), max = Math.max.apply(null, v), span = (max - min) || 1;
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const line = document.createElementNS(SVG_NS, 'polyline');
+    line.setAttribute('points', v.map(function (y, i) { return (i * w / (v.length - 1)).toFixed(1) + ',' + (h - 2 - (y - min) / span * (h - 4)).toFixed(1); }).join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '1.6');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.replaceChildren(line);
+  }
+  document.querySelectorAll('svg.spark').forEach(function (svg) {
+    drawSpark(svg, 200, 22, css.getPropertyValue(svg.dataset.color || '--blue').trim());
+  });
+
+  const hb = function (title, sub) {
+    return '<header class="hb"><button class="hb-btn" aria-label="Mostrar barra lateral"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button><div class="title"><strong>' + title + '</strong><span>' + sub + '</span></div><div class="wc" aria-hidden="true"><i></i><i></i><i></i></div></header>';
+  };
+  const win = function (title, sub, body) {
+    return '<div class="win mini" role="img" aria-label="Página ' + title + '"><div class="content">' + hb(title, sub) + '<div class="scroll">' + body + '</div></div></div>';
+  };
+  const kpis = function (items) { return '<div class="kpis">' + items.map(function (k) { return '<div class="kpi"><div class="v' + (k[2] ? ' ' + k[2] : '') + '">' + k[0] + '</div><div class="l">' + k[1] + '</div></div>'; }).join('') + '</div>'; };
+  const table = function (cols, rows) {
+    return '<table class="t"><thead><tr>' + cols.map(function (c) { return '<th scope="col" class="' + (c[1] || '') + '">' + c[0] + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td class="' + (cols[i][2] || '') + '">' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+  };
+  const card = function (title, meta, body) { return '<div class="card"><div class="head"><h3>' + title + '</h3>' + (meta ? '<span class="meta">' + meta + '</span>' : '') + '</div>' + body + '</div>'; };
+
+  const procesos = win('Procesos', 'MacacoView · 214 vigilados', card('PROCESOS POR CONSUMO', 'top 40 · orden RAM',
+    table([['PID', '', 'num'], ['PROCESO'], ['RAM', 'r sorted', 'r num'], ['CPU', 'r', 'r num'], ['COMANDO', '', 'muted']], [
+      ['48211', 'llama-server', '49.2 G', '312 %', 'llama-server -m qwen3.8-flash-next-Q4_K_XL.gguf --port 11070 -c 131072'],
+      ['3120', 'firefox', '2.8 G', '6 %', '/usr/lib/firefox/firefox'],
+      ['41877', 'node', '1.9 G', '3 %', 'node ~/.pi/agent/…/pi --session 7f2c'],
+      ['2214', 'hermes', '1.6 G', '1 %', 'hermes serve --port 7420'],
+      ['1873', 'gnome-shell', '1.1 G', '4 %', '/usr/bin/gnome-shell'],
+      ['44102', 'node', '0.9 G', '2 %', 'node ~/.pi/agent/…/pi --session a91e'],
+      ['50331', 'ghostty', '0.4 G', '1 %', '/usr/bin/ghostty'],
+      ['4410', 'python3', '0.2 G', '0 %', 'python3 -m pc_ai_monitor'],
+      ['1601', 'router', '0.2 G', '1 %', 'abito-router --port 11009'],
+      ['1288', 'Xwayland', '0.1 G', '0 %', '/usr/bin/Xwayland :0']
+    ])));
+
+  const puertos = win('Puertos', 'MacacoView · 14 escuchando', kpis([['14', 'ESCUCHANDO'], ['12', 'SOLO LOCAL'], ['2', 'EN TODAS LAS INTERFACES', 'warn'], ['1', 'SIN PROCESO']]) +
+    card('PUERTOS ESCUCHANDO', '☐ sólo expuestos a todas las interfaces',
+      table([['TIPO', '', 'muted mono'], ['PUERTO', 'sorted', 'num'], ['ACCESO'], ['SERVICIO'], ['PROCESO', '', 'muted']], [
+        ['TCP', '22', '<span class="chip warn">todas</span>', 'ssh', 'sshd'],
+        ['UDP', '5353', '<span class="chip warn">todas</span>', 'mdns', 'avahi-daemon'],
+        ['TCP', '631', '<span class="chip">local</span>', 'ipp', 'cupsd'],
+        ['TCP', '7600', '<span class="chip">local</span>', 'open-pencil', 'open-pencil'],
+        ['TCP', '9222', '<span class="chip">local</span>', 'chrome devtools', 'chromium'],
+        ['TCP', '11009', '<span class="chip">local</span>', 'router', 'abito-router'],
+        ['TCP', '11012', '<span class="chip">local</span>', 'embed-small', 'llama-server'],
+        ['TCP', '11070', '<span class="chip">local</span>', 'gufo', 'llama-server']
+      ])));
+
+  const bars = function (rows) { return rows.map(function (r) { return '<div class="hbar"><span>' + r[0] + '</span><span class="track"><i style="width:' + r[1] + '%;background:' + r[3] + '"></i></span><span class="num" style="text-align:right">' + r[2] + '</span><span class="num muted" style="text-align:right">' + r[1] + '%</span></div>'; }).join(''); };
+  const recursos = win('Recursos', 'MacacoView · RAM 70.9 / 122.0 GiB', kpis([['70.9 G', 'RAM EN USO'], ['122.0 G', 'RAM TOTAL'], ['2', 'MODELOS CARGADOS'], ['214', 'PROCESOS VIGILADOS']]) +
+    card('APLICACIONES / GRUPOS (RSS)', 'clic para ver procesos', bars([
+      ['modelos', 69, '49.2G', '#E0C15A'], ['🥧 Pi', 10, '6.8G', '#8FB8DD'], ['📦 Otros', 6, '4.6G', '#8394A3'], ['🦊 Firefox', 6, '4.3G', '#B99BF2'], ['⚙️ Sistema', 5, '3.9G', '#A3B5D6'], ['🪽 Hermes', 3, '2.1G', '#A4DAA7']
+    ])) + card('HISTORIAL (5 MINUTOS)', '', '<svg class="spark" style="height:56px" data-spark="69.8,70.1,70.4,70.2,70.9,71.4,70.6,70.9,70.7,70.9" aria-hidden="true"></svg>'));
+
+  const dl = function (rows) { return '<dl class="kvg">' + rows.map(function (r) { return '<dt>' + r[0] + '</dt><dd class="' + (r[2] || '') + '">' + r[1] + '</dd>'; }).join('') + '</dl>'; };
+  const router = win('Router', 'MacacoView · activo · 3 sesiones', card('CONFIRMACIONES', '', '<span class="muted">nada pendiente de tu decisión</span>') +
+    card('ROUTER', ':11009', dl([['salud', '● vivo', 'ok'], ['versión', '0.4.1'], ['modo', 'ACTIVO', 'ok'], ['sesiones activas', '3'], ['última ruta', 'gufo'], ['última confianza', '0.92'], ['% local', '87 %'], ['% cloud', '9 %'], ['% cola', '4 %'], ['latencia media', '38 ms']]) +
+      '<div class="mono muted" style="margin-top:6px;font-size:11px">rutas: cloud=41  gufo=388  queue=18</div>') +
+    card('ABITO / GUFO', '', dl([['Gufo salud', '● vivo', 'ok'], ['Abito salud', '○ parado', 'muted'], ['Gufo ctx', '131072 (útil 122880)'], ['Gufo slots', '1/2 ocupados'], ['Gufo MTP', '0.712'], ['Gufo cola', '0']])));
+
+  const tokens = win('Tokens', 'MacacoView · hoy', kpis([['18.4 M', 'TOKENS EN PI'], ['1 284', 'TURNOS'], ['US$ 41.27', 'COSTO ACUMULADO'], ['14.9 M', 'LEÍDOS DE CACHÉ']]) +
+    card('POR PROVEEDOR', '', bars([['local (gufo)', 62, '11.4M', '#E0C15A'], ['openai-codex', 24, '4.4M', '#8FB8DD'], ['anthropic', 14, '2.6M', '#B99BF2']])) +
+    card('SUSCRIPCIÓN CODEX', 'codexbar', bars([['ventana 5 h', 38, '38 %', '#B7CC85'], ['semanal', 61, '61 %', '#DEBA87']])));
+
+  // Static, author-written markup: parsed once and moved into the board.
+  const parsed = new DOMParser().parseFromString(recursos + router + tokens + puertos + procesos, 'text/html');
+  document.getElementById('pages').replaceChildren.apply(document.getElementById('pages'), Array.from(parsed.body.children));
+  document.querySelectorAll('#pages svg.spark').forEach(function (svg) { drawSpark(svg, 600, 56, '#7FB4CA'); });
+})();
+</script>
+</body>
+</html>

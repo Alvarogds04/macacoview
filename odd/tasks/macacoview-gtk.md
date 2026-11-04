@@ -1,0 +1,44 @@
+# MacacoView GTK: implement design 07 in the GNOME app
+
+Implements `design/macacoview/07-cabina-combinada-animada.html` (the live spec; 06 is its static
+version) in `gui/pc_ai_monitor/` on branch `feat/macacoview-design`, on top of main `b1b66af`.
+Missing updaters for models, router and tools are a separate backend task in `pc-ai-local-models`.
+
+## Specs
+
+- S1 «Implement it in the project's real stack. Use the artboard as the visual spec: map its parts to the project's existing components and styles, and do not copy the artboard HTML verbatim.»
+- S2 Visible name «MacacoView» in window, headerbar and title; identifiers unchanged (`APP_ID local.pcai.monitor.gnome`, `pc-ai-monitor` paths, service, extension id) — «Nombre visible ahora, identificadores después».
+- S3 «Todo este apartado que sea de motores y lo de arriba que sea Home»: a new **Home** page (first sidebar row, default at launch) with the cockpit — RAM blocks + 15-min motor band + compact switch with two mini engine cards; decode/prefill lanes with shared cursor + cache/KV rings, MTP dial, GPU lamp, request dots; inventory + RAM headroom + one-state update card. **Motores** holds the detail blocks.
+- S4 «Este boton que sea mucho mas pequeño» / «No dejes este espacio vacio ajustalo al diseñ, pero sin hacer el cambiar abito tan grande»: compact «Cambiar a …» button (Ctrl E) under two mini engine cards.
+- S5 «esto que no diga el commit si no la version o otra cosa que sea mas visual»: versions shown as human versions (`version_label` / `available.latest`) with a status pill (Todo al día / N actualizaciones / Revertida / Actualizando… / No se pudo consultar); tags and revisions only in tooltips.
+- S6 «ESto que solo diga si es necesario actualizar y ya, y que modelos motores y eso se pueden actualizar de todos loque estan en el pc»: Home update card = one state + one button; Motores «Actualizaciones del PC» lists every updatable component with version, status pill and «Actualizar», plus «Actualizar todo (N)». Decision (L5): add the missing updaters (separate backend task B1); the UI uses them when the backend reports them and shows «sin actualizador todavía» otherwise.
+- S7 «Esto lo prefiero mas visual que en texto»: Motores performance as instruments (lamps, rings, bars, sparklines, dial); sentences in tooltips; warning/error as coloured banners; manual «Actualizar» kept.
+- S8 «actrualicemos todo lo de router por lo nuevo de los modelos actualesy todo lo actual y que esto se actualice solo y menos texto y mas visual , con filtros charts y todo»: Router rebuilt on the current engines and real `/status` + `/metrics` fields: KPI strip, routes-over-time chart, per-engine cards, decisions stream with filters (ruta, decisor, ventana 5/15/60 min, búsqueda) that filter rows and chart, confirmations with countdown, lifecycle timeline, JEV/CLOUD/ENGRAM tiles, sessions; live refresh; «router no responde en :11009» state.
+- S9 Gufo RAM «los 2»: show «≈ 85 GiB reservados» and «49.2 GiB en uso» (measured); Abito «≈ 20 GiB» / measured. Switch load times from the source (Gufo ~90 s, Abito ~30 s).
+- S10 «con todos los elementos actuales que tiene pc-monitor … y con todas sus funcionalidades»: every element and function in `design/macacoview/INVENTARIO-APP.md` keeps working (group/model drill-down, provider filter, port filter and sorts, process sorts, Configuración rows, themes, Monitoreo).
+- S11 Data honesty (L2): metrics only from `/metrics`, `/v1/models`, `/slots`, `gufo-flash status`; prefill/decode derived from counter deltas, «sin datos recientes» never 0; no TTFT, no GPU temperature; rollback only on health, context mismatch or pull failure.
+- S12 Text level: «creo que me he pasado con lo de 85 asi que lo podemos dejar a un % mas razonable» → about 60 % less visible text than direction 01, labels and units kept.
+
+## Tasks
+
+| ID | Task | Specs | Route | Commit |
+|---|---|---|---|---|
+| T0 | Commit the design artboards and this document | S1 | inline | — |
+| T1 | Shell: MacacoView name, Home first/default, active row, sidebar badges, age pill, collector-error banner, `theme.register_css` | S2 S3 S10 | worker | — |
+| T2 | Cairo widgets: RAM blocks with reservation, motor band with markers, area lanes with shared cursor, ring, arc dial, lamp, version rail + stepper, port matrix (pure layout functions tested) | S3 S5 S7 S9 | worker | — |
+| T3 | Home page: cockpit from existing `*_logica` + T2 widgets; 15-min history buffer for decode/prefill/motor band | S3 S4 S5 S6 S9 S11 | worker | — |
+| T4 | Motores page: resident cards, Actualizaciones del PC (engine real, others via B1 contract), performance as instruments, inventory | S5 S6 S7 S9 S11 | worker | — |
+| T5 | Router page rebuild with filters and live refresh | S8 S11 | worker | — |
+| T6 | Recursos, Tokens, Puertos, Procesos, Configuración restyle keeping every function | S10 S12 | worker | — |
+| B1 | Backend: updaters for models, router, tools in `pc-ai-local-models` (`local-ai-models updates --json`, `update <component>`) | S6 | owner session (intercom) | — |
+
+Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its own repo.
+
+## Log
+
+- L1 (user, on 06): «Implement the design artboard design/macacoview/06-cabina-combinada.html … Implement it in the project's real stack.» then «pero antes muestramelo animado para ver como seria» and «con todos los elementos actuales que tiene pc-monitor para ver realmente como quedaria y con todas sus funcionalidades» → 07 built as the live spec.
+- L2 (parent, confirmed sources): metrics from `127.0.0.1:11070/metrics`, `/v1/models`, `/slots`, `gufo-flash status`; update via `local-ai-models engine status --json` / `engine update --to TAG --yes --json` (exit 0 / 10 / 1); label «Tokens»; visible name MacacoView, identifiers later.
+- L3 (user): six canvas comments on 07 applied (S3–S8). Gufo RAM: «los 2» (S9). «dale luz verde» to implement.
+- L4 (user): wait for the uncommitted Motores work to be committed → owner committed `b7795d9..b1b66af` on main (139 tests OK); branch rebased onto `b1b66af`, suite 139 OK.
+- L5 (user): updates without backend → «Agregar los actualizadores que faltan» (B1, separate task in `pc-ai-local-models`, owned by the session that maintains that repo).
+- L6 (evidence): router `/status` today names engines `abito` (:11002) and `flash` (:11008, parado) while the Gufo engine serves on :11070 — naming mismatch to resolve in T5 with the router owner.
