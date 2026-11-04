@@ -4,7 +4,10 @@
 import time
 import unittest
 
-import _aislamiento
+try:  # discover puts tests/ on sys.path; `-m unittest tests.x` does not
+    import _aislamiento
+except ModuleNotFoundError:
+    from tests import _aislamiento
 
 
 class IsolationTests(unittest.TestCase):

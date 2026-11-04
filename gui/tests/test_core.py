@@ -17,7 +17,10 @@ import unittest
 from ipaddress import ip_address
 from pathlib import Path
 
-import _aislamiento  # page tests must not reach the live machine
+try:  # discover puts tests/ on sys.path; `-m unittest tests.x` does not
+    import _aislamiento
+except ModuleNotFoundError:
+    from tests import _aislamiento
 
 from pc_ai_monitor.datos import GROUP_KEYS, Sample, Snapshot
 from pc_ai_monitor.formato import (
