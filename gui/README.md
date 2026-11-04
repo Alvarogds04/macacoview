@@ -41,6 +41,26 @@ desde el paquete gentle-pi cuando está presente.
 puertos.py        parser de `ss` (sin GTK, testeable)
 widgets/          base (contrato de gráficos) · barras · chips · graficos · tabla
 blocks/           Block, Dashboard, catalogue() + un módulo por tarjeta
+                  blocks/residente.py + residente_logica.py: tarjeta de cambio
+                  Abito ⇄ Gufo (nunca los dos en memoria) y su lógica pura
+                  (parseo de `local-ai-models resident`, texto de confirmación,
+                  códigos de salida de `switch`); sin GTK, testeable sin ventana
+                  blocks/engine.py + engine_logica.py: tarjeta de actualización
+                  del motor Gufo y su lógica pura (parseo de `local-ai-models
+                  engine status` con su dictamen de admisión de memoria —
+                  si la máquina puede hospedar el motor ahora, o cuántos GiB
+                  faltan, sin umbrales inventados y con el dictamen
+                  "desconocido" si el controlador no lo informa; un aviso
+                  aparte avisa que el motor se negará a arrancar sin bloquear
+                  la actualización, que son cosas distintas), regla del botón
+                  de actualización, textos); sin GTK, testeable sin ventana
+                  blocks/rendimiento.py + rendimiento_logica.py: tarjeta de
+                  rendimiento del motor Gufo y su lógica pura (parseo tolerante
+                  de `/metrics`, `/v1/models` y `/slots` del propio motor, los
+                  números de memoria de `gufo-flash status`, pisos del guard
+                  de 15/12 GiB, velocidades por delta de contadores); solo
+                  lecturas al motor, nunca `podman` ni `systemctl`; una lectura
+                  fallida conserva los últimos valores marcados desactualizados
 pages/            un dashboard = una lista de bloques
 app.py            shell: sidebar, navegación, temas, registro de dashboards
 ```
@@ -66,6 +86,13 @@ con Cairo, `redraw()` para repintar al cambiar de tema.
 xvfb-run -a python3 -m unittest discover -s tests
 ```
 
-Cubren formato, el parser de `ss`, el layout del treemap y la construcción de
-**las cuatro páginas** con un snapshot: un dashboard roto se detecta sin abrir la
+Cubren formato, el parser de `ss`, el layout del treemap, la construcción de
+**las cuatro páginas** con un snapshot, la lógica pura del cambio Abito ⇄ Gufo
+(parseo de `resident`, texto de confirmación y códigos de salida de `switch`),
+la lógica pura de la actualización del motor (parseo del estado con el
+dictamen de admisión de memoria, regla del botón, texto de confirmación y
+fallos de `local-ai-models engine`) y la lógica
+pura del rendimiento del motor (parseo de `/metrics`, mates de caché, ventana
+y especulación, pisos de memoria del guard y comportamiento de últimos valores
+conocidos ante una lectura fallida): un dashboard roto se detecta sin abrir la
 app ni mirar la pantalla.
