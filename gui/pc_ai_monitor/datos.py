@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from gi.repository import GLib
@@ -61,6 +61,10 @@ class Snapshot:
     # Nombres de [[watch]] con visible = false. La UI los omite al dibujar;
     # el historial sigue usando GROUP_KEYS completo para indexar.
     hidden_groups: tuple[str, ...] = ()
+    # Último instante (time.monotonic) en que cada fuente se leyó bien:
+    # "stats", "ports", "tokens". Una lectura con el mismo contenido también
+    # cuenta: la frescura es de la lectura, no de los datos.
+    collected_at: dict[str, float] = field(default_factory=dict)
 
     def memory(self) -> dict[str, Any]:
         return (self.stats or {}).get("memory", {})
@@ -144,6 +148,7 @@ class Collector:
         self._router_status: dict[str, Any] | None = None
         self._router_metrics: dict[str, Any] | None = None
         self._errors: dict[str, str] = {}
+        self._collected_at: dict[str, float] = {}
         self._history: deque[Sample] = deque(maxlen=config.history_capacity)
 
     # -- public API -------------------------------------------------------
@@ -179,6 +184,7 @@ class Collector:
                     for entry in self._config.watch
                     if not entry.visible
                 ),
+                collected_at=dict(self._collected_at),
             )
 
     # -- worker -----------------------------------------------------------
@@ -246,6 +252,7 @@ class Collector:
             self._stats = stats
             self._history.append(self._sample_from(stats))
             self._errors.pop("recursos", None)
+            self._collected_at["stats"] = time.monotonic()
         return True
 
     def _collect_ports(self) -> bool:
@@ -269,6 +276,7 @@ class Collector:
 
         with self._lock:
             self._ports = stdout
+            self._collected_at["ports"] = time.monotonic()
             self._errors.pop("puertos", None)
         return True
 
@@ -290,6 +298,7 @@ class Collector:
 
         with self._lock:
             self._tokens = tokens
+            self._collected_at["tokens"] = time.monotonic()
             self._errors.pop("tokens", None)
         return True
 

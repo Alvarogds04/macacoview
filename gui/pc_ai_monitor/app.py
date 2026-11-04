@@ -9,6 +9,7 @@ keeps updating while it is on screen.
 # pyright: reportAttributeAccessIssue=false
 
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,17 +19,23 @@ from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
 from pc_ai_monitor.config import write_template
 from pc_ai_monitor.datos import Collector, Snapshot
+from pc_ai_monitor.formato import gib
+from pc_ai_monitor.pages.home import HomePage
 from pc_ai_monitor.pages.motores import MotoresPage
 from pc_ai_monitor.pages.procesos import ProcesosPage
 from pc_ai_monitor.pages.puertos import PuertosPage
 from pc_ai_monitor.pages.recursos import RecursosPage
 from pc_ai_monitor.pages.router import RouterPage
 from pc_ai_monitor.pages.usage import TokensPage
+from pc_ai_monitor.puertos import counts, parse_ss
 from pc_ai_monitor.settings import SettingsSection
 
 APP_ID = "local.pcai.monitor.gnome"
+WINDOW_TITLE = "MacacoView"
+DEFAULT_SECTION = "home"
 
 SECTIONS = (
+    ("home", "Home", "go-home-symbolic"),
     ("motores", "Motores", "system-run-symbolic"),
     ("recursos", "Recursos", "view-list-symbolic"),
     ("router", "Router", "network-transmit-receive-symbolic"),
@@ -39,6 +46,8 @@ SECTIONS = (
 )
 
 # Dashboards available by section key; anything else shows the placeholder.
+# Home no entra aqui: PageTests fija este registro en seis claves y el shell
+# resuelve Home por su cuenta (SHELL_PAGES).
 DASHBOARDS = {
     "motores": MotoresPage,
     "recursos": RecursosPage,
@@ -47,6 +56,99 @@ DASHBOARDS = {
     "puertos": PuertosPage,
     "procesos": ProcesosPage,
 }
+
+# Secciones del shell que no son dashboards del registro de arriba.
+SHELL_PAGES = {
+    "home": HomePage,
+}
+
+SECTION_LABEL = {key: label for key, label, _icon in SECTIONS}
+
+# Qué fuente alimenta la pill de edad de cada sección (S1 del encargo T1:
+# Recursos/Home/Motores/Router -> stats; Puertos -> ports; Tokens -> tokens).
+SECTION_SOURCE = {
+    "home": "stats",
+    "motores": "stats",
+    "recursos": "stats",
+    "router": "stats",
+    "procesos": "stats",
+    "puertos": "ports",
+    "tokens": "tokens",
+}
+
+# Qué colector, si falla, enciende el banner de cada sección. Motores y Home
+# leen de stats (el colector «recursos»); config no tiene colector.
+SECTION_COLLECTOR = {
+    "home": "recursos",
+    "motores": "recursos",
+    "recursos": "recursos",
+    "router": "router",
+    "procesos": "recursos",
+    "puertos": "puertos",
+    "tokens": "tokens",
+}
+
+# Edad máxima de los datos antes de que la pill pase a ámbar.
+AGE_OK_S = 10.0
+
+DASH = "\u2014"
+
+# Secciones con badge vivo en la barra lateral (diseño 07).
+_BADGE_SECTIONS = ("motores", "recursos", "router", "puertos")
+
+
+def engines_badge(snapshot: Snapshot) -> str:
+    """Badge de Motores: el motor sano según el router, o «—».
+
+    Solo Abito: la entrada «flash» del router es el motor viejo, retirado
+    (odd/tasks/macacoview-gtk.md L9). Gufo se sondea aparte en T3.
+    """
+    router = snapshot.router()
+    for name in ("abito",):
+        engine = router.get(name)
+        if isinstance(engine, dict) and engine.get("healthy"):
+            return name
+    return DASH
+
+
+def memory_badge(snapshot: Snapshot) -> str:
+    """Badge de Recursos: RAM libre, redondeada, o «—» sin dato."""
+    value = snapshot.memory().get("available_gib")
+    if value is None:
+        return DASH
+    try:
+        return f"{gib(float(value), 0)}G"
+    except (TypeError, ValueError):
+        return DASH
+
+
+def local_badge(snapshot: Snapshot) -> str:
+    """Badge de Router: porcentaje de decisiones locales, o «—» sin métricas."""
+    pct = snapshot.telemetry().get("pct_local")
+    return DASH if pct is None else f"{pct}%"
+
+
+def ports_badge(snapshot: Snapshot) -> str:
+    """Badge de Puertos: cuántas escuchas quedan expuestas (acceso «Todas»)."""
+    if not snapshot.ports:
+        return DASH
+    return str(counts(parse_ss(snapshot.ports))[2])
+
+
+def age_state(seconds: float) -> str:
+    """Clase de la pill de edad: verde por debajo de 10 s, ámbar desde 10 s."""
+    return "ok" if seconds < AGE_OK_S else "warn"
+
+
+def error_title(section: str, snapshot: Snapshot) -> str | None:
+    """Título del banner de la sección, o None si su colector no falló."""
+    collector = SECTION_COLLECTOR.get(section)
+    if collector is None:
+        return None
+    prefix = f"{collector}:"
+    if any(error.startswith(prefix) for error in snapshot.errors):
+        return f"{SECTION_LABEL.get(section, section)}: el colector no responde"
+    return None
 
 
 class Placeholder(Gtk.Box):
@@ -105,6 +207,13 @@ class MonitorApplication(Adw.Application):
         self._pages: dict[Adw.NavigationPage, Gtk.Widget] = {}
         self._sections: dict[str, Adw.NavigationPage] = {}
         self._rows: dict[Gtk.ListBoxRow, str] = {}
+        # Chrome por sección: pill de edad y banner de colector (T1).
+        self._chrome: dict[Adw.NavigationPage, tuple[str, Gtk.Label, Adw.Banner]] = {}
+        self._badges: dict[str, Gtk.Label] = {}
+        self._listbox: Gtk.ListBox | None = None
+        self._key_rows: dict[str, Gtk.ListBoxRow] = {}
+        # (huella, monotónico) de la última vez que cada fuente cambió de
+        # contenido: la pill de edad data datos, no publicaciones.
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -120,7 +229,7 @@ class MonitorApplication(Adw.Application):
         theme.load_external()
         self._apply_theme(self._theme_key)
 
-        window = Adw.ApplicationWindow(application=self, title="PC-AI Monitor")
+        window = Adw.ApplicationWindow(application=self, title=WINDOW_TITLE)
         window.set_default_size(1180, 800)
 
         navigation = Adw.NavigationView()
@@ -143,7 +252,7 @@ class MonitorApplication(Adw.Application):
         self._window = window
         window.present()
 
-        self._select_section("recursos")
+        self._select_section(DEFAULT_SECTION)
         write_template()
 
         self._collector = Collector(self._config)
@@ -168,6 +277,8 @@ class MonitorApplication(Adw.Application):
         listbox = Gtk.ListBox()
         listbox.add_css_class("navigation-sidebar")
         listbox.connect("row-selected", self._on_row_selected)
+        self._listbox = listbox
+        self._key_rows = {}
 
         for key, label, icon in SECTIONS:
             if key == "config":
@@ -187,11 +298,23 @@ class MonitorApplication(Adw.Application):
 
             name = Gtk.Label(label=label, xalign=0)
             name.add_css_class("sidebar-label")
+            name.set_hexpand(True)
             content.append(name)
+
+            if key in _BADGE_SECTIONS:
+                # Badge vivo, pequeño y apagado: dato de un vistazo, no otra
+                # columna de números.
+                badge = Gtk.Label(label=DASH, xalign=1)
+                badge.add_css_class("sidebar-badge")
+                badge.set_valign(Gtk.Align.CENTER)
+                content.append(badge)
+                self._badges[key] = badge
+
             row.set_child(content)
 
             listbox.append(row)
             self._rows[row] = key
+            self._key_rows[key] = row
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -217,6 +340,16 @@ class MonitorApplication(Adw.Application):
             self._sections[key] = page
         self._nav.replace([page])
 
+        row = self._key_rows.get(key)
+        if (
+            row is not None
+            and self._listbox is not None
+            and self._listbox.get_selected_row() is not row
+        ):
+            # Dispara _on_row_selected, que vuelve aquí con la fila ya
+            # puesta y la página cacheada: recursion de un nivel y para.
+            self._listbox.select_row(row)
+
     # -- pages -------------------------------------------------------------
 
     def _build_section(self, key: str) -> Adw.NavigationPage:
@@ -226,26 +359,45 @@ class MonitorApplication(Adw.Application):
         if key == "config":
             content = SettingsSection(self._config, self._apply_config)
         else:
-            factory = DASHBOARDS.get(key)
+            factory = SHELL_PAGES.get(key) or DASHBOARDS.get(key)
             if factory is None:
                 content = Placeholder(label, "Se está migrando desde la app Tauri.")
             else:
                 content = factory()
 
-        return self._wrap(label, content)
+        return self._wrap(label, content, section=key)
 
-    def _wrap(self, title: str, content: Gtk.Widget) -> Adw.NavigationPage:
+    def _wrap(
+        self, title: str, content: Gtk.Widget, section: str | None = None
+    ) -> Adw.NavigationPage:
         header = Adw.HeaderBar()
-        header.set_title_widget(Adw.WindowTitle(title=title))
+        title_widget = Adw.WindowTitle(title=title, subtitle=WINDOW_TITLE)
+
+        pill: Gtk.Label = Gtk.Label(label=DASH)
+        pill.add_css_class("age-pill")
+        pill.set_valign(Gtk.Align.CENTER)
+        pill.set_visible(False)
+        title_widget.set_hexpand(False)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_valign(Gtk.Align.CENTER)
+        box.append(title_widget)
+        box.append(pill)
+        header.set_title_widget(box)
         header.pack_start(self._sidebar_toggle())
 
+        banner = Adw.Banner()
+        banner.set_revealed(False)
+
         toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(banner)
         toolbar.add_top_bar(header)
         toolbar.set_content(content)
 
         page = Adw.NavigationPage(title=title)
         page.set_child(toolbar)
         self._pages[page] = content
+        if section is not None:
+            self._chrome[page] = (section, pill, banner)
         return page
 
     def _push_detail(self, title: str, content: Gtk.Widget) -> None:
@@ -317,6 +469,38 @@ class MonitorApplication(Adw.Application):
             )
             if callable(update):
                 update(snapshot)
+
+        now = time.monotonic()
+
+        badge_text = {
+            "motores": engines_badge(snapshot),
+            "recursos": memory_badge(snapshot),
+            "router": local_badge(snapshot),
+            "puertos": ports_badge(snapshot),
+        }
+        for key, text in badge_text.items():
+            label = self._badges.get(key)
+            if label is not None:
+                label.set_text(text)
+
+        for section, pill, banner in self._chrome.values():
+            title = error_title(section, snapshot)
+            if title is not None:
+                banner.set_title(title)
+                banner.set_revealed(True)
+            else:
+                banner.set_revealed(False)
+
+            read_at = snapshot.collected_at.get(SECTION_SOURCE.get(section, ""))
+            if read_at is None:
+                pill.set_visible(False)
+                continue
+            age = max(0.0, now - read_at)
+            pill.set_text(f"{int(age)}s")
+            pill.remove_css_class("age-ok")
+            pill.remove_css_class("age-warn")
+            pill.add_css_class(f"age-{age_state(age)}")
+            pill.set_visible(True)
 
     def _finish_self_test(self) -> bool:
         snapshot = self._collector.snapshot() if self._collector is not None else None

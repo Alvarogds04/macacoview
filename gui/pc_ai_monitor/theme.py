@@ -373,10 +373,46 @@ listview, gridview {
 
 .navigation-sidebar > row:selected {
   background-color: @theme_selection;
+  box-shadow: inset 3px 0 0 @theme_accent;
+}
+
+.navigation-sidebar > row:selected .sidebar-label {
+  color: @theme_accent;
 }
 
 .sidebar-label {
   font-size: 12px;
+}
+
+/* Badges vivos del shell (diseño 07): pequeños, apagados, monospace. */
+.sidebar-badge {
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 10px;
+  color: @theme_muted;
+}
+
+.navigation-sidebar > row:selected .sidebar-badge {
+  color: @theme_text;
+}
+
+/* Pill de edad de los datos de la sección: verde fresco, ámbar a partir
+   de AGE_OK_S segundos. */
+.age-pill {
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 10px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background-color: @theme_subtle;
+  border: 1px solid @theme_border;
+}
+
+.age-pill.age-ok {
+  color: @theme_green;
+}
+
+.age-pill.age-warn {
+  color: @theme_warning;
+  border-color: @theme_warning;
 }
 
 /* Router: valores alineados y semaforo de estado. */

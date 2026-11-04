@@ -28,6 +28,16 @@ Se crea sola en `~/.config/pc-ai-monitor/config.toml` con las rutas de los
 colectores, el helper de puertos y los intervalos de refresco. Si un colector no
 existe, esa sección queda en "sin datos" y el resto sigue funcionando.
 
+## MacacoView
+
+La app se llama **MacacoView** (ventana y cabeceras; los identificadores y las
+rutas de config no cambian). La sección **Home**, primera y por defecto, será el
+cockpit del diseño 07; de momento muestra «Home: en construcción». La barra
+lateral lleva badges vivos —motor activo, RAM libre, % local del router y
+puertos expuestos— y cada cabecera una pill con la edad de los datos de su
+sección (verde < 10 s, ámbar desde 10 s); si el colector de una sección falla,
+un banner lo anuncia arriba.
+
 ## Temas
 
 Cuatro, desde la cabecera: **Gentle** (default, el tema activo de gentle-ai),
