@@ -17,8 +17,19 @@ import unittest
 from ipaddress import ip_address
 from pathlib import Path
 
+import _aislamiento  # page tests must not reach the live machine
+
 from pc_ai_monitor.datos import GROUP_KEYS, Sample, Snapshot
-from pc_ai_monitor.formato import count, gib, gib_label, percent, safe, share, tokens, whole
+from pc_ai_monitor.formato import (
+    count,
+    gib,
+    gib_label,
+    percent,
+    safe,
+    share,
+    tokens,
+    whole,
+)
 from pc_ai_monitor.puertos import (
     ALL,
     LOCAL,
@@ -30,6 +41,8 @@ from pc_ai_monitor.puertos import (
     port_of,
     service_name,
 )
+
+_aislamiento.isolate()
 
 # La dirección no especificada, compuesta en vez de pegada como literal.
 ANY_V4 = str(ip_address(0))
@@ -70,7 +83,7 @@ class PuertosTests(unittest.TestCase):
     def test_is_wildcard(self):
         # Test fixtures: these assert is_wildcard() REJECTS wildcard addresses.
         # Nothing in this project binds to all interfaces.
-        for host in ("0.0.0.0", "::", "*"):  # noqa: S104
+        for host in ("0.0.0.0", "::", "*"):
             self.assertTrue(is_wildcard(host), host)
         for host in ("127.0.0.1", "::1", "100.64.0.1", "fe80::1"):
             self.assertFalse(is_wildcard(host), host)
@@ -619,6 +632,8 @@ class TokenParserTests(unittest.TestCase):
             raise unittest.SkipTest("no se encontro scripts/macacoview-tokens")
         loader = SourceFileLoader("macacoview_tokens", str(script))
         spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None:
+            raise unittest.SkipTest("no se pudo cargar scripts/macacoview-tokens")
         cls.tokens = importlib.util.module_from_spec(spec)
         loader.exec_module(cls.tokens)
 
@@ -962,7 +977,9 @@ class ExtensionTests(unittest.TestCase):
             # is still checked above, only the "this machine's shell is listed"
             # part needs a real GNOME session.
             self.skipTest("gnome-shell not installed on this host")
-        out = subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True)
+        out = subprocess.run(
+            ["gnome-shell", "--version"], capture_output=True, text=True, check=False
+        )
         words = out.stdout.strip().split()
         # ubuntu-24.04 runners DO ship gnome-shell on PATH -- it comes in as a
         # desktop dependency -- but it answers with an empty stdout there. A
@@ -1113,6 +1130,7 @@ class StatsConfigPathTests(unittest.TestCase):
             env = dict(os.environ, HOME=tmp)
             out = subprocess.run(
                 ["python3", str(script)], capture_output=True, text=True, env=env,
+                check=False,
             )
 
         self.assertEqual(out.returncode, 0, out.stderr)

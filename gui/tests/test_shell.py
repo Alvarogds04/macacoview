@@ -12,7 +12,11 @@ necesitan display (igual que PageTests):
 import time
 import unittest
 
+import _aislamiento  # page tests must not reach the live machine
+
 from pc_ai_monitor.datos import Snapshot
+
+_aislamiento.isolate()
 
 
 def _no_refresh(self, snapshot, force=False):

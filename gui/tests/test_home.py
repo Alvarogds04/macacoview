@@ -18,6 +18,7 @@ import time
 import unittest
 from unittest import mock
 
+import _aislamiento  # page tests must not reach the live machine
 from gi.repository import Gtk
 
 from pc_ai_monitor.blocks.engine_logica import (
@@ -33,6 +34,8 @@ from pc_ai_monitor.blocks.rendimiento_logica import (
 )
 from pc_ai_monitor.datos import Snapshot
 from pc_ai_monitor.widgets import instrumentos_logica as logica
+
+_aislamiento.isolate()
 
 # ---------------------------------------------------------------------------
 # Fijaciones compartidas

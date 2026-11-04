@@ -17,6 +17,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import _aislamiento  # page tests must not reach the live machine
+
+_aislamiento.isolate()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 STATUS = json.loads((FIXTURES / "router_status_real_2026-11-04.json").read_text())
 METRICS = json.loads((FIXTURES / "router_metrics_real_2026-11-04.json").read_text())

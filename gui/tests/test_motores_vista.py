@@ -11,9 +11,12 @@ import time
 import unittest
 from unittest import mock
 
+import _aislamiento  # page tests must not reach the live machine
 from gi.repository import GLib
 
 from pc_ai_monitor.datos import Snapshot
+
+_aislamiento.isolate()
 
 MODELS = [
     {
