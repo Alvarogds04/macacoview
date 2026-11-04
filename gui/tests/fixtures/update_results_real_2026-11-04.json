@@ -49,5 +49,19 @@
    "build_required": true,
    "reason": "confirmation required"
   }
+ },
+ "rollback_isolated": {
+  "exit": 1,
+  "measured_against": "temporary isolated paths (LOCAL_AI_GUFO_HOME / LOCAL_AI_CTRL_SRC) with LOCAL_AI_FAULT=copy_verify — test-only seam, never sent by the UI",
+  "stdout": {
+   "action": "update controller-gufo",
+   "from": "dd4fcec0",
+   "to": "690f8af1",
+   "applied": true,
+   "verified": false,
+   "restored": true,
+   "reason": "la verificación posterior falló (fallo inyectado por LOCAL_AI_FAULT=copy_verify); se restauró el controlador previo"
+  },
+  "stderr": "update controller-gufo falló: la verificación posterior falló (fallo inyectado por LOCAL_AI_FAULT=copy_verify); se restauró el controlador previo"
  }
 }
