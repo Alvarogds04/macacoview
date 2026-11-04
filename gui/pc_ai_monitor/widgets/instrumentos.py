@@ -536,6 +536,16 @@ def _hm(t: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+def ring_font(width: float, height: float, thickness: float) -> float:
+    """Tamaño del valor central: escala por el hueco interior, no por el aro.
+
+    En aros chicos (54 px, grosor 9) «91 %» quedaba recortado por el trazo.
+    """
+    radius = (min(width, height) - thickness) / 2 - 1
+    inner = max(8.0, 2 * radius - thickness)
+    return max(8.0, min(21.0, inner * 0.30))
+
+
 class Ring(Chart):
     """Single-value ring 0–100 % with track, centre text and «sin datos»."""
 
@@ -561,7 +571,7 @@ class Ring(Chart):
         sweep, text, no_data = logica.ring_state(self._pct)
         # El centro lleva el VALOR a escala del aro: «91 %» cabe dentro,
         # nunca el label (que vive debajo del anillo).
-        font = max(11.0, min(21.0, min(width, height) * 0.23))
+        font = ring_font(width, height, self._thickness)
 
         cr.set_line_width(self._thickness)
         cr.set_line_cap(1)

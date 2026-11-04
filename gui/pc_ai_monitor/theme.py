@@ -255,6 +255,16 @@ def load_external(directory: Path = GENTLE_PI_THEMES) -> int:
 # and small uppercase labels. Every colour comes from the @define-color block
 # built below, so switching theme is a one-provider swap.
 BASE_CSS = """
+/* Un botón destacado deshabilitado no debe parecer activo: libadwaita solo
+   baja la opacidad y el acento seguía leyéndose como «se puede pulsar». */
+button.suggested-action:disabled,
+button.destructive-action:disabled {
+  background-color: @theme_subtle;
+  color: @theme_muted;
+  border: 1px solid @theme_border;
+  opacity: 1;
+}
+
 window, .background {
   background-color: @theme_bg;
   color: @theme_text;

@@ -41,7 +41,21 @@ de motores con margen RAM (disponible / conservadora con sus mínimos) y la
 tarjeta de actualización de un solo estado con Ctrl U. Todo el cockpit se
 alimenta de un poller compartido (5 s) que reutiliza las mismas lecturas que
 el panel Motores (`local-ai-models`) y del propio motor Gufo (`:11070`). La
-barra lateral lleva badges vivos —motor activo, RAM libre, % local del router
+sección **Motores** es el detalle del diseño 07 en dos columnas: a la
+izquierda «Motor residente» (tarjetas Abito/Gufo con lámpara, estado, ctx y
+las dos cifras de RAM — «≈ 85 GiB reservados · 49.2 GiB en uso» — y el botón
+«Cambiar a …» sólo en la inactiva) y «Actualizaciones del PC», la lista de
+todo lo actualizable según `local-ai-models updates --json` con píldora de
+estado (Al día / Nueva X / Sin canal / No se pudo consultar), eta, botón
+«Actualizar» por fila con doble confirmación cuando hay que compilar
+llama.cpp (`--build`: decenas de minutos, reinicia Abito) y «Actualizar todo
+(N)» secuencial; a la derecha «Rendimiento del motor» como instrumentos
+(lámpara de salud, contexto servido, pedidos, sparklines decode/prefill,
+dial MTP, anillo de caché, barra de ventana KV, lámpara GPU, barras de
+memoria con sus mínimos y «Actualizar» manual) y «Motores locales», el
+inventario dinámico de siempre.
+
+La barra lateral lleva badges vivos —motor activo, RAM libre, % local del router
 y puertos expuestos— y cada cabecera una pill con la edad de los datos de su
 sección (verde < 10 s, ámbar desde 10 s); si el colector de una sección falla,
 un banner lo anuncia arriba.
@@ -79,6 +93,19 @@ blocks/           Block, Dashboard, catalogue() + un módulo por tarjeta
                   de 15/12 GiB, velocidades por delta de contadores); solo
                   lecturas al motor, nunca `podman` ni `systemctl`; una lectura
                   fallida conserva los últimos valores marcados desactualizados
+                  blocks/actualizaciones.py + actualizaciones_logica.py:
+                  «Actualizaciones del PC» de la página Motores (S6) y su
+                  lógica pura (contrato L8/L11/L12/L14: filas con píldora,
+                  eta y botón; resultados de `update <id> --json` — 0
+                  verificado, 0 no-op, 10 rechazado o build_required,
+                  1 rollback con JSON `restored: true` — a mensajes de
+                  usuario); sin GTK, testeable sin ventana
+                  blocks/motores_vista.py: vista rediseñada de la página
+                  Motores (T4): tarjetas de residente con las cifras S9 y
+                  el rendimiento como instrumentos, reutilizando
+                  residente_logica, rendimiento(_logica), home_logica y
+                  los instrumentos de T2; el motor retirado «flash» jamás
+                  aparece
 pages/            un dashboard = una lista de bloques
 app.py            shell: sidebar, navegación, temas, registro de dashboards
 ```
