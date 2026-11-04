@@ -1146,3 +1146,97 @@ class ThemeCssTests(unittest.TestCase):
         self.assertIn(f"@define-color accent_bg_color {palette.accent};", css)
         self.assertIn(f"@define-color accent_color {palette.accent};", css)
         self.assertIn(f"@define-color accent_fg_color {palette.background};", css)
+
+
+class CollectorDecisionsTests(unittest.TestCase):
+    """T5: historial acotado de decisiones del router en el colector.
+
+    El router solo publica la lista ``recent`` más nueva en cada sondeo; la
+    página Router necesita un historial acumulado para «rutas en el tiempo» y
+    las ventanas de 5/15/60 min. El colector lo de-duplica por (ts, sesión),
+    lo acota a 2000 entradas y descarta lo de más de 60 minutos.
+    """
+
+    def _metrics(self, sessions):
+        return {
+            "recent": [
+                {"ts": f"2026-11-04T10:{index // 60:02d}:{index % 60:02d}+0100", "session": session}
+                for index, session in enumerate(sessions)
+            ]
+        }
+
+    def test_dedupes_by_ts_and_session_across_polls(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        collector = Collector(cfg.Config())
+        metrics = self._metrics(["rtr-1", "rtr-2"])
+
+        collector._record_decisions(metrics, now=100.0)
+        collector._record_decisions(metrics, now=130.0)
+
+        decisions = collector.snapshot().decisions
+        self.assertEqual(len(decisions), 2)
+        self.assertEqual({d["session"] for d in decisions}, {"rtr-1", "rtr-2"})
+
+    def test_new_polls_append_only_new_entries(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        collector = Collector(cfg.Config())
+        collector._record_decisions(self._metrics(["rtr-1"]), now=100.0)
+        collector._record_decisions(self._metrics(["rtr-1", "rtr-2"]), now=130.0)
+
+        decisions = collector.snapshot().decisions
+        self.assertEqual([d["session"] for d in decisions], ["rtr-1", "rtr-2"])
+        # La marca ``_seen`` es el monotonic del sondeo que la vio por 1ª vez.
+        self.assertEqual(decisions[0]["_seen"], 100.0)
+        self.assertEqual(decisions[1]["_seen"], 130.0)
+
+    def test_bounds_to_2000_entries(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import DECISIONS_CAP, Collector
+
+        collector = Collector(cfg.Config())
+        collector._record_decisions(self._metrics([f"rtr-{i}" for i in range(2100)]), now=100.0)
+
+        decisions = collector.snapshot().decisions
+        self.assertEqual(len(decisions), DECISIONS_CAP)
+        self.assertEqual(decisions[0]["session"], "rtr-100")  # las viejas cayeron
+
+    def test_prunes_entries_older_than_60_minutes(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        collector = Collector(cfg.Config())
+        collector._record_decisions(self._metrics(["vieja-1", "vieja-2"]), now=0.0)
+        collector._record_decisions(self._metrics(["nueva"]), now=3700.0)
+
+        decisions = collector.snapshot().decisions
+        self.assertEqual([d["session"] for d in decisions], ["nueva"])
+
+    def test_tolerates_garbage_without_touching_the_history(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        collector = Collector(cfg.Config())
+        collector._record_decisions(self._metrics(["rtr-1"]), now=100.0)
+        for metrics in (None, {}, {"recent": None}, {"recent": ["basura"]}):
+            collector._record_decisions(metrics, now=120.0)
+
+        self.assertEqual(len(collector.snapshot().decisions), 1)
+
+    def test_snapshot_keeps_router_and_recent_untouched(self):
+        """Las demás páginas dependen de router()/telemetry()/recent_routes()."""
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        collector = Collector(cfg.Config())
+        collector._router_status = {"router": {"version": "1.0.0"}}
+        collector._router_metrics = self._metrics(["rtr-1"])
+        collector._record_decisions(collector._router_metrics, now=100.0)
+
+        snapshot = collector.snapshot()
+        self.assertEqual(snapshot.router(), {"router": {"version": "1.0.0"}})
+        self.assertEqual(snapshot.recent_routes(), [{"ts": "2026-11-04T10:00:00+0100", "session": "rtr-1"}])
+        self.assertEqual(len(snapshot.decisions), 1)

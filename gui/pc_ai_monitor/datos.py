@@ -33,6 +33,13 @@ ROUTER_TIMEOUT_S = 3.0
 ROUTER_STATUS_URL = "http://127.0.0.1:11009/status"
 ROUTER_METRICS_URL = "http://127.0.0.1:11009/metrics"
 
+# Historial de decisiones para la página Router (T5): el router solo publica la
+# lista ``recent`` más nueva en cada sondeo, y la página necesita acumular para
+# «rutas en el tiempo» y las ventanas de 5/15/60 min. Acotado por cantidad y
+# por edad, de-duplicado por (ts, sesión) entre sondeos.
+DECISIONS_CAP = 2000
+DECISIONS_MAX_AGE_S = 3600.0
+
 # Ordered like the watch entries: pi, hermes, firefox, system, other. Single
 # source of truth: the [[watch]] defaults in config, so a renamed default entry
 # renames the history columns with it.
@@ -65,6 +72,10 @@ class Snapshot:
     # "stats", "ports", "tokens". Una lectura con el mismo contenido también
     # cuenta: la frescura es de la lectura, no de los datos.
     collected_at: dict[str, float] = field(default_factory=dict)
+    # Historial acumulado de decisiones del router (T5), más viejo primero.
+    # Cada entrada es una copia de ``recent`` con ``_seen`` (monotonic del
+    # sondeo que la vio por primera vez). Sin él, las demás páginas no cambian.
+    decisions: tuple[dict[str, Any], ...] = ()
 
     def memory(self) -> dict[str, Any]:
         return (self.stats or {}).get("memory", {})
@@ -150,6 +161,8 @@ class Collector:
         self._errors: dict[str, str] = {}
         self._collected_at: dict[str, float] = {}
         self._history: deque[Sample] = deque(maxlen=config.history_capacity)
+        self._decisions: deque[dict[str, Any]] = deque()
+        self._decision_keys: set[tuple[Any, Any]] = set()
 
     # -- public API -------------------------------------------------------
 
@@ -185,6 +198,7 @@ class Collector:
                     if not entry.visible
                 ),
                 collected_at=dict(self._collected_at),
+                decisions=tuple(self._decisions),
             )
 
     # -- worker -----------------------------------------------------------
@@ -213,6 +227,44 @@ class Collector:
 
             self._stop.wait(0.2)
 
+    def _record_decisions(
+        self, metrics: dict[str, Any] | None, now: float | None = None
+    ) -> None:
+        """Acumula las decisiones nuevas de un sondeo de /metrics.
+
+        De-duplica por (ts, sesión) — el mismo ``recent`` reaparece en cada
+        sondeo hasta que el router lo rota — y acota el historial por cantidad
+        (``DECISIONS_CAP``) y por edad (``DECISIONS_MAX_AGE_S``). Tolerante:
+        un payload raro no toca el historial.
+        """
+        if not isinstance(metrics, dict):
+            return
+        recent = metrics.get("recent")
+        if not isinstance(recent, list):
+            return
+        if now is None:
+            now = time.monotonic()
+
+        with self._lock:
+            for entry in recent:
+                if not isinstance(entry, dict):
+                    continue
+                key = (entry.get("ts"), entry.get("session"))
+                if key in self._decision_keys:
+                    continue
+                self._decision_keys.add(key)
+                stored = dict(entry)
+                stored["_seen"] = now
+                self._decisions.append(stored)
+
+            cutoff = now - DECISIONS_MAX_AGE_S
+            while self._decisions and self._decisions[0]["_seen"] < cutoff:
+                old = self._decisions.popleft()
+                self._decision_keys.discard((old.get("ts"), old.get("session")))
+            while len(self._decisions) > DECISIONS_CAP:
+                old = self._decisions.popleft()
+                self._decision_keys.discard((old.get("ts"), old.get("session")))
+
     def _collect_router(self) -> bool:
         """Lee el router local. Si esta parado, la seccion queda vacia, no rompe."""
         status = _get_json(ROUTER_STATUS_URL, ROUTER_TIMEOUT_S)
@@ -230,6 +282,7 @@ class Collector:
                     self._errors.pop("router", None)
             else:
                 self._errors.pop("router", None)
+        self._record_decisions(metrics)
         return True
 
     def _collect_stats(self) -> bool:

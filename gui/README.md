@@ -141,3 +141,16 @@ pura del rendimiento del motor (parseo de `/metrics`, mates de caché, ventana
 y especulación, pisos de memoria del guard y comportamiento de últimos valores
 conocidos ante una lectura fallida): un dashboard roto se detecta sin abrir la
 app ni mirar la pantalla.
+
+## Página Router
+
+La página **Router** (diseño 07) se arma con cinco bloques que leen el Snapshot del
+colector y se refrescan con cada sondeo: franja de KPIs, «Rutas en el tiempo» +
+«Decisiones» con filtros compartidos (ruta, decisor, ventana de 5/15/60 min y
+búsqueda: filtran la tabla y el gráfico a la vez), tarjetas de Abito (del `/status`
+de :11009) y Gufo (de sondas vivas a :11070, en un worker), confirmaciones con
+cuenta regresiva, el ciclo de vida de flash como línea histórica, teselas
+JEV/CLOUD/ENGRAM y sesiones. El historial de decisiones que alimenta el gráfico lo
+acumula el colector en `Snapshot.decisions` (sin repetidos por `(ts, sesión)`, hasta
+2000 entradas y 60 minutos). «flash» es el motor retirado: línea apagada, nunca una
+tarjeta. Sin router en :11009 la página se atenúa entera con su aviso.

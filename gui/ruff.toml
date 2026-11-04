@@ -1,0 +1,3 @@
+# The app lives in gui/: resolve pc_ai_monitor as first-party from any cwd,
+# so import sorting is the same whether ruff runs from the repo root or gui/.
+src = ["."]
