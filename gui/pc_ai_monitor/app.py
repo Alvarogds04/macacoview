@@ -209,6 +209,7 @@ class MonitorApplication(Adw.Application):
         self._rows: dict[Gtk.ListBoxRow, str] = {}
         # Chrome por sección: pill de edad y banner de colector (T1).
         self._chrome: dict[Adw.NavigationPage, tuple[str, Gtk.Label, Adw.Banner]] = {}
+        self._last_snapshot: Snapshot | None = None
         self._badges: dict[str, Gtk.Label] = {}
         self._listbox: Gtk.ListBox | None = None
         self._key_rows: dict[str, Gtk.ListBoxRow] = {}
@@ -357,7 +358,9 @@ class MonitorApplication(Adw.Application):
 
         content: Gtk.Widget
         if key == "config":
-            content = SettingsSection(self._config, self._apply_config)
+            content = SettingsSection(
+                self._config, self._apply_config, snapshot=self._last_snapshot
+            )
         else:
             factory = SHELL_PAGES.get(key) or DASHBOARDS.get(key)
             if factory is None:
@@ -463,6 +466,8 @@ class MonitorApplication(Adw.Application):
     # -- data --------------------------------------------------------------
 
     def _on_snapshot(self, snapshot: Snapshot) -> None:
+        # Una sección que se abre después (Configuración) arranca con esto.
+        self._last_snapshot = snapshot
         for page in self._pages.values():
             update: Callable[[Snapshot], None] | None = getattr(
                 page, "update_snapshot", None

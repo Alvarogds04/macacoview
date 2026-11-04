@@ -12,7 +12,10 @@ necesitan display (igual que PageTests):
 import time
 import unittest
 
-import _aislamiento  # page tests must not reach the live machine
+try:  # discover puts tests/ on sys.path; `-m unittest tests.x` does not
+    import _aislamiento
+except ModuleNotFoundError:
+    from tests import _aislamiento
 
 from pc_ai_monitor.datos import Snapshot
 
@@ -381,6 +384,21 @@ class SectionChromeTests(unittest.TestCase):
         application._on_snapshot(shell_snapshot())
 
         self.assertFalse(banner.get_revealed())
+
+
+class SettingsSnapshotTests(SectionChromeTests):
+    """Configuración se abre con la última medición, no con «sin datos»."""
+
+    def test_settings_built_after_a_snapshot_starts_with_it(self):
+        application = self._app_with_sections("home")
+        snapshot = shell_snapshot()
+        application._on_snapshot(snapshot)
+
+        application._select_section("config")
+        page = application._sections["config"]
+        content = application._pages[page]
+
+        self.assertIs(content._snapshot, snapshot)
 
 
 if __name__ == "__main__":

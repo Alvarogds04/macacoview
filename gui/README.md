@@ -165,3 +165,15 @@ CLI y Claude Code en tarjetas, un donut por proveedor que filtra la leyenda al
 clic (y la limpia al repetirlo), columnas por modelo y las ventanas de la
 suscripción Codex coloreadas por presión (≥ 70 % ámbar, ≥ 90 % rojo). Los
 números exactos quedan en las leyendas; las frases, en los tooltips.
+
+## Puertos, Procesos y Configuración
+
+**Puertos** conserva sus tres KPIs, el filtro «sólo expuestos» y las columnas
+PUERTO/PID ordenables; el acceso ahora es una píldora de color (🔒 Local,
+🏠 LAN, 🔷 Tailscale, 🌐 Todas, 📡 Interfaz) con la explicación en el tooltip,
+y las filas expuestas a todas las interfaces llevan una barra ámbar.
+**Procesos** muestra una barra de RAM por fila, escalada al proceso más pesado,
+con la línea de comando completa en el tooltip. **Configuración** es la misma
+página de preferencias más una vista previa de la pill de la barra superior de
+GNOME: sus chips salen de la configuración actual y de la última medición,
+nunca de datos inventados; se abre con la última medición disponible.

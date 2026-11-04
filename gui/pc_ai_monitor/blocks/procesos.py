@@ -1,4 +1,11 @@
-"""Procesos: the heaviest processes on the machine."""
+"""Procesos: the heaviest processes on the machine (diseño 07).
+
+Same rules as always — PID ascending when a new key arrives, RAM/CPU descending,
+the same key toggles, top 40, the «Mostrando N de M procesos · ordenado por …»
+note — with the design's paint: an inline RAM bar per row scaled to the largest
+row shown, the CPU as a compact number, and the full command line in the row's
+tooltip instead of a fourth wide column of text.
+"""
 
 # pyright: reportAttributeAccessIssue=false
 
@@ -7,18 +14,19 @@ from typing import Any
 from gi.repository import Gtk
 
 from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks.tablas_vista import ram_fraction, ram_text
 from pc_ai_monitor.datos import Snapshot
 from pc_ai_monitor.formato import count, gib, safe
 from pc_ai_monitor.widgets import chips
-from pc_ai_monitor.widgets.tabla import cell, header, row
+from pc_ai_monitor.widgets.tabla import bar_cell, cell, header, row
 
 # (título, ancho, clave de orden). La clave vacía no es clickeable.
 COLUMNS = (
     ("PID", 80, "pid"),
-    ("PROCESO", 190, ""),
-    ("RAM", 110, "ram"),
+    ("PROCESO", 170, ""),
+    ("RAM", 200, "ram"),
     ("CPU", 90, "cpu"),
-    ("COMANDO", 420, ""),
+    ("COMANDO", 340, ""),
 )
 SORTS = {
     "pid": lambda item: safe(item.get("pid")),
@@ -38,12 +46,15 @@ class ProcessesBlock(Block):
         self._ascending = False
         self._all: list[dict[str, Any]] = []
 
-        self._header = header(list(COLUMNS), self._sort, self._ascending, self._on_sort)
-        self.body.append(self._header)
+        self._header_box, self._header_buttons = self._build_header()
+        self.body.append(self._header_box)
         self.body.append(self._rows)
 
         self._note = chips.note("")
         self.body.append(self._note)
+
+    def _build_header(self) -> tuple[Gtk.Box, dict[str, Gtk.Button]]:
+        return header(list(COLUMNS), self._sort, self._ascending, self._on_sort)
 
     def _on_sort(self, key: str) -> None:
         if key == self._sort:
@@ -51,7 +62,14 @@ class ProcessesBlock(Block):
         else:
             self._sort = key
             self._ascending = key == "pid"
+        self._rebuild_header()
         self._render()
+
+    def _rebuild_header(self) -> None:
+        # El ▲/▼ y el acento de la columna activa viven en el encabezado.
+        self.body.remove(self._header_box)
+        self._header_box, self._header_buttons = self._build_header()
+        self.body.prepend(self._header_box)
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self._all = snapshot.processes()
@@ -66,35 +84,38 @@ class ProcessesBlock(Block):
             key=SORTS.get(self._sort, SORTS["ram"]),
             reverse=not self._ascending,
         )
-        for process in ordered[:LIMIT]:
-            self._rows.append(
-                row(
-                    [
-                        cell(
-                            str(process.get("pid", "—")),
-                            COLUMNS[0][1],
-                            align=Gtk.Align.END,
-                            mono=True,
-                            muted=True,
-                        ),
-                        cell(str(process.get("comm") or "—"), COLUMNS[1][1]),
-                        cell(
-                            f"{safe(process.get('rss_kb')) / 1024 / 1024:.2f}G",
-                            COLUMNS[2][1],
-                            align=Gtk.Align.END,
-                            mono=True,
-                        ),
-                        cell(
-                            f"{gib(process.get('cpu'))}%",
-                            COLUMNS[3][1],
-                            align=Gtk.Align.END,
-                            mono=True,
-                            muted=True,
-                        ),
-                        cell(str(process.get("args") or ""), COLUMNS[4][1], muted=True),
-                    ]
-                )
+        shown = ordered[:LIMIT]
+        peak = max((safe(p.get("rss_kb")) for p in shown), default=0.0)
+        for process in shown:
+            rss_kb = process.get("rss_kb")
+            line = row(
+                [
+                    cell(
+                        str(process.get("pid", "—")),
+                        COLUMNS[0][1],
+                        align=Gtk.Align.END,
+                        mono=True,
+                        muted=True,
+                    ),
+                    cell(str(process.get("comm") or "—"), COLUMNS[1][1]),
+                    bar_cell(ram_fraction(rss_kb, peak), ram_text(rss_kb)),
+                    cell(
+                        f"{gib(process.get('cpu'))}%",
+                        COLUMNS[3][1],
+                        align=Gtk.Align.END,
+                        mono=True,
+                        muted=True,
+                    ),
+                    cell(str(process.get("args") or ""), COLUMNS[4][1], muted=True),
+                ]
             )
+            # La fila completa se cuenta en el tooltip (S12).
+            line.set_tooltip_text(
+                f"{process.get('args') or process.get('comm') or '—'}"
+                f" · PID {process.get('pid', '—')}"
+                f" · {ram_text(rss_kb)}iB · CPU {gib(process.get('cpu'))} %"
+            )
+            self._rows.append(line)
 
         self._note.set_text(
             f"Mostrando {min(LIMIT, len(ordered))} de {count(len(self._all))} procesos · "

@@ -16,6 +16,8 @@ from gi.repository import Adw, GLib, Gtk
 
 from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
+from pc_ai_monitor.blocks.tablas_vista import pill_chips
+from pc_ai_monitor.datos import Snapshot
 
 APPLY_DELAY_MS = 600
 
@@ -28,9 +30,78 @@ ICON_PRESETS = (
     ("Sistema", "preferences-system"),
 )
 
+# Réplica de la barra superior de GNOME: negra siempre, sea cual sea el tema
+# de la app; la pill es el elemento que consume la extensión.
+PREVIEW_CSS = """
+.mv-topbar {
+  background-color: #000;
+  border: 1px solid @theme_border;
+  border-radius: 8px 8px 0 0;
+  padding: 0 14px;
+  min-height: 30px;
+}
+.mv-topbar-label {
+  color: #e8e8e8;
+  opacity: 0.75;
+  font-size: 12px;
+  font-weight: 600;
+}
+.mv-topbar-pill {
+  background-color: #1c1c1e;
+  border: 1px solid #333;
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+.mv-topbar-pill label {
+  color: #e8e8e8;
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+.mv-preview-note {
+  background-color: @theme_subtle;
+  border: 1px solid @theme_border;
+  border-radius: 0 0 8px 8px;
+  border-top: 0;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+"""
+
+_preview_provider = None
+
+
+def _ensure_preview_css() -> None:
+    """Register the top-bar mock CSS once per display (no-op without one)."""
+    global _preview_provider
+    if _preview_provider is not None:
+        return
+    import gi
+
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gtk
+
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_data(PREVIEW_CSS, -1)
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    _preview_provider = provider
+
 
 def _split_keys(text: str) -> tuple[str, ...]:
     return tuple(part.strip().lower() for part in text.split(",") if part.strip())
+
+
+def _clock_text() -> str:
+    """Clock of the mock bar: the real current time, formatted like GNOME."""
+    from gi.repository import GLib
+
+    now = GLib.DateTime.new_now_local()
+    return now.format("%a %d %b  %H:%M") if now else ""
 
 
 class SettingsSection(Gtk.ScrolledWindow):
@@ -40,6 +111,7 @@ class SettingsSection(Gtk.ScrolledWindow):
         self,
         current: config_module.Config,
         on_apply: Callable[[config_module.Config], None],
+        snapshot: Snapshot | None = None,
     ) -> None:
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -47,6 +119,7 @@ class SettingsSection(Gtk.ScrolledWindow):
 
         self._config = current
         self._on_apply = on_apply
+        self._snapshot = snapshot
         self._pending: int | None = None
         self._building = True  # no aplicar mientras se construye
 
@@ -129,6 +202,31 @@ class SettingsSection(Gtk.ScrolledWindow):
         )
         page.add(panel)
 
+        # Vista previa viva: los chips que la config actual produciría con la
+        # última medición. Sin medición no hay chips: nunca datos inventados.
+        _ensure_preview_css()
+        preview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bar.add_css_class("mv-topbar")
+        for label in ("Actividades", _clock_text()):
+            text = Gtk.Label(label=label, xalign=0)
+            text.add_css_class("mv-topbar-label")
+            bar.append(text)
+        self._pill_preview = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self._pill_preview.add_css_class("mv-topbar-pill")
+        bar.append(self._pill_preview)
+        preview.append(bar)
+        preview_note = Gtk.Label(xalign=0)
+        preview_note.add_css_class("mv-preview-note")
+        preview_note.add_css_class("muted")
+        preview_note.set_wrap(True)
+        preview_note.set_text(
+            "Vista previa de la barra superior de GNOME: así queda la pill con estos "
+            "ajustes y la última medición. La consume la extensión, no esta app."
+        )
+        preview.append(preview_note)
+        panel.add(preview)
+
         self._hide_zero = Adw.SwitchRow(title="Ocultar valores en cero")
         self._hide_zero.set_active(current.bar_hide_zero)
         self._hide_zero.connect("notify::active", self._on_change)
@@ -196,6 +294,7 @@ class SettingsSection(Gtk.ScrolledWindow):
             self._watch_switches.append(row)
 
         self._building = False
+        self._refresh_preview()
 
     # -- filas ----------------------------------------------------------------
 
@@ -214,6 +313,32 @@ class SettingsSection(Gtk.ScrolledWindow):
         row.connect("notify::text", self._on_change)
         row.connect("apply", self._on_change)
         return row
+
+    # -- vista previa del pill -------------------------------------------------
+
+    def update_snapshot(self, snapshot: Snapshot) -> None:
+        """Refresh the pill preview with the latest measurement.
+
+        Called by the shell when a new snapshot arrives; the preview must
+        never show stale chips when the machine changes under the settings.
+        """
+        self._snapshot = snapshot
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        while (child := self._pill_preview.get_first_child()) is not None:
+            self._pill_preview.remove(child)
+        config = self._collect()
+        chips = pill_chips(config, self._snapshot)
+        if chips:
+            for text, tip in chips:
+                chip = Gtk.Label(label=text, xalign=0)
+                chip.set_tooltip_text(tip)
+                self._pill_preview.append(chip)
+        else:
+            empty = Gtk.Label(label="sin datos", xalign=0)
+            empty.add_css_class("muted")
+            self._pill_preview.append(empty)
 
     # -- aplicación -----------------------------------------------------------
 
@@ -263,7 +388,9 @@ class SettingsSection(Gtk.ScrolledWindow):
     def _apply(self) -> bool:
         self._pending = None
         updated = self._collect()
-        config_module.save(updated)
+        # Ruta explícita: los tests apuntan CONFIG_PATH a un directorio temporal.
+        config_module.save(updated, config_module.CONFIG_PATH)
         self._config = updated
+        self._refresh_preview()
         self._on_apply(updated)
         return False
