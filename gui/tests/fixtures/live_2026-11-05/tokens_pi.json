@@ -1,0 +1,328 @@
+{
+ "pi": {
+  "total": 25314779105,
+  "turns": 107594,
+  "cost_usd": 9017.573007,
+  "cache_read": 23271254308,
+  "models": [
+   {
+    "name": "claude-sonnet-5-5",
+    "provider": "anthropic",
+    "total": 6185451325,
+    "turns": 16981
+   },
+   {
+    "name": "deepseek-v4-flash",
+    "provider": "nan",
+    "total": 5420869248,
+    "turns": 19848
+   },
+   {
+    "name": "claude-opus-5-5",
+    "provider": "anthropic",
+    "total": 5070470605,
+    "turns": 13175
+   },
+   {
+    "name": "glm5.3-flash",
+    "provider": "nan",
+    "total": 2528076649,
+    "turns": 14539
+   },
+   {
+    "name": "gpt-5.6-sol",
+    "provider": "openai-codex",
+    "total": 2334466115,
+    "turns": 16623
+   },
+   {
+    "name": "gpt-6.1-sol",
+    "provider": "openai",
+    "total": 1400508041,
+    "turns": 9954
+   },
+   {
+    "name": "gpt-6-astra",
+    "provider": "openai",
+    "total": 1133128506,
+    "turns": 8204
+   },
+   {
+    "name": "mimo-v2.6-flash",
+    "provider": "nan",
+    "total": 420938782,
+    "turns": 2120
+   },
+   {
+    "name": "qwen3.8-flash",
+    "provider": "nan",
+    "total": 316738997,
+    "turns": 2245
+   },
+   {
+    "name": "claude-opus-5",
+    "provider": "anthropic",
+    "total": 168097265,
+    "turns": 597
+   },
+   {
+    "name": "gpt-6-sol",
+    "provider": "openai-codex",
+    "total": 122590080,
+    "turns": 785
+   },
+   {
+    "name": "gpt-6-luna",
+    "provider": "openai",
+    "total": 67808950,
+    "turns": 431
+   },
+   {
+    "name": "gpt-5.5",
+    "provider": "openai-codex",
+    "total": 42182060,
+    "turns": 351
+   },
+   {
+    "name": "gpt-5.6-terra",
+    "provider": "openai-codex",
+    "total": 24732484,
+    "turns": 206
+   },
+   {
+    "name": "claude-opus-4-6",
+    "provider": "anthropic",
+    "total": 21563936,
+    "turns": 302
+   },
+   {
+    "name": "claude-fable-5-1",
+    "provider": "anthropic",
+    "total": 15929531,
+    "turns": 76
+   },
+   {
+    "name": "claude-sonnet-4-6",
+    "provider": "anthropic",
+    "total": 13056853,
+    "turns": 95
+   },
+   {
+    "name": "qwen3.6",
+    "provider": "nan",
+    "total": 9251707,
+    "turns": 101
+   },
+   {
+    "name": "nan-qwen-flash",
+    "provider": "nan",
+    "total": 5738056,
+    "turns": 42
+   },
+   {
+    "name": "sin-modelo",
+    "provider": "",
+    "total": 5295320,
+    "turns": 4
+   },
+   {
+    "name": "claude-haiku-4-5",
+    "provider": "anthropic",
+    "total": 2816304,
+    "turns": 48
+   },
+   {
+    "name": "mimo-v2.5",
+    "provider": "nan",
+    "total": 2488680,
+    "turns": 24
+   },
+   {
+    "name": "gpt-5.4",
+    "provider": "openai",
+    "total": 570017,
+    "turns": 7
+   },
+   {
+    "name": "claude-sonnet-5",
+    "provider": "anthropic",
+    "total": 514382,
+    "turns": 6
+   },
+   {
+    "name": "qwen-flash-next-full",
+    "provider": "gufo-flash-full",
+    "total": 505626,
+    "turns": 12
+   },
+   {
+    "name": "glm-5.3-flash",
+    "provider": "opencode-go",
+    "total": 471652,
+    "turns": 8
+   },
+   {
+    "name": "gpt-5.6-luna",
+    "provider": "openai-codex",
+    "total": 372449,
+    "turns": 2
+   },
+   {
+    "name": "gemma4",
+    "provider": "nan",
+    "total": 145485,
+    "turns": 5
+   },
+   {
+    "name": "Abito-gpt",
+    "provider": "abito-direct",
+    "total": 0,
+    "turns": 385
+   },
+   {
+    "name": "llama3.1:8b-llamacpp",
+    "provider": "llamacpp",
+    "total": 0,
+    "turns": 358
+   },
+   {
+    "name": "qwen-flash-local",
+    "provider": "flash-local",
+    "total": 0,
+    "turns": 17
+   },
+   {
+    "name": "qwen3.6-35b-a3b:gguf:q5",
+    "provider": "magnitude",
+    "total": 0,
+    "turns": 5
+   },
+   {
+    "name": "claude-opus-4-8",
+    "provider": "anthropic",
+    "total": 0,
+    "turns": 4
+   },
+   {
+    "name": "claude-haiku-5-5",
+    "provider": "anthropic",
+    "total": 0,
+    "turns": 4
+   },
+   {
+    "name": "dead-model",
+    "provider": "router",
+    "total": 0,
+    "turns": 3
+   },
+   {
+    "name": "abito-local",
+    "provider": "pc-ai-local",
+    "total": 0,
+    "turns": 3
+   },
+   {
+    "name": "gpt-6.1-sol:",
+    "provider": "openai",
+    "total": 0,
+    "turns": 3
+   },
+   {
+    "name": "claude-sonnet-5-5:",
+    "provider": "anthropic",
+    "total": 0,
+    "turns": 3
+   },
+   {
+    "name": "flash-iq3s",
+    "provider": "flash-iq3s-local",
+    "total": 0,
+    "turns": 2
+   },
+   {
+    "name": "glm5.3-flash:",
+    "provider": "nan",
+    "total": 0,
+    "turns": 2
+   },
+   {
+    "name": "claude-opus-5-5:",
+    "provider": "anthropic",
+    "total": 0,
+    "turns": 2
+   },
+   {
+    "name": "qwen3-coder-next:pi",
+    "provider": "ollama",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.1",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.2",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.3-codex",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.5-pro",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.2-chat-latest",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.4-mini",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5-nano",
+    "provider": "openai",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "nan-deepseek-flash",
+    "provider": "nan",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "gpt-5.3-codex-spark",
+    "provider": "openai-codex",
+    "total": 0,
+    "turns": 1
+   },
+   {
+    "name": "mimo-2.6-flash",
+    "provider": "nan",
+    "total": 0,
+    "turns": 1
+   }
+  ]
+ }
+}
