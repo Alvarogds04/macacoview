@@ -88,6 +88,16 @@ def text_right(
     PangoCairo.show_layout(cr, layout)
 
 
+def _fits(area: Gtk.DrawingArea, text: str, max_width: float, size: float) -> bool:
+    """Does ``text`` at ``size`` fit in ``max_width`` px? (pango, not a guess)."""
+    if max_width <= 0:
+        return False
+    layout = area.create_pango_layout(text)
+    layout.set_markup(f'<span size="{round(size * 1024)}">{text}</span>')
+    width, _height = layout.get_pixel_size()
+    return width <= max_width
+
+
 # ---------------------------------------------------------------------------
 # RAM blocks
 # ---------------------------------------------------------------------------
@@ -125,7 +135,9 @@ class RamBlocks(Chart):
         rects = logica.ram_layout(self._blocks, float(width), self._gap)
         bar_h = float(height) - 4
         for rect in rects:
-            fill, border, text, dashed = _RAM_STYLES.get(rect.block.kind, _RAM_STYLES["free"])
+            fill, border, text, dashed = _RAM_STYLES.get(
+                rect.block.kind, _RAM_STYLES["free"]
+            )
             used_w = (
                 rect.width
                 * max(0.0, rect.block.used_gib)
@@ -166,7 +178,10 @@ class RamBlocks(Chart):
                     12,
                     True,
                 )
-            if rect.width > 90 and rect.block.sublabel:
+            # L21.3: el sublabel nunca pisa otro bloque — sólo si cabe entero.
+            if rect.block.sublabel and _fits(
+                area, rect.block.sublabel, rect.width - 16, 9
+            ):
                 draw_text(
                     area, cr, rect.block.sublabel, rect.x + 8, 22, palette.muted, 9
                 )
@@ -216,7 +231,9 @@ _MARKER_COLORS = {
 class MotorBand(Chart):
     """15-minute engine state band with hit-testable event markers."""
 
-    def __init__(self, width: int = 560, height: int = 56, window_s: float = 900.0) -> None:
+    def __init__(
+        self, width: int = 560, height: int = 56, window_s: float = 900.0
+    ) -> None:
         super().__init__(width, height)
         self._segments: tuple[logica.BandSegment, ...] = ()
         self._markers: tuple[logica.BandMarker, ...] = ()
@@ -358,7 +375,9 @@ class Lanes(Chart):
 
     def set_data(self, lanes) -> None:
         self._lanes = tuple(lanes)
-        self.set_content_height(len(self._lanes) * self._lane_height + self._axis_height)
+        self.set_content_height(
+            len(self._lanes) * self._lane_height + self._axis_height
+        )
         self.queue_draw()
 
     def redraw(self) -> None:
@@ -376,12 +395,17 @@ class Lanes(Chart):
         tmin = self._tmin()
         tmax = self._tmax()
         value = logica.clamp_cursor(t, tmin, tmax)
-        if value == self._cursor or (value is not None and self._cursor is not None
-                                     and math.isclose(value, self._cursor)):
+        if value == self._cursor or (
+            value is not None
+            and self._cursor is not None
+            and math.isclose(value, self._cursor)
+        ):
             return
         self._cursor = value
         self.queue_draw()
-        self.emit("cursor-changed", value if value is not None else 0.0, value is not None)
+        self.emit(
+            "cursor-changed", value if value is not None else 0.0, value is not None
+        )
 
     def _tmin(self) -> float:
         points = [p[0] for lane in self._lanes for p in lane.points]
@@ -395,8 +419,10 @@ class Lanes(Chart):
 
     def _motion(self, _controller, x: float, _y: float) -> None:
         if self._lanes:
-            self.set_cursor(self._tmin() + x / max(1.0, self.get_width())
-                            * (self._tmax() - self._tmin()))
+            self.set_cursor(
+                self._tmin()
+                + x / max(1.0, self.get_width()) * (self._tmax() - self._tmin())
+            )
 
     def _leave(self, _controller) -> None:
         self.set_cursor(None)
@@ -407,16 +433,16 @@ class Lanes(Chart):
         key = Gdk.keyval_name(keyval)
         if key in ("Left", "Right"):
             step = (
-                self.BIG_STEP_S
-                if state & Gdk.ModifierType.SHIFT_MASK
-                else self.STEP_S
+                self.BIG_STEP_S if state & Gdk.ModifierType.SHIFT_MASK else self.STEP_S
             )
             self.set_cursor(
                 logica.cursor_step(self._cursor, key, self._tmin(), self._tmax(), step)
             )
             return True
         if key in ("Home", "End", "Escape"):
-            self.set_cursor(logica.cursor_step(self._cursor, key, self._tmin(), self._tmax()))
+            self.set_cursor(
+                logica.cursor_step(self._cursor, key, self._tmin(), self._tmax())
+            )
             return True
         return False
 
@@ -433,7 +459,15 @@ class Lanes(Chart):
             color = _color(lane.color)
 
             for run in logica.lane_runs(
-                lane.points, tmin, tmax, 0.0, float(width), top, bottom, lane.low, lane.high
+                lane.points,
+                tmin,
+                tmax,
+                0.0,
+                float(width),
+                top,
+                bottom,
+                lane.low,
+                lane.high,
             ):
                 if len(run) < 2:
                     continue
@@ -454,8 +488,15 @@ class Lanes(Chart):
 
             if lane.stale_tail:
                 tail = logica.lane_stale_tail(
-                    lane.points, tmin, tmax, 0.0, float(width), top, bottom,
-                    lane.low, lane.high,
+                    lane.points,
+                    tmin,
+                    tmax,
+                    0.0,
+                    float(width),
+                    top,
+                    bottom,
+                    lane.low,
+                    lane.high,
                 )
                 if tail is not None:
                     cr.move_to(tail[0], tail[1])
@@ -467,7 +508,14 @@ class Lanes(Chart):
                     cr.set_dash([])
 
             draw_text(
-                area, cr, lane.label.upper(), 8, index * lane_h + 10, palette.muted, 9, True
+                area,
+                cr,
+                lane.label.upper(),
+                8,
+                index * lane_h + 10,
+                palette.muted,
+                9,
+                True,
             )
 
             # Current value as a big number at the right end (artboard),
@@ -476,12 +524,25 @@ class Lanes(Chart):
             centre_y = (top + bottom) / 2
             if value is None:
                 text_right(
-                    area, cr, "sin datos", width - 10, centre_y - 7, palette.muted, 12, True
+                    area,
+                    cr,
+                    "sin datos",
+                    width - 10,
+                    centre_y - 7,
+                    palette.muted,
+                    12,
+                    True,
                 )
             else:
                 text_right(
-                    area, cr, logica.lane_value_text(value), width - 10,
-                    centre_y - 19, color, 18, True,
+                    area,
+                    cr,
+                    logica.lane_value_text(value),
+                    width - 10,
+                    centre_y - 19,
+                    color,
+                    18,
+                    True,
                 )
                 text_right(
                     area, cr, lane.unit, width - 10, centre_y + 6, palette.muted, 9
@@ -500,9 +561,7 @@ class Lanes(Chart):
                 draw_text(
                     area, cr, label, x, axis_y + 14, palette.muted, 8, centered=True
                 )
-        text_right(
-            area, cr, "ahora", width - 2, axis_y + 9, palette.accent, 9, True
-        )
+        text_right(area, cr, "ahora", width - 2, axis_y + 9, palette.accent, 9, True)
 
         if self._cursor is not None:
             x = logica.lane_x(self._cursor, tmin, tmax, 0.0, float(width))
@@ -518,7 +577,10 @@ class Lanes(Chart):
                 if value is None:
                     continue
                 y = logica.lane_y(
-                    value, lane.low, lane.high, index * lane_h + 18.0,
+                    value,
+                    lane.low,
+                    lane.high,
+                    index * lane_h + 18.0,
                     (index + 1) * lane_h - 6.0,
                 )
                 cr.set_source_rgba(*theme.rgba(_color(lane.color)))
@@ -575,7 +637,9 @@ class Ring(Chart):
 
         cr.set_line_width(self._thickness)
         cr.set_line_cap(1)
-        cr.set_source_rgba(*theme.rgba(palette.subtle if not no_data else palette.border))
+        cr.set_source_rgba(
+            *theme.rgba(palette.subtle if not no_data else palette.border)
+        )
         cr.arc(cx, cy, radius, 0, 2 * math.pi)
         cr.stroke()
 
@@ -585,8 +649,15 @@ class Ring(Chart):
             cr.stroke()
 
         draw_text(
-            area, cr, text, cx, cy, palette.text if not no_data else palette.muted,
-            font if not no_data else 10, not no_data, True,
+            area,
+            cr,
+            text,
+            cx,
+            cy,
+            palette.text if not no_data else palette.muted,
+            font if not no_data else 10,
+            not no_data,
+            True,
         )
 
 
@@ -619,7 +690,9 @@ class Dial(Chart):
         cr.set_line_cap(1)
         start = math.radians(logica.DIAL_START)
         end = math.radians(logica.DIAL_START + logica.DIAL_SWEEP)
-        cr.set_source_rgba(*theme.rgba(palette.border if not no_data else palette.subtle))
+        cr.set_source_rgba(
+            *theme.rgba(palette.border if not no_data else palette.subtle)
+        )
         cr.arc(cx, cy, radius, start, end)
         cr.stroke()
 
@@ -641,8 +714,15 @@ class Dial(Chart):
             cr.stroke()
 
         draw_text(
-            area, cr, "sin datos" if no_data else f"{self._value:.2f}", cx, height - 8,
-            palette.muted if no_data else palette.text, 10 if no_data else 12, not no_data, True,
+            area,
+            cr,
+            "sin datos" if no_data else f"{self._value:.2f}",
+            cx,
+            height - 8,
+            palette.muted if no_data else palette.text,
+            10 if no_data else 12,
+            not no_data,
+            True,
         )
 
 
@@ -703,8 +783,14 @@ class VersionRail(Chart):
         self._progress = 0.0
         self._steps: list[logica.RailStep] = []
 
-    def set_data(self, from_label: str, to_label: str, status: str,
-                 progress: float = 0.0, steps=()) -> None:
+    def set_data(
+        self,
+        from_label: str,
+        to_label: str,
+        status: str,
+        progress: float = 0.0,
+        steps=(),
+    ) -> None:
         self._from = from_label
         self._to = to_label
         self._status = status
@@ -718,8 +804,12 @@ class VersionRail(Chart):
     def _draw(self, area, cr, width: int, height: int) -> None:
         palette = theme.active()
         view = logica.rail_geometry(self._status, self._progress)
-        accent = palette.muted if view.muted else _color(
-            "green" if view.done else "warning" if view.reverted else "accent"
+        accent = (
+            palette.muted
+            if view.muted
+            else _color(
+                "green" if view.done else "warning" if view.reverted else "accent"
+            )
         )
         xa, xb, y = 34.0, width - 34.0, 22.0
 
@@ -769,11 +859,23 @@ class VersionRail(Chart):
         # con stepper quedan sobre la fila de pasos.
         labels_y = height - 34.0 if self._steps else height - 20.0
         draw_text(area, cr, self._from, xa, labels_y, palette.text, 11, True, True)
-        to_color = palette.text if view.muted else (
-            palette.green if view.done else palette.warning if view.reverted else palette.text
+        to_color = (
+            palette.text
+            if view.muted
+            else (
+                palette.green
+                if view.done
+                else palette.warning
+                if view.reverted
+                else palette.text
+            )
         )
         draw_text(area, cr, self._to, xb, labels_y, to_color, 11, True, True)
-        draw_text(area, cr, self._status, width / 2, y - 14, accent, 9, True, True)
+        # L21.2: sobre la línea va una palabra humana corta o nada — jamás el
+        # token de máquina («al_dia», …): la píldora ya dice el estado.
+        status_text = logica.rail_status_text(self._status)
+        if status_text:
+            draw_text(area, cr, status_text, width / 2, y - 14, accent, 9, True, True)
 
         if self._steps:
             self._draw_steps(area, cr, width, height)
@@ -787,7 +889,13 @@ class VersionRail(Chart):
 
         for index in range(count - 1):
             key = logica.connector_state(self._steps, index)
-            color = palette.green if key == "ok" else palette.warning if key == "warning" else palette.border
+            color = (
+                palette.green
+                if key == "ok"
+                else palette.warning
+                if key == "warning"
+                else palette.border
+            )
             cr.set_source_rgba(*theme.rgba(color))
             cr.set_line_width(2.0)
             cr.move_to(positions[index] + 7, y)
@@ -807,8 +915,10 @@ class VersionRail(Chart):
                 cr.stroke()
             else:
                 color = (
-                    palette.accent if step.state == "current"
-                    else palette.warning if step.state == "failed"
+                    palette.accent
+                    if step.state == "current"
+                    else palette.warning
+                    if step.state == "failed"
                     else palette.border
                 )
                 cr.set_source_rgba(*theme.rgba(color))
@@ -821,6 +931,4 @@ class VersionRail(Chart):
                     cr.move_to(x + 3, y - 3)
                     cr.line_to(x - 3, y + 3)
                     cr.stroke()
-            draw_text(
-                area, cr, step.name, x, y + 12, palette.muted, 8, False, True
-            )
+            draw_text(area, cr, step.name, x, y + 12, palette.muted, 8, False, True)

@@ -85,6 +85,7 @@ def ram_tooltip(block: RamBlock) -> str:
 # Motor band
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class BandSegment:
     """Engine state from ``start_s`` to ``end_s`` (seconds on the band clock)."""
@@ -140,9 +141,7 @@ def marker_hit(
     return best[1] if best else None
 
 
-def band_ticks(
-    tmin: float, tmax: float, step_s: float = 180.0
-) -> list[float]:
+def band_ticks(tmin: float, tmax: float, step_s: float = 180.0) -> list[float]:
     """Grid times strictly inside the window, aligned to ``step_s``."""
     if tmax <= tmin or step_s <= 0:
         return []
@@ -162,6 +161,7 @@ def _frange(start: float, stop: float, step: float) -> list[float]:
 # ---------------------------------------------------------------------------
 # Lanes
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Lane:
@@ -324,9 +324,13 @@ def cursor_step(
     step size (pass a bigger one for Shift).
     """
     if key == "Left":
-        return clamp_cursor((current if current is not None else tmax) - step, tmin, tmax)
+        return clamp_cursor(
+            (current if current is not None else tmax) - step, tmin, tmax
+        )
     if key == "Right":
-        return clamp_cursor((current if current is not None else tmax) + step, tmin, tmax)
+        return clamp_cursor(
+            (current if current is not None else tmax) + step, tmin, tmax
+        )
     if key == "Home":
         return tmin
     if key == "End":
@@ -372,7 +376,9 @@ def dial_state(value: float | None) -> tuple[float, bool]:
     return (dial_angle(value), False)
 
 
-def dial_needle(cx: float, cy: float, radius: float, angle_deg: float) -> tuple[float, float]:
+def dial_needle(
+    cx: float, cy: float, radius: float, angle_deg: float
+) -> tuple[float, float]:
     radians = math.radians(angle_deg)
     return (cx + radius * math.cos(radians), cy + radius * math.sin(radians))
 
@@ -428,6 +434,22 @@ class RailStep:
     state: str
 
 
+# Token → palabra humana sobre el riel. Hoy ninguno (la píldora de la
+# tarjeta ya dice el estado y el riel no repite texto, S12); si mañana un
+# estado necesita palabra, se agrega acá.
+RAIL_STATUS_WORDS: dict[str, str] = {}
+
+
+def rail_status_text(status: str) -> str:
+    """Palabra humana sobre el riel para ``status`` — nunca el token.
+
+    L21.2: la píldora de la tarjeta ya dice el estado («Todo al día»,
+    «1 actualización», …); el riel no repite texto (S12) y hoy devuelve la
+    cadena vacía para todos los estados conocidos.
+    """
+    return RAIL_STATUS_WORDS.get(status, "")
+
+
 def rail_geometry(status: str, progress: float) -> RailView:
     """Visual state of the rail for one update status."""
     if status not in RAIL_VIEWS:
@@ -438,7 +460,9 @@ def rail_geometry(status: str, progress: float) -> RailView:
     return RailView(ratio, done, reverted, muted, running)
 
 
-def normalize_steps(steps: tuple[tuple[str, str], ...] | list[tuple[str, str]]) -> list[RailStep]:
+def normalize_steps(
+    steps: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+) -> list[RailStep]:
     """Validate step names and states; raises ``ValueError`` on either."""
     for name, state in steps:
         if name not in RAIL_STEPS:

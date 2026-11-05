@@ -473,6 +473,82 @@ class ProcesosPageTests(_GtkCase):
         self.assertAlmostEqual(max(fractions), 1.0)
         self.assertGreater(min(fractions), 0.0)
 
+    def test_long_comm_is_capped_and_does_not_move_the_ram_column(self):
+        """L21.6: la celda PROCESO se acota a su columna (elipsis, tooltip
+        con el nombre completo) y no empuja la barra de RAM a la derecha;
+        el ancho de celda es un tope, no un mínimo que crece."""
+        from gi.repository import Pango
+
+        from pc_ai_monitor.widgets.tabla import _children
+
+        long_comm = "c" * 80
+        stats = dict(STATS_FIXTURE)
+        stats["processes"] = [
+            {"pid": 1, "comm": "pi", "rss_kb": 2048, "cpu": 0.1, "args": "pi x"},
+            {"pid": 2, "comm": long_comm, "rss_kb": 1024, "cpu": 0.2, "args": "y"},
+        ]
+        page = self._page(stats=stats)
+
+        lines = list(_children(page._blocks[0]._rows))
+        self.assertEqual(len(lines), 2)
+        # Fila: barra izquierda, PID, PROCESO, RAM, CPU, COMANDO.
+        name_labels = [list(_children(line))[2] for line in lines]
+        for label in name_labels:
+            self.assertEqual(label.get_ellipsize(), Pango.EllipsizeMode.END)
+            self.assertGreaterEqual(label.get_max_width_chars(), 1)
+            self.assertFalse(label.get_hexpand())
+        # Misma columna: el tope es el de la celda PROCESO, no del texto.
+        self.assertEqual(
+            name_labels[0].get_max_width_chars(),
+            name_labels[1].get_max_width_chars(),
+        )
+        # El nombre completo vive en el tooltip de la celda.
+        self.assertEqual(name_labels[1].get_tooltip_text(), long_comm)
+        self.assertEqual(name_labels[0].get_tooltip_text(), "pi")
+
+    def test_ram_bar_starts_at_the_same_x_in_every_row(self):
+        """L21.6, comprobado por la geometría real y no por propiedades: tras
+        un pase de layout, la barra de RAM de la fila con un nombre largo
+        arranca en la misma x que la de un nombre corto."""
+        from gi.repository import GLib, Gtk
+
+        from pc_ai_monitor.widgets.tabla import _children
+
+        stats = dict(STATS_FIXTURE)
+        stats["processes"] = [
+            {"pid": 1, "comm": "pi", "rss_kb": 2048, "cpu": 0.1, "args": "pi x"},
+            {"pid": 2, "comm": "c" * 80, "rss_kb": 1024, "cpu": 0.2, "args": "y"},
+        ]
+        page = self._page(stats=stats)
+        window = Gtk.Window()
+        window.set_default_size(1180, 600)
+        window.set_child(page)
+        window.present()
+        self.addCleanup(window.destroy)
+        context = GLib.MainContext.default()
+        for _ in range(60):
+            context.iteration(False)
+
+        block = page._blocks[0]
+        starts = []
+        for line in _children(block._rows):
+            ram_cell = list(_children(line))[3]
+            bar = ram_cell.get_first_child()
+            ok, point = bar.compute_point(block, Graphene_point(0, 0))
+            self.assertTrue(ok)
+            starts.append(round(point.x))
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[0], starts[1], starts)
+
+
+def Graphene_point(x: float, y: float):
+    import gi
+
+    gi.require_version("Graphene", "1.0")
+    from gi.repository import Graphene
+
+    return Graphene.Point().init(x, y)
+
 
 class SettingsPreviewTests(_GtkCase):
     """La filas de Configuración existen, aplican tras el debounce de 600 ms

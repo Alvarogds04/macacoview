@@ -48,6 +48,15 @@ def row_by_id(view, row_id):
     return next(row for row in view.rows if row.id == row_id)
 
 
+def live_updates_with_null_installed() -> str:
+    """El fixture real de live_2026-11-05 con installed null en el motor
+    Gufo (L21.4: visto en vivo cuando el CLI no pudo leer el estado)."""
+    live = json.loads((FIXTURES / "live_2026-11-05/updates.json").read_text())
+    assert live["components"][0]["id"] == "engine-gufo"
+    live["components"][0]["installed"] = None
+    return json.dumps(live)
+
+
 # ---------------------------------------------------------------------------
 # Listado: parseo del fixture medido (L11)
 # ---------------------------------------------------------------------------
@@ -75,7 +84,9 @@ class UpdatesFixtureTests(unittest.TestCase):
 
     def test_no_error_and_human_names(self):
         self.assertEqual(self.view.error, "")
-        self.assertEqual(row_by_id(self.view, "engine-gufo").name, "Motor Gufo (gufo-flash-next)")
+        self.assertEqual(
+            row_by_id(self.view, "engine-gufo").name, "Motor Gufo (gufo-flash-next)"
+        )
 
     def test_count_is_one_today(self):
         self.assertEqual(self.view.count, 1)
@@ -118,30 +129,49 @@ class UpdatesFixtureTests(unittest.TestCase):
 
     def test_channel_failure_is_reported_not_silenced(self):
         """L8: canal inalcanzable → available null + reason con el fallo."""
-        payload = json.dumps({
-            "checked_at": "2026-11-04T15:24:45Z",
-            "components": [{
-                "id": "cli-local-ai-models", "kind": "tool",
-                "name": "CLI local-ai-models", "installed": "1d267be0",
-                "available": None, "updatable": False,
-                "reason": "no se pudo alcanzar el canal remoto (timeout)",
-                "restarts_engine": False, "eta_s": None, "apply": None,
-            }],
-        })
+        payload = json.dumps(
+            {
+                "checked_at": "2026-11-04T15:24:45Z",
+                "components": [
+                    {
+                        "id": "cli-local-ai-models",
+                        "kind": "tool",
+                        "name": "CLI local-ai-models",
+                        "installed": "1d267be0",
+                        "available": None,
+                        "updatable": False,
+                        "reason": "no se pudo alcanzar el canal remoto (timeout)",
+                        "restarts_engine": False,
+                        "eta_s": None,
+                        "apply": None,
+                    }
+                ],
+            }
+        )
         view = parse_updates(CliResult(0, stdout=payload))
         self.assertEqual(view.rows[0].pill, "No se pudo consultar")
 
     def test_tolerates_null_fields_on_an_updatable_row(self):
         """reason null cuando updatable, eta null, apply null no rompen."""
-        payload = json.dumps({
-            "checked_at": None,
-            "components": [{
-                "id": "engine-x", "kind": "engine", "name": "Motor X",
-                "installed": "1.0", "available": "2.0", "updatable": True,
-                "reason": None, "restarts_engine": True, "eta_s": None,
-                "apply": None,
-            }],
-        })
+        payload = json.dumps(
+            {
+                "checked_at": None,
+                "components": [
+                    {
+                        "id": "engine-x",
+                        "kind": "engine",
+                        "name": "Motor X",
+                        "installed": "1.0",
+                        "available": "2.0",
+                        "updatable": True,
+                        "reason": None,
+                        "restarts_engine": True,
+                        "eta_s": None,
+                        "apply": None,
+                    }
+                ],
+            }
+        )
         view = parse_updates(CliResult(0, stdout=payload))
         row = view.rows[0]
         self.assertEqual(row.pill, "Nueva 2.0")
@@ -149,16 +179,46 @@ class UpdatesFixtureTests(unittest.TestCase):
         self.assertTrue(row.button_enabled)
 
     def test_tolerates_an_unknown_kind(self):
-        payload = json.dumps({
-            "components": [{
-                "id": "raro", "kind": "otro", "name": "Raro",
-                "installed": "1", "available": None, "updatable": False,
-                "reason": "sin canal", "restarts_engine": False,
-                "eta_s": None, "apply": None,
-            }],
-        })
+        payload = json.dumps(
+            {
+                "components": [
+                    {
+                        "id": "raro",
+                        "kind": "otro",
+                        "name": "Raro",
+                        "installed": "1",
+                        "available": None,
+                        "updatable": False,
+                        "reason": "sin canal",
+                        "restarts_engine": False,
+                        "eta_s": None,
+                        "apply": None,
+                    }
+                ],
+            }
+        )
         view = parse_updates(CliResult(0, stdout=payload))
         self.assertEqual(view.rows[0].kind, "otro")
+
+
+class InstalledNullTests(unittest.TestCase):
+    """L21.4: `installed: null` (el CLI no pudo leer el estado, visto en
+    vivo) se muestra «instalada —» con tooltip «sin dato», nunca
+    «instalada None». El resto del listado viene del fixture real de
+    live_2026-11-05."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.payload = live_updates_with_null_installed()
+        cls.view = parse_updates(CliResult(0, stdout=cls.payload))
+
+    def test_null_installed_becomes_a_dash(self):
+        row = row_by_id(self.view, "engine-gufo")
+        self.assertEqual(row.installed, "—")
+
+    def test_other_rows_keep_their_installed_version(self):
+        row = row_by_id(self.view, "engine-abito")
+        self.assertEqual(row.installed, "9f31776c (2026-09-15)")
 
 
 class UpdatesFailureTests(unittest.TestCase):
@@ -353,8 +413,7 @@ class ActualizacionesWidgetTests(unittest.TestCase):
         context = GLib.MainContext.default()
         deadline = time.monotonic() + 5.0
         while (
-            not (block._view.rows or block._view.error)
-            and time.monotonic() < deadline
+            not (block._view.rows or block._view.error) and time.monotonic() < deadline
         ):
             context.iteration(False)
             time.sleep(0.01)
@@ -392,22 +451,45 @@ class ActualizacionesWidgetTests(unittest.TestCase):
         self.assertFalse(gufo["button"].get_sensitive())
         self.assertIn("85 s", gufo["eta"].get_text())
 
+    def test_null_installed_renders_a_dash_with_sin_dato_tooltip(self):
+        """L21.4: la fila con installed null pinta «instalada —» y tooltip
+        «sin dato»; nunca «instalada None»."""
+        block = self._block(
+            lambda args, timeout=None: CliResult(
+                0, stdout=live_updates_with_null_installed()
+            )
+        )
+        row = block._rows["engine-gufo"]
+        self.assertEqual(row["installed"].get_text(), "instalada —")
+        self.assertEqual(row["installed"].get_tooltip_text(), "sin dato")
+        abito = block._rows["engine-abito"]
+        self.assertFalse(abito["installed"].get_tooltip_text())
+
     def test_the_gufo_row_uses_the_same_update_path(self):
         """La fila del motor Gufo pasa por `update engine-gufo` (no engine.py).
 
         Hoy el fixture lo tiene al día (botón apagado); el camino se prueba
         con un listado sintético donde Gufo sí tiene versión nueva.
         """
-        synthetic = json.dumps({
-            "checked_at": "t",
-            "components": [{
-                "id": "engine-gufo", "kind": "engine",
-                "name": "Motor Gufo (gufo-flash-next)", "installed": "0.28.0",
-                "available": "0.28.1", "updatable": True, "reason": None,
-                "restarts_engine": True, "eta_s": 85,
-                "apply": "reemplaza la imagen del motor",
-            }],
-        })
+        synthetic = json.dumps(
+            {
+                "checked_at": "t",
+                "components": [
+                    {
+                        "id": "engine-gufo",
+                        "kind": "engine",
+                        "name": "Motor Gufo (gufo-flash-next)",
+                        "installed": "0.28.0",
+                        "available": "0.28.1",
+                        "updatable": True,
+                        "reason": None,
+                        "restarts_engine": True,
+                        "eta_s": 85,
+                        "apply": "reemplaza la imagen del motor",
+                    }
+                ],
+            }
+        )
         calls = []
         done = threading.Event()
 
@@ -417,8 +499,9 @@ class ActualizacionesWidgetTests(unittest.TestCase):
             if tuple(args)[:1] == ("updates",):
                 return CliResult(0, stdout=synthetic)
             done.set()
-            return CliResult(0, stdout=json.dumps(
-                RESULTS_FIXTURE["success_applied"]["stdout"]))
+            return CliResult(
+                0, stdout=json.dumps(RESULTS_FIXTURE["success_applied"]["stdout"])
+            )
 
         block = self._block(manager)
         row = block._rows["engine-gufo"]
@@ -439,10 +522,13 @@ class ActualizacionesWidgetTests(unittest.TestCase):
         self.assertIn("verificado", block._note.get_text())
 
     def test_build_required_row_asks_for_a_second_confirmation(self):
-        manager, calls, done = self._manager({
-            "engine-abito": CliResult(0, stdout=json.dumps(
-                RESULTS_FIXTURE["success_applied"]["stdout"])),
-        })
+        manager, calls, done = self._manager(
+            {
+                "engine-abito": CliResult(
+                    0, stdout=json.dumps(RESULTS_FIXTURE["success_applied"]["stdout"])
+                ),
+            }
+        )
         block = self._block(manager)
         row = block._rows["engine-abito"]
 
@@ -457,16 +543,17 @@ class ActualizacionesWidgetTests(unittest.TestCase):
             FakeDialog.instances[1].respond(Gtk.ResponseType.ACCEPT)
 
         self.assertTrue(done.wait(5.0))
-        self.assertIn(
-            ("update", "engine-abito", "--build", "--yes", "--json"), calls
-        )
+        self.assertIn(("update", "engine-abito", "--build", "--yes", "--json"), calls)
 
     def test_update_all_runs_only_updatable_ids_in_order(self):
         """Actualizar todo (1): solo el actualizable del fixture, en orden."""
-        manager, calls, done = self._manager({
-            "engine-abito": CliResult(0, stdout=json.dumps(
-                RESULTS_FIXTURE["success_applied"]["stdout"])),
-        })
+        manager, calls, done = self._manager(
+            {
+                "engine-abito": CliResult(
+                    0, stdout=json.dumps(RESULTS_FIXTURE["success_applied"]["stdout"])
+                ),
+            }
+        )
         block = self._block(manager)
 
         with mock.patch.object(self.mod.Gtk, "MessageDialog", FakeDialog):
@@ -480,25 +567,57 @@ class ActualizacionesWidgetTests(unittest.TestCase):
 
         self.assertTrue(done.wait(5.0))
         update_calls = [call for call in calls if call[:1] == ("update",)]
-        self.assertEqual(update_calls, [
-            ("update", "engine-abito", "--build", "--yes", "--json"),
-        ])
+        self.assertEqual(
+            update_calls,
+            [
+                ("update", "engine-abito", "--build", "--yes", "--json"),
+            ],
+        )
 
     def test_update_all_with_several_updatables_keeps_the_listed_order(self):
-        synthetic = json.dumps({
-            "checked_at": "t",
-            "components": [
-                {"id": "a-uno", "kind": "tool", "name": "Uno", "installed": "1",
-                 "available": "2", "updatable": True, "reason": None,
-                 "restarts_engine": False, "eta_s": 5, "apply": None},
-                {"id": "b-dos", "kind": "tool", "name": "Dos", "installed": "1",
-                 "available": None, "updatable": False, "reason": "sin canal",
-                 "restarts_engine": False, "eta_s": None, "apply": None},
-                {"id": "c-tres", "kind": "tool", "name": "Tres", "installed": "1",
-                 "available": "3", "updatable": True, "reason": None,
-                 "restarts_engine": False, "eta_s": 7, "apply": None},
-            ],
-        })
+        synthetic = json.dumps(
+            {
+                "checked_at": "t",
+                "components": [
+                    {
+                        "id": "a-uno",
+                        "kind": "tool",
+                        "name": "Uno",
+                        "installed": "1",
+                        "available": "2",
+                        "updatable": True,
+                        "reason": None,
+                        "restarts_engine": False,
+                        "eta_s": 5,
+                        "apply": None,
+                    },
+                    {
+                        "id": "b-dos",
+                        "kind": "tool",
+                        "name": "Dos",
+                        "installed": "1",
+                        "available": None,
+                        "updatable": False,
+                        "reason": "sin canal",
+                        "restarts_engine": False,
+                        "eta_s": None,
+                        "apply": None,
+                    },
+                    {
+                        "id": "c-tres",
+                        "kind": "tool",
+                        "name": "Tres",
+                        "installed": "1",
+                        "available": "3",
+                        "updatable": True,
+                        "reason": None,
+                        "restarts_engine": False,
+                        "eta_s": 7,
+                        "apply": None,
+                    },
+                ],
+            }
+        )
 
         calls = []
         done = threading.Event()
@@ -520,10 +639,13 @@ class ActualizacionesWidgetTests(unittest.TestCase):
 
         self.assertTrue(done.wait(5.0))
         update_calls = [call for call in calls if call[:1] == ("update",)]
-        self.assertEqual(update_calls, [
-            ("update", "a-uno", "--yes", "--json"),
-            ("update", "c-tres", "--yes", "--json"),
-        ])
+        self.assertEqual(
+            update_calls,
+            [
+                ("update", "a-uno", "--yes", "--json"),
+                ("update", "c-tres", "--yes", "--json"),
+            ],
+        )
 
     def test_sin_actualizador_shows_the_list_error(self):
         _manager, _calls, _done = self._manager()

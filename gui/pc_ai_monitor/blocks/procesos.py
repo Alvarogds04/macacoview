@@ -97,7 +97,13 @@ class ProcessesBlock(Block):
                         mono=True,
                         muted=True,
                     ),
-                    cell(str(process.get("comm") or "—"), COLUMNS[1][1]),
+                    # L21.6: la celda se acota a su columna; el nombre completo
+                    # vive en el tooltip (la fila lleva la línea entera).
+                    cell(
+                        str(process.get("comm") or "—"),
+                        COLUMNS[1][1],
+                        tooltip=str(process.get("comm") or ""),
+                    ),
                     bar_cell(ram_fraction(rss_kb, peak), ram_text(rss_kb)),
                     cell(
                         f"{gib(process.get('cpu'))}%",

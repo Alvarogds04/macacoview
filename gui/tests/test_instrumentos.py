@@ -61,7 +61,9 @@ class RamBlockLayoutTests(unittest.TestCase):
         self.assertEqual(rect.reserved_width, 0.0)
 
     def test_tooltip_carries_both_figures(self):
-        text = logica.ram_tooltip(logica.RamBlock("Gufo", "en uso", 49.2, 85.0, "active"))
+        text = logica.ram_tooltip(
+            logica.RamBlock("Gufo", "en uso", 49.2, 85.0, "active")
+        )
         self.assertIn("Gufo", text)
         self.assertIn("49.2", text)
         self.assertIn("85", text)
@@ -279,18 +281,48 @@ class RailTests(unittest.TestCase):
     def test_status_geometry(self):
         self.assertTrue(logica.rail_geometry("al_dia", 0.0).done)
         self.assertAlmostEqual(logica.rail_geometry("nueva", 0.0).ratio, 0.0)
-        self.assertAlmostEqual(
-            logica.rail_geometry("actualizando", 0.5).ratio, 0.5
-        )
+        self.assertAlmostEqual(logica.rail_geometry("actualizando", 0.5).ratio, 0.5)
         self.assertTrue(logica.rail_geometry("revertida", 0.0).reverted)
         self.assertTrue(logica.rail_geometry("sin_consulta", 0.0).muted)
-        self.assertAlmostEqual(
-            logica.rail_geometry("actualizando", 7.0).ratio, 1.0
-        )
+        self.assertAlmostEqual(logica.rail_geometry("actualizando", 7.0).ratio, 1.0)
+
+    def test_rail_never_draws_the_machine_status_token(self):
+        """L21.2: el riel nunca escribe el token de máquina («al_dia», …);
+        palabra humana corta o nada — la píldora ya dice el estado."""
+        from unittest import mock
+
+        import cairo
+
+        from pc_ai_monitor.widgets import instrumentos
+
+        captured: list[str] = []
+        rail = instrumentos.VersionRail()
+        surface = cairo.ImageSurface(cairo.Format.ARGB32, 230, 92)
+        context = cairo.Context(surface)
+        for status in logica.RAIL_STATUS:
+            rail.set_data("0.28.0", "0.28.1", status)
+            recorder = lambda _area, _cr, text, *_args, **_kwargs: captured.append(text)
+            with mock.patch.object(instrumentos, "draw_text", recorder):
+                rail._draw(None, context, 230, 92)
+        self.assertTrue(captured)  # el riel sí escribe etiquetas (from/to)
+        for token in logica.RAIL_STATUS:
+            for text in captured:
+                self.assertNotIn(token, text)
+
+    def test_rail_status_text_is_empty_for_every_status(self):
+        """El texto del riel sale de la lógica pura, y hoy es «nada» (S12):
+        la píldora de la tarjeta ya comunica el estado."""
+        for status in logica.RAIL_STATUS:
+            self.assertEqual(logica.rail_status_text(status), "")
 
     def test_stepper_state_validation(self):
         steps = logica.normalize_steps(
-            (("pull", "done"), ("restart", "current"), ("verify", "todo"), ("done", "todo"))
+            (
+                ("pull", "done"),
+                ("restart", "current"),
+                ("verify", "todo"),
+                ("done", "todo"),
+            )
         )
         self.assertEqual([s.state for s in steps], ["done", "current", "todo", "todo"])
         with self.assertRaises(ValueError):
@@ -389,9 +421,7 @@ class WidgetSmokeTests(unittest.TestCase):
             )
         )
         seen: list[tuple[float, bool]] = []
-        widget.connect(
-            "cursor-changed", lambda _w, t, active: seen.append((t, active))
-        )
+        widget.connect("cursor-changed", lambda _w, t, active: seen.append((t, active)))
         widget.set_cursor(450.0)
         self.assertEqual(seen, [(450.0, True)])
         widget.set_cursor(450.0)  # sin cambio: no emite

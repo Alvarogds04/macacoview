@@ -105,9 +105,7 @@ def parse_updates(result: CliResult) -> UpdatesView:
     un listado vacío que parece «todo al día».
     """
     if result.failure == "missing":
-        return UpdatesView(
-            error=f"{MISSING_MESSAGE} La lista queda sin actualizador."
-        )
+        return UpdatesView(error=f"{MISSING_MESSAGE} La lista queda sin actualizador.")
     if result.failure == "timeout":
         return UpdatesView(
             error=(
@@ -136,13 +134,10 @@ def parse_updates(result: CliResult) -> UpdatesView:
     except (TypeError, ValueError):
         return UpdatesView(
             error=(
-                "local-ai-models updates devolvió un JSON inválido: "
-                "sin actualizador."
+                "local-ai-models updates devolvió un JSON inválido: sin actualizador."
             )
         )
-    if not isinstance(payload, dict) or not isinstance(
-        payload.get("components"), list
-    ):
+    if not isinstance(payload, dict) or not isinstance(payload.get("components"), list):
         return UpdatesView(
             error=(
                 "local-ai-models updates devolvió un listado inválido: "
@@ -151,13 +146,9 @@ def parse_updates(result: CliResult) -> UpdatesView:
         )
 
     rows = tuple(
-        _parse_row(item)
-        for item in payload["components"]
-        if isinstance(item, dict)
+        _parse_row(item) for item in payload["components"] if isinstance(item, dict)
     )
-    return UpdatesView(
-        rows=rows, checked_at=str(payload.get("checked_at") or "")
-    )
+    return UpdatesView(rows=rows, checked_at=str(payload.get("checked_at") or ""))
 
 
 def _parse_row(raw: dict) -> UpdateRow:
@@ -169,14 +160,18 @@ def _parse_row(raw: dict) -> UpdateRow:
     eta_s = _as_float(raw.get("eta_s"))
     restarts = bool(raw.get("restarts_engine", False))
 
-    pill, pill_class, pill_tooltip = _pill_for(
-        updatable, available, reason
+    pill, pill_class, pill_tooltip = _pill_for(updatable, available, reason)
+    # L21.4: installed null (el CLI no pudo leer el estado) → «—», con el
+    # tooltip «sin dato» que pone el bloque; nunca «instalada None».
+    installed_raw = raw.get("installed")
+    installed = (
+        str(installed_raw) if isinstance(installed_raw, str) and installed_raw else "—"
     )
     return UpdateRow(
         id=str(raw.get("id", "")),
         kind=str(raw.get("kind", "")),
         name=str(raw.get("name", "")) or str(raw.get("id", "")),
-        installed=str(raw.get("installed", "")) or "—",
+        installed=installed,
         available=available,
         updatable=updatable,
         reason=reason,
@@ -250,9 +245,7 @@ def parse_update_result(result: CliResult) -> UpdateOutcome:
 
     if result.returncode == 0:
         if payload.get("applied") is False:
-            reason = str(
-                payload.get("reason") or "ya está en la versión de destino"
-            )
+            reason = str(payload.get("reason") or "ya está en la versión de destino")
             return UpdateOutcome("noop", f"No hizo falta actualizar: {reason}.")
         moved_from, moved_to = _tags(payload)
         verified = payload.get("verified") is True
@@ -280,9 +273,7 @@ def parse_update_result(result: CliResult) -> UpdateOutcome:
         # L14: con --json el fallo emite JSON {action, from, to, applied,
         # verified, restored, reason}: la rama se decide por esos campos
         # (verified false / restored true), no por el texto de stderr.
-        restored = (
-            payload.get("verified") is False and payload.get("restored") is True
-        )
+        restored = payload.get("verified") is False and payload.get("restored") is True
         if restored:
             moved_from, moved_to = _tags(payload)
             reason = str(payload.get("reason") or "")
@@ -301,8 +292,7 @@ def parse_update_result(result: CliResult) -> UpdateOutcome:
     detail = result.stderr or result.stdout or "sin detalle"
     return UpdateOutcome(
         "error",
-        f"local-ai-models update terminó con código "
-        f"{result.returncode}: {detail}",
+        f"local-ai-models update terminó con código {result.returncode}: {detail}",
     )
 
 

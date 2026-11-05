@@ -93,7 +93,10 @@ def ram_blocks(snapshot: Snapshot, resident: str | None) -> tuple[logica.RamBloc
 
     La figura «en uso» se mide del snapshot (S9); si el motor es residente y
     el snapshot todavía no lo ve, se usa la figura del residente (la reserva).
-    Los anchos quedan estables: la barra siempre reparte la RAM total.
+    L21.3: la reserva (rayado) se pinta SÓLO para el motor residente o
+    cargando — un motor parado no reserva nada y no toma ancho en la barra,
+    que muestra el uso medido + el libre. Con el residente la reserva sigue
+    pintándose (S9 «los 2»: 49.2 en uso / ≈ 85 reservados).
     """
     memory = snapshot.memory()
     models = snapshot.models()
@@ -101,7 +104,7 @@ def ram_blocks(snapshot: Snapshot, resident: str | None) -> tuple[logica.RamBloc
     used_total = _number(memory.get("used_gib"), 0.0)
 
     blocks: list[logica.RamBlock] = []
-    measured_sum = 0.0
+    engines_gib = 0.0
     for engine, port in (("gufo", GUFO_PORT), ("abito", ABITO_PORT)):
         model = engine_model(models, port)
         is_resident = resident in (engine, "gufo-loading" if engine == "gufo" else None)
@@ -111,20 +114,21 @@ def ram_blocks(snapshot: Snapshot, resident: str | None) -> tuple[logica.RamBloc
             used = RESERVATION_GIB[engine]
         else:
             used = 0.0
-        measured_sum += used
-        blocks.append(logica.RamBlock(
-            label=engine.capitalize(),
-            sublabel="en uso" if is_resident else "reservado",
-            used_gib=used,
-            reserved_gib=RESERVATION_GIB[engine],
-            kind="active" if is_resident else "idle",
-        ))
+        engines_gib += used
+        blocks.append(
+            logica.RamBlock(
+                label=engine.capitalize(),
+                sublabel="en uso" if (is_resident or model is not None) else "",
+                used_gib=used,
+                reserved_gib=RESERVATION_GIB[engine] if is_resident else 0.0,
+                kind="active" if is_resident else "idle",
+            )
+        )
 
-    # Anchura estable: los motores siempre ocupan su reserva; lo que sobra
-    # de la RAM usada es «Otros» y el resto queda «Libre».
-    reservations = sum(RESERVATION_GIB.values())
-    others = max(0.0, used_total - measured_sum)
-    free = max(0.0, total - reservations - others)
+    # La barra muestra uso medido + libre; los motores parados quedan fuera
+    # (ancho 0 = sin bloque dibujado; los rects suman ≤ el ancho de la barra).
+    others = max(0.0, used_total - engines_gib)
+    free = max(0.0, total - used_total)
     blocks.insert(1, logica.RamBlock("Otros", "procesos", others, others, "other"))
     blocks.append(logica.RamBlock("Libre", "", free, free, "free"))
     return tuple(blocks)
@@ -140,7 +144,9 @@ def _number(value: object, fallback: float) -> float:
 # -- fila 1: mini tarjetas y cambio compacto --------------------------------
 
 
-def mini_cards(info: dict | None, down_engines: tuple[str, ...] = ()) -> tuple[dict, ...]:
+def mini_cards(
+    info: dict | None, down_engines: tuple[str, ...] = ()
+) -> tuple[dict, ...]:
     """Las dos mini tarjetas de motor (comentario ljlp6zst), Abito y Gufo.
 
     Reusa ``residente_logica`` (nombres, resumen, huella, hint de carga) y
@@ -166,21 +172,23 @@ def mini_cards(info: dict | None, down_engines: tuple[str, ...] = ()) -> tuple[d
             lamp, status = "ok", view["status"].lstrip("● ").strip()
         else:
             lamp, status = "off", "parado"
-        cards.append({
-            "engine": engine,
-            "name": NAMES[engine],
-            "model": SUMMARY[engine].split(" · ")[0],
-            "status": status,
-            "active": view["active"],
-            "lamp": lamp,
-            "ctx": ENGINE_CTX[engine],
-            "footprint": FOOTPRINT[engine],
-            "load_hint": LOAD_HINT[engine],
-            "detail": SUMMARY[engine],
-            "enabled": view["enabled"],
-            "reason": view["reason"],
-            "button": view["button"],
-        })
+        cards.append(
+            {
+                "engine": engine,
+                "name": NAMES[engine],
+                "model": SUMMARY[engine].split(" · ")[0],
+                "status": status,
+                "active": view["active"],
+                "lamp": lamp,
+                "ctx": ENGINE_CTX[engine],
+                "footprint": FOOTPRINT[engine],
+                "load_hint": LOAD_HINT[engine],
+                "detail": SUMMARY[engine],
+                "enabled": view["enabled"],
+                "reason": view["reason"],
+                "button": view["button"],
+            }
+        )
     return tuple(cards)
 
 
@@ -210,7 +218,9 @@ def mtp_ratio(metrics: Metrics | None) -> float | None:
 def cache_pct(metrics: Metrics | None) -> float | None:
     if metrics is None:
         return None
-    return cached_percentage(metrics.prompt_tokens_cached_total, metrics.prompt_tokens_total)
+    return cached_percentage(
+        metrics.prompt_tokens_cached_total, metrics.prompt_tokens_total
+    )
 
 
 def kv_pct(metrics: Metrics | None) -> float | None:
@@ -227,7 +237,9 @@ def speed_label(rate: float | None) -> str:
 # -- fila 3: inventario y margen RAM ----------------------------------------
 
 
-def inventory_row(model: dict, manager_ok: bool = True, action_running: bool = False) -> dict:
+def inventory_row(
+    model: dict, manager_ok: bool = True, action_running: bool = False
+) -> dict:
     """Una fila compacta del inventario de ``local-ai-models status --json``.
 
     Reusa el vocabulario del panel Motores (encendido/detenido/no utilizable)
@@ -251,9 +263,7 @@ def inventory_row(model: dict, manager_ok: bool = True, action_running: bool = F
         state, lamp = "detenido", "off"
 
     ctx = _optional(model.get("ctx"))
-    fraction = (
-        min(1.0, max(0.0, ctx / ENGINE_CTX["gufo"])) if ctx is not None else 0.0
-    )
+    fraction = min(1.0, max(0.0, ctx / ENGINE_CTX["gufo"])) if ctx is not None else 0.0
 
     blocked = (not manager_ok) or bool(problem) or (not healthy and bool(reason))
     return {
@@ -378,34 +388,50 @@ def update_card(
     if status is None or status.error:
         error = status.error if status is not None else "sin lectura del administrador"
         return UpdateCard(
-            pill="No se pudo consultar", pill_class="", pill_tooltip=error,
-            rail_status="sin_consulta", from_label="—", to_label="—",
-            rail_tooltip=error, button_label="Actualizar motor",
+            pill="No se pudo consultar",
+            pill_class="",
+            pill_tooltip=error,
+            rail_status="sin_consulta",
+            from_label="—",
+            to_label="—",
+            rail_tooltip=error,
+            button_label="Actualizar motor",
             button_enabled=False,
             button_tooltip="No se pudo leer el estado del motor.",
         )
 
     version = status.version_label or "—"
     available = available_label or "—"
-    tags = tuple(tag for tag in (status.tag, status.available_tag, status.revision_label) if tag)
+    tags = tuple(
+        tag for tag in (status.tag, status.available_tag, status.revision_label) if tag
+    )
 
     if updating:
         return UpdateCard(
-            pill="Actualizando…", pill_class="acc",
+            pill="Actualizando…",
+            pill_class="acc",
             pill_tooltip="la actualización del motor está en curso",
-            rail_status="actualizando", from_label=version, to_label=available,
+            rail_status="actualizando",
+            from_label=version,
+            to_label=available,
             rail_tooltip=f"corre {version} → {available} · imágenes {status.tag} → {status.available_tag}",
-            button_label="Actualizando…", button_enabled=False,
-            button_tooltip="La actualización ya está en curso.", tags=tags,
+            button_label="Actualizando…",
+            button_enabled=False,
+            button_tooltip="La actualización ya está en curso.",
+            tags=tags,
         )
 
     if last_update_rc == 1:
         return UpdateCard(
-            pill="Revertida", pill_class="warn",
+            pill="Revertida",
+            pill_class="warn",
             pill_tooltip=f"{available} falló la verificación y se volvió a {version}",
-            rail_status="revertida", from_label=version, to_label=available,
+            rail_status="revertida",
+            from_label=version,
+            to_label=available,
             rail_tooltip=f"{available} rechazada · vuelve a {version} · imágenes {status.available_tag} → {status.tag}",
-            button_label="Reintentar", button_enabled=True,
+            button_label="Reintentar",
+            button_enabled=True,
             button_tooltip="Pide confirmación: reinicia el motor (~85 s) y corta los pedidos en curso.",
             tags=tags,
         )
@@ -413,21 +439,29 @@ def update_card(
     if status.updatable:
         target = available_label or "la nueva versión"
         return UpdateCard(
-            pill="1 actualización", pill_class="acc",
+            pill="1 actualización",
+            pill_class="acc",
             pill_tooltip=f"corre {version} · disponible {available} · imágenes {status.tag} → {status.available_tag}",
-            rail_status="nueva", from_label=version, to_label=available,
+            rail_status="nueva",
+            from_label=version,
+            to_label=available,
             rail_tooltip=f"corre {version} · disponible {available} · imágenes {status.tag} → {status.available_tag}",
-            button_label=f"Actualizar a {target}", button_enabled=True,
+            button_label=f"Actualizar a {target}",
+            button_enabled=True,
             button_tooltip="Pide confirmación: reinicia el motor (~85 s), corta los pedidos en curso y bloquea el cambio de motor mientras dura.",
             tags=tags,
         )
 
     return UpdateCard(
-        pill="Todo al día", pill_class="ok",
+        pill="Todo al día",
+        pill_class="ok",
         pill_tooltip=f"corre {version} · sin versiones más nuevas · imagen {status.tag}",
-        rail_status="al_dia", from_label=version, to_label=available,
+        rail_status="al_dia",
+        from_label=version,
+        to_label=available,
         rail_tooltip=f"corre {version} · sin versión más nueva · imagen {status.tag}",
-        button_label="Al día", button_enabled=False,
+        button_label="Al día",
+        button_enabled=False,
         button_tooltip=status.reason or "No hay actualizaciones disponibles.",
         tags=tags,
     )

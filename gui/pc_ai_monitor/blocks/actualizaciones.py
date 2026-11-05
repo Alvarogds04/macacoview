@@ -169,9 +169,7 @@ class ActualizacionesBlock(Block):
     def _build_row(self, row: UpdateRow) -> dict:
         widget = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
-        icon = Gtk.Image.new_from_icon_name(
-            _KIND_ICONS.get(row.kind, _FALLBACK_ICON)
-        )
+        icon = Gtk.Image.new_from_icon_name(_KIND_ICONS.get(row.kind, _FALLBACK_ICON))
         icon.set_valign(Gtk.Align.CENTER)
         widget.append(icon)
 
@@ -206,16 +204,21 @@ class ActualizacionesBlock(Block):
         widget.append(button)
 
         return {
-            "widget": widget, "name": name, "installed": installed,
-            "eta": eta, "pill": pill, "button": button,
+            "widget": widget,
+            "name": name,
+            "installed": installed,
+            "eta": eta,
+            "pill": pill,
+            "button": button,
         }
 
     def _update_row(self, widgets: dict, row: UpdateRow) -> None:
-        widgets["installed"].set_text(f"instalada {row.installed}")
+        installed = widgets["installed"]
+        installed.set_text(f"instalada {row.installed}")
+        # L21.4: «—» significa que el CLI no pudo leer la versión instalada.
+        installed.set_tooltip_text("sin dato" if row.installed == "—" else "")
         widgets["eta"].set_text(row.eta_text)
-        widgets["eta"].set_tooltip_text(
-            "Tiempo estimado que informa el administrador."
-        )
+        widgets["eta"].set_tooltip_text("Tiempo estimado que informa el administrador.")
         pill = widgets["pill"]
         pill.set_text(row.pill)
         pill.set_tooltip_text(row.pill_tooltip)
@@ -226,9 +229,7 @@ class ActualizacionesBlock(Block):
 
         button = widgets["button"]
         button.set_sensitive(row.button_enabled and not self._busy)
-        button.set_tooltip_text(
-            row.apply or row.reason or "Actualiza este componente."
-        )
+        button.set_tooltip_text(row.apply or row.reason or "Actualiza este componente.")
         # La frase completa (qué hace la actualización) vive en el tooltip (S12).
         widgets["widget"].set_tooltip_text(row.apply or row.reason or "")
 
@@ -287,10 +288,9 @@ class ActualizacionesBlock(Block):
         dialog.close()
         if response != Gtk.ResponseType.ACCEPT:
             return
-        self._begin([
-            (row, True if row.needs_build else with_build)
-            for row, with_build in plan
-        ])
+        self._begin(
+            [(row, True if row.needs_build else with_build) for row, with_build in plan]
+        )
 
     def _begin(self, plan: list[tuple[UpdateRow, bool]]) -> None:
         self._busy = True
@@ -304,9 +304,7 @@ class ActualizacionesBlock(Block):
         def _worker() -> None:
             messages = []
             for row, with_build in plan:
-                result = run_manager(
-                    update_args(row, with_build), UPDATE_TIMEOUT_S
-                )
+                result = run_manager(update_args(row, with_build), UPDATE_TIMEOUT_S)
                 outcome = parse_update_result(_as_cli(result))
                 messages.append(f"{row.name}: {outcome.message}")
             listing = run_manager(("updates", "--json"))

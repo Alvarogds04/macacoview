@@ -95,10 +95,23 @@ def cell(
     align=Gtk.Align.START,
     mono: bool = False,
     muted: bool = False,
+    tooltip: str = "",
 ) -> Gtk.Label:
     label = Gtk.Label(label=text, xalign=0 if align == Gtk.Align.START else 1)
     label.set_size_request(width, -1)
     label.set_ellipsize(3)
+    # L21.6: el ancho de celda es un TOPE, no un mínimo que crece — sin el
+    # máximo en caracteres, un texto largo (un `comm` raro en Procesos)
+    # empujaba las columnas de la derecha. La ellipsis recorta y el texto
+    # completo va en el tooltip.
+    # Con ellipsize, GTK mide el ancho natural como max_width_chars × el
+    # ancho medio de un carácter, que puede pasar el de la columna: el tope
+    # en caracteres se queda bajo y el ancho real lo fija size_request.
+    label.set_width_chars(1)
+    label.set_max_width_chars(1)
+    label.set_hexpand(False)
+    if tooltip:
+        label.set_tooltip_text(tooltip)
     if mono:
         label.add_css_class("mono")
     if muted:

@@ -54,46 +54,76 @@ GUFO_TAG_NUEVA = "gufo:v0.28.1-r1"
 
 MODELS = [
     {
-        "alias": "gufo", "pid": 101, "port": 11070, "model": "gufo.gguf",
-        "rss_gib": 12.1, "cpu": 3.0, "gtt_gib": 49.2, "vram_gib": 0.0,
+        "alias": "gufo",
+        "pid": 101,
+        "port": 11070,
+        "model": "gufo.gguf",
+        "rss_gib": 12.1,
+        "cpu": 3.0,
+        "gtt_gib": 49.2,
+        "vram_gib": 0.0,
     },
     {
-        "alias": "abito", "pid": 102, "port": 11002, "model": "abito.gguf",
-        "rss_gib": 19.8, "cpu": 1.0, "gtt_gib": 0.4, "vram_gib": 0.0,
+        "alias": "abito",
+        "pid": 102,
+        "port": 11002,
+        "model": "abito.gguf",
+        "rss_gib": 19.8,
+        "cpu": 1.0,
+        "gtt_gib": 0.4,
+        "vram_gib": 0.0,
     },
 ]
 
-STATUS_UPDATABLE = json.dumps({
-    "component": "engine-gufo",
-    "running": {
-        "tag": GUFO_TAG, "version_label": "0.28.0", "revision_label": "r2",
-        "context": "131072", "port": "11070", "serving": True,
-    },
-    "available": {"tag": GUFO_TAG_NUEVA, "version_label": "0.28.1"},
-    "updatable": True,
-})
+STATUS_UPDATABLE = json.dumps(
+    {
+        "component": "engine-gufo",
+        "running": {
+            "tag": GUFO_TAG,
+            "version_label": "0.28.0",
+            "revision_label": "r2",
+            "context": "131072",
+            "port": "11070",
+            "serving": True,
+        },
+        "available": {"tag": GUFO_TAG_NUEVA, "version_label": "0.28.1"},
+        "updatable": True,
+    }
+)
 
-STATUS_AL_DIA = json.dumps({
-    "component": "engine-gufo",
-    "running": {
-        "tag": GUFO_TAG, "version_label": "0.28.0", "revision_label": "r2",
-        "context": "131072", "port": "11070", "serving": True,
-    },
-    "available": {"tag": GUFO_TAG_NUEVA, "version_label": "0.28.1"},
-    "updatable": False,
-    "reason": "ya corre la más nueva",
-})
+STATUS_AL_DIA = json.dumps(
+    {
+        "component": "engine-gufo",
+        "running": {
+            "tag": GUFO_TAG,
+            "version_label": "0.28.0",
+            "revision_label": "r2",
+            "context": "131072",
+            "port": "11070",
+            "serving": True,
+        },
+        "available": {"tag": GUFO_TAG_NUEVA, "version_label": "0.28.1"},
+        "updatable": False,
+        "reason": "ya corre la más nueva",
+    }
+)
 
 
 def home_snapshot(models=None, memory=None):
     """Snapshot representativo: RAM de 122 GiB con los dos motores medidos."""
-    return Snapshot(stats={
-        "memory": memory or {
-            "total_gib": 122.0, "used_gib": 71.3, "available_gib": 51.4,
-            "swap_total_gib": 0.0, "swap_used_gib": 0.0,
-        },
-        "models": MODELS if models is None else models,
-    })
+    return Snapshot(
+        stats={
+            "memory": memory
+            or {
+                "total_gib": 122.0,
+                "used_gib": 71.3,
+                "available_gib": 51.4,
+                "swap_total_gib": 0.0,
+                "swap_used_gib": 0.0,
+            },
+            "models": MODELS if models is None else models,
+        }
+    )
 
 
 RESIDENT_GUFO = {
@@ -103,7 +133,9 @@ RESIDENT_GUFO = {
 }
 
 
-def sample(t, resident: str | None = "gufo", decode=None, prefill=None, kv=None, cache=None):
+def sample(
+    t, resident: str | None = "gufo", decode=None, prefill=None, kv=None, cache=None
+):
     from pc_ai_monitor.blocks.historia_motor import Sample
 
     return Sample(t, resident, decode, prefill, kv, cache)
@@ -218,7 +250,9 @@ class RamBlocksTests(unittest.TestCase):
         self.assertEqual(gufo.reserved_gib, 85.0)
         self.assertEqual(gufo.kind, "active")
         self.assertEqual(abito.used_gib, 19.8)
-        self.assertEqual(abito.reserved_gib, 20.0)
+        # L21.3: la reserva sólo se pinta para el residente (o uno cargando);
+        # Abito medido pero no residente no reserva nada.
+        self.assertEqual(abito.reserved_gib, 0.0)
         self.assertEqual(abito.kind, "idle")
 
     def test_tooltip_states_both_figures(self):
@@ -246,14 +280,75 @@ class RamBlocksTests(unittest.TestCase):
         self.assertEqual(gufo.used_gib, 0.0)
         self.assertEqual(gufo.kind, "idle")
 
+    def test_no_resident_draws_no_reservation_live(self):
+        """L21.3 (fixtures live_2026-11-05, resident "none", unidades
+        inactivas): sin motor residente NADA está reservado — Gufo 85 GiB y
+        Abito 20 GiB no se pintan como memoria held; los motores parados no
+        toman ancho en la barra (uso medido + libre)."""
+        from pathlib import Path
+
+        from pc_ai_monitor.blocks.home_logica import ram_blocks
+
+        live = json.loads(
+            (
+                Path(__file__).parent / "fixtures/live_2026-11-05/resident.json"
+            ).read_text()
+        )
+        self.assertEqual(live["resident"], "none")
+        self.assertEqual(live["gufo"]["unit"], "inactive")
+        self.assertEqual(live["abito"]["unit"], "inactive")
+
+        blocks = ram_blocks(
+            Snapshot(
+                stats={
+                    "memory": {"total_gib": 122.0, "used_gib": 18.0},
+                    "models": [],  # unidades inactivas: ningún proceso de motor
+                }
+            ),
+            live["resident"],
+        )
+        by_label = {block.label: block for block in blocks}
+        self.assertEqual(by_label["Gufo"].used_gib, 0.0)
+        self.assertEqual(by_label["Gufo"].reserved_gib, 0.0)
+        self.assertEqual(by_label["Abito"].used_gib, 0.0)
+        self.assertEqual(by_label["Abito"].reserved_gib, 0.0)
+        self.assertEqual(by_label["Gufo"].sublabel, "")
+        self.assertEqual(by_label["Abito"].sublabel, "")
+
+        # La barra reparte el ancho real: parados 0, libre el resto.
+        rects = logica.ram_layout(blocks, 560.0)
+        self.assertLessEqual(sum(rect.width for rect in rects), 560.0)
+        widths = {rect.block.label: rect.width for rect in rects}
+        self.assertEqual(widths["Gufo"], 0.0)
+        self.assertEqual(widths["Abito"], 0.0)
+        self.assertGreater(widths["Libre"], 0.0)
+
+    def test_resident_gufo_still_draws_the_85_reservation(self):
+        """S9 «los 2»: con Gufo residente la reserva de 85 GiB sigue
+        pintándose (rayado) junto a la cifra medida."""
+        from pc_ai_monitor.blocks.home_logica import ram_blocks
+
+        blocks = ram_blocks(home_snapshot(), "gufo")
+        self.assertEqual(blocks[0].reserved_gib, 85.0)
+        rects = logica.ram_layout(blocks, 560.0)
+        self.assertGreater(rects[0].reserved_width, 0.0)
+
     def test_retired_flash_never_gets_a_block(self):
         """L9: la entrada «flash» del router (:11008) es el motor retirado."""
         from pc_ai_monitor.blocks.home_logica import ram_blocks
 
-        models = MODELS + [{
-            "alias": "flash", "pid": 103, "port": 11008, "model": "old.gguf",
-            "rss_gib": 77.0, "cpu": 0.0, "gtt_gib": 0.0, "vram_gib": 0.0,
-        }]
+        models = MODELS + [
+            {
+                "alias": "flash",
+                "pid": 103,
+                "port": 11008,
+                "model": "old.gguf",
+                "rss_gib": 77.0,
+                "cpu": 0.0,
+                "gtt_gib": 0.0,
+                "vram_gib": 0.0,
+            }
+        ]
         labels = [block.label for block in ram_blocks(home_snapshot(models), None)]
 
         self.assertEqual(labels, ["Gufo", "Otros", "Abito", "Libre"])
@@ -320,7 +415,9 @@ class UpdateCardTests(unittest.TestCase):
     def test_up_to_date_state(self):
         from pc_ai_monitor.blocks.home_logica import update_card
 
-        card = update_card(parse_engine_status(CliResult(0, stdout=STATUS_AL_DIA)), self.available)
+        card = update_card(
+            parse_engine_status(CliResult(0, stdout=STATUS_AL_DIA)), self.available
+        )
 
         self.assertEqual(card.pill, "Todo al día")
         self.assertEqual(card.rail_status, "al_dia")
@@ -392,8 +489,10 @@ class HeadroomTests(unittest.TestCase):
         from pc_ai_monitor.blocks.home_logica import headroom_rows
 
         guard = Guard(
-            mem_available_gib=51.4, conservative_gib=40.2,
-            min_mem_available_gib=15.0, min_conservative_gib=12.0,
+            mem_available_gib=51.4,
+            conservative_gib=40.2,
+            min_mem_available_gib=15.0,
+            min_conservative_gib=12.0,
         )
         disponible, conservadora = headroom_rows(home_snapshot().memory(), guard)
 
@@ -432,7 +531,9 @@ class InventoryRowTests(unittest.TestCase):
     def test_healthy_row(self):
         from pc_ai_monitor.blocks.home_logica import inventory_row
 
-        row = inventory_row({"model": "abito", "port": 11002, "ctx": 65536, "healthy": True})
+        row = inventory_row(
+            {"model": "abito", "port": 11002, "ctx": 65536, "healthy": True}
+        )
 
         self.assertEqual(row["state"], "encendido")
         self.assertEqual(row["lamp"], "ok")
@@ -442,7 +543,9 @@ class InventoryRowTests(unittest.TestCase):
     def test_stopped_row(self):
         from pc_ai_monitor.blocks.home_logica import inventory_row
 
-        row = inventory_row({"model": "gufo", "port": 11070, "ctx": 131072, "healthy": False})
+        row = inventory_row(
+            {"model": "gufo", "port": 11070, "ctx": 131072, "healthy": False}
+        )
 
         self.assertEqual(row["state"], "detenido")
         self.assertEqual(row["action"], "ensure")
@@ -451,8 +554,15 @@ class InventoryRowTests(unittest.TestCase):
     def test_problem_row_is_blocked(self):
         from pc_ai_monitor.blocks.home_logica import inventory_row
 
-        row = inventory_row({"model": "gufo", "port": 11070, "ctx": 131072,
-                             "healthy": False, "problem": "missing_port"})
+        row = inventory_row(
+            {
+                "model": "gufo",
+                "port": 11070,
+                "ctx": 131072,
+                "healthy": False,
+                "problem": "missing_port",
+            }
+        )
 
         self.assertEqual(row["state"], "no utilizable")
         self.assertTrue(row["blocked"])
@@ -460,8 +570,10 @@ class InventoryRowTests(unittest.TestCase):
     def test_manager_down_disables_the_row(self):
         from pc_ai_monitor.blocks.home_logica import inventory_row
 
-        row = inventory_row({"model": "abito", "port": 11002, "ctx": 131072,
-                             "healthy": True}, manager_ok=False)
+        row = inventory_row(
+            {"model": "abito", "port": 11002, "ctx": 131072, "healthy": True},
+            manager_ok=False,
+        )
 
         self.assertEqual(row["state"], "estado no disponible")
         self.assertTrue(row["blocked"])
@@ -495,9 +607,9 @@ def parse_metrics_fixture():
     from pc_ai_monitor.blocks.rendimiento_logica import parse_metrics
 
     return parse_metrics(
-        "gufo_spec_drafts_proposed_total{slot=\"0\"} 1200\n"
-        "gufo_spec_drafts_accepted_total{slot=\"0\"} 840\n"
-        "llamacpp:kv_cache_usage_ratio{slot=\"0\"} 0.25\n"
+        'gufo_spec_drafts_proposed_total{slot="0"} 1200\n'
+        'gufo_spec_drafts_accepted_total{slot="0"} 840\n'
+        'llamacpp:kv_cache_usage_ratio{slot="0"} 0.25\n'
         "llamacpp:prompt_tokens_cached_total 38900\n"
         "llamacpp:prompt_tokens_total 43512\n"
     )
@@ -891,6 +1003,7 @@ class ShortcutTests(unittest.TestCase):
                 created.append(self)
 
         import pc_ai_monitor.blocks.home as home_blocks
+
         with mock.patch.object(home_blocks.Adw, "MessageDialog", Recording):
             page.request_switch()
 
@@ -916,6 +1029,7 @@ class ShortcutTests(unittest.TestCase):
                 created.append(self)
 
         import pc_ai_monitor.blocks.home as home_blocks
+
         with mock.patch.object(home_blocks.Adw, "MessageDialog", Recording):
             page.request_switch()
 
@@ -947,6 +1061,7 @@ class ShortcutTests(unittest.TestCase):
             return CommandResult(0, stdout=STATUS_UPDATABLE)
 
         import pc_ai_monitor.blocks.home as home_blocks
+
         with (
             mock.patch.object(home_blocks.Gtk, "MessageDialog", Recording),
             mock.patch.object(home_blocks, "run_manager", fake_run_manager),
