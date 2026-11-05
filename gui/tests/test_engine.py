@@ -9,6 +9,11 @@ No se construye ningún widget.
 import json
 import unittest
 
+try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
+    import _sandbox
+except ModuleNotFoundError:
+    from tests import _sandbox  # noqa: F401
+
 from pc_ai_monitor.blocks.engine_logica import (
     CONFIRMATION_TEXT,
     MISSING_MESSAGE,

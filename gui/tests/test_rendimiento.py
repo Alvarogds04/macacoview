@@ -9,6 +9,11 @@ conocidos cuando una lectura falla. Sin GTK y sin subprocesos.
 
 import unittest
 
+try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
+    import _sandbox
+except ModuleNotFoundError:
+    from tests import _sandbox  # noqa: F401
+
 from pc_ai_monitor.blocks.rendimiento_logica import (
     Guard,
     Metrics,

@@ -12,6 +12,11 @@ necesitan display (igual que PageTests):
 import time
 import unittest
 
+try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
+    import _sandbox
+except ModuleNotFoundError:
+    from tests import _sandbox  # noqa: F401
+
 try:  # discover puts tests/ on sys.path; `-m unittest tests.x` does not
     import _aislamiento
 except ModuleNotFoundError:
