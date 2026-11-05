@@ -17,6 +17,7 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 - S9 Gufo RAM «los 2»: show «≈ 85 GiB reservados» and «49.2 GiB en uso» (measured); Abito «≈ 20 GiB» / measured. Switch load times from the source (Gufo ~90 s, Abito ~30 s).
 - S10 «con todos los elementos actuales que tiene pc-monitor … y con todas sus funcionalidades»: every element and function in `design/macacoview/INVENTARIO-APP.md` keeps working (group/model drill-down, provider filter, port filter and sorts, process sorts, Configuración rows, themes, Monitoreo).
 - S11 Data honesty (L2): metrics only from `/metrics`, `/v1/models`, `/slots`, `gufo-flash status`; prefill/decode derived from counter deltas, «sin datos recientes» never 0; no TTFT, no GPU temperature; rollback only on health, context mismatch or pull failure.
+- S13 «vamos a la version nueva» + «Integrar primero el selector de RAM»: the installed app becomes this branch's version without losing the RAM program selector deployed on 10-05 (uncommitted work in `worktrees/ram-program-selector`).
 - S12 Text level: «creo que me he pasado con lo de 85 asi que lo podemos dejar a un % mas razonable» → about 60 % less visible text than direction 01, labels and units kept.
 
 ## Tasks
@@ -36,6 +37,8 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 
 | T7 | Live-data fixes (L21): Router ages from the decision ts; Tokens «Por modelo» with many models | S8 S10 S11 S12 | worker A | — |
 | T8 | Live-data fixes (L21): Home rail token, Home RAM blocks with no engine, «instalada None», Procesos column width | S5 S6 S9 S10 S12 | worker B | — |
+| T9 | Integrate the RAM program selector (L22) from the uncommitted `worktrees/ram-program-selector` diff, plus the collector comm/args split fix | S10 S13 | worker (after T7+T8 commits) | — |
+| T10 | Deploy in place (L22): back up and replace the installed package and collector, keep unit/extension/config, restart the service, verify live, keep the rollback path | S13 | inline | — |
 
 ## Log
 
@@ -67,3 +70,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
   5. Tokens «Por modelo»: 53 models make values and names overlap into an unreadable strip — top N with the rest grouped, readable labels.
   6. Procesos: a long or odd `comm` pushes the RAM column right (cell width is a minimum, not a cap) — cap/ellipsize the name cell so columns stay aligned.
   Outside this branch: the installed collector `~/.local/bin/pc-ai-stats` + `macacoview_programs.py` (uncommitted feat/ram-program-selector deployment, Oct 5) splits `comm:64` at a fixed width but `ps` pads it differently, so «pi» becomes comm «pi … p» + args «i». Reported, not fixed here.
+- L22 (user, deploy): «vamos a la version nueva» → asked how; chose «Integrar primero el selector de RAM». Facts: the installed package `~/.local/lib/pc-ai-monitor` (service `pc-ai-monitor-gnome.service`, extension `pc-ai-monitor@alvaro`) runs main + the RAM program selector deployed on 10-05 (Engram 1708), whose source is an uncommitted diff in `worktrees/ram-program-selector` (9 files ~318 lines + `scripts/macacoview_programs.py`, `tests/test_programs.py`, its own `odd/tasks/ram-program-selector.md`; its T4 live verification was left partial). Plan: T9 brings that diff into this branch read-only from that worktree (never edited there), reconciles it with the redesign (Configuración, Recursos/groups, datos, config) and fixes the collector comm/args split from real `ps` output; T10 then swaps the installed package and collector in place (keeping unit, extension and config), restarts the service and verifies live. `gui/install.sh` (full rename to macacoview, removes pc-ai-monitor paths) is NOT used.
