@@ -155,8 +155,9 @@ class MotorResidenteBlock(Block):
             message_type=Gtk.MessageType.WARNING,
             buttons=Gtk.ButtonsType.NONE,
             text="¿Actualizar el motor?",
+            # GTK 4: propiedad «secondary-text» (no format_secondary_text).
+            secondary_text=CONFIRMATION_TEXT,
         )
-        dialog.format_secondary_text(CONFIRMATION_TEXT)
         dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
         dialog.add_button("Actualizar", Gtk.ResponseType.ACCEPT)
 

@@ -305,9 +305,10 @@ class EngineControlBlock(Gtk.Box):
             message_type=Gtk.MessageType.WARNING,
             buttons=Gtk.ButtonsType.NONE,
             text=f"¿Apagar {self.model_name}?",
-        )
-        dialog.format_secondary_text(
-            "Es el motor base usado por Pi y el router. Confirmá para detenerlo."
+            # GTK 4: propiedad «secondary-text» (no format_secondary_text).
+            secondary_text=(
+                "Es el motor base usado por Pi y el router. Confirmá para detenerlo."
+            ),
         )
         dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
         dialog.add_button("Apagar", Gtk.ResponseType.ACCEPT)

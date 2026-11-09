@@ -335,8 +335,10 @@ class ActualizacionesBlock(Block):
             message_type=Gtk.MessageType.WARNING,
             buttons=Gtk.ButtonsType.NONE,
             text=title,
+            # GTK 4: el cuerpo es la propiedad «secondary-text»;
+            # format_secondary_text() era API de GTK 3 y aquí no existe.
+            secondary_text=body,
         )
-        dialog.format_secondary_text(body)
         dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
         dialog.add_button("Actualizar", Gtk.ResponseType.ACCEPT)
         return dialog

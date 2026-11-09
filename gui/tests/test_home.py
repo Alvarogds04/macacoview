@@ -706,11 +706,9 @@ class FakeGtkDialog:
 
     def __init__(self, *args, **kwargs):
         self.text = kwargs.get("text", "")
-        self.secondary = ""
+        # GTK 4: propiedad «secondary-text»; sin format_secondary_text (GTK 3).
+        self.secondary = kwargs.get("secondary_text", "")
         self._handler = None
-
-    def format_secondary_text(self, text):
-        self.secondary = text
 
     def add_button(self, _label, _response):
         pass

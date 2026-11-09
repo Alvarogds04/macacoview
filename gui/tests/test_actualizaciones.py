@@ -353,13 +353,13 @@ class FakeDialog:
 
     def __init__(self, *args, **kwargs):
         self.text = kwargs.get("text", "")
-        self.secondary = ""
+        # GTK 4: el cuerpo llega como propiedad «secondary-text». El doble no
+        # ofrece format_secondary_text (GTK 3): si el bloque la llamara, el
+        # test fallaría igual que la app real.
+        self.secondary = kwargs.get("secondary_text", "")
         self._handler = None
         self._user_data = ()
         FakeDialog.instances.append(self)
-
-    def format_secondary_text(self, text):
-        self.secondary = text
 
     def add_button(self, _label, _response):
         pass
