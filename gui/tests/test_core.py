@@ -325,9 +325,7 @@ class PageTests(unittest.TestCase):
         )
         self.assertEqual(claude._tiles["total"]._value.get_text(), tokens(1_440_000))
         self.assertEqual(claude._tiles["reasoning"]._value.get_text(), tokens(20_000))
-        self.assertEqual(
-            claude._tiles["cache_write"]._value.get_text(), tokens(40_000)
-        )
+        self.assertEqual(claude._tiles["cache_write"]._value.get_text(), tokens(40_000))
         self.assertEqual(claude._tiles["cache_read"]._value.get_text(), tokens(300_000))
 
 
@@ -485,7 +483,9 @@ class ConfigTests(unittest.TestCase):
 
         original = cfg.Config(
             watch=(
-                cfg.WatchEntry(name="chrome", match=(r"^chrome$", "/chrome/"), icon="🌐"),
+                cfg.WatchEntry(
+                    name="chrome", match=(r"^chrome$", "/chrome/"), icon="🌐"
+                ),
                 cfg.WatchEntry(name="system", visible=False),
             )
         )
@@ -505,7 +505,7 @@ class ConfigTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "config.toml"
-            path.write_text('[bar]\nhide_zero = false\n')
+            path.write_text("[bar]\nhide_zero = false\n")
             loaded = cfg.load(path)
 
         self.assertEqual(loaded.watch, cfg.Config().watch)
@@ -517,13 +517,7 @@ class ConfigTests(unittest.TestCase):
         from pc_ai_monitor import config as cfg
 
         # Entrada sin nombre y entrada con match roto: no vale ninguna.
-        broken = (
-            "[[watch]]\n"
-            'match = ["x"]\n'
-            "[[watch]]\n"
-            'name = "chrome"\n'
-            "match = 5\n"
-        )
+        broken = '[[watch]]\nmatch = ["x"]\n[[watch]]\nname = "chrome"\nmatch = 5\n'
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "config.toml"
             path.write_text(broken)
@@ -564,9 +558,7 @@ class WatchKeysTests(unittest.TestCase):
     def test_group_keys_follow_the_watch_defaults(self):
         from pc_ai_monitor import config as cfg
 
-        self.assertEqual(
-            GROUP_KEYS, tuple(entry.name for entry in cfg.Config().watch)
-        )
+        self.assertEqual(GROUP_KEYS, tuple(entry.name for entry in cfg.Config().watch))
 
 
 class SettingsTests(unittest.TestCase):
@@ -612,13 +604,399 @@ class SettingsTests(unittest.TestCase):
 
         # Cada entrada [[watch]] tiene su casilla, y apagarla se refleja en la
         # config recolectada sin tocar a las demás.
-        self.assertEqual(
-            len(window._watch_switches), len(current.watch)
-        )
+        self.assertEqual(len(window._watch_switches), len(current.watch))
         window._watch_switches[0].set_active(False)
         collected = window._collect()
         self.assertFalse(collected.watch[0].visible)
         self.assertTrue(all(entry.visible for entry in collected.watch[1:]))
+
+
+class ProgramPickerTests(SettingsTests):
+    """RAM por programa (T9, ported from feat/ram-program-selector).
+
+    The picker lives in Configuración, fed by the usual snapshots; the switch
+    [bar] programs_enabled gates the bar and Recursos together (L23).
+    """
+
+    def _cleanup_pending(self, page):
+        from gi.repository import GLib
+
+        def drop():
+            if page._pending:
+                GLib.source_remove(page._pending)
+                page._pending = None
+
+        self.addCleanup(drop)
+
+    def test_picker_pss_fallback_labels_and_global_counters(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.settings import SettingsSection
+
+        key = "program:v1:" + "a" * 64
+        page = SettingsSection(cfg.Config(), lambda updated: None)
+        for status, label in (
+            ("not_sampled", "PSS no muestreada"),
+            ("partial", "PSS parcial"),
+            ("unreadable", "PSS inaccesible"),
+            ("race", "PSS: proceso cambiado"),
+        ):
+            with self.subTest(status=status):
+                coverage = {
+                    "status": status,
+                    "total": 4,
+                    "measured": 1,
+                    "unreadable": 1,
+                    "raced": 1,
+                    "not_sampled": 1,
+                }
+                page.update_snapshot(
+                    Snapshot(
+                        stats={
+                            "programs": [
+                                {
+                                    "id": key,
+                                    "name": "editor",
+                                    "memory_kb": 1024,
+                                    "memory_metric": "rss",
+                                    "coverage": coverage,
+                                }
+                            ],
+                            "program_coverage": coverage,
+                            "program_enumeration": {"complete": True},
+                        }
+                    )
+                )
+                subtitle = page._program_rows[key].get_subtitle()
+                self.assertIn(f"RSS ({label})", subtitle)
+                self.assertNotIn("RSS parcial", subtitle)
+                global_detail = page._program_status.get_subtitle()
+                for text in (
+                    "PSS legible: 1/4",
+                    "no muestreada: 1",
+                    "inaccesible: 1",
+                    "cambiado: 1",
+                ):
+                    self.assertIn(text, global_detail)
+        self.assertEqual(page._collect().bar_program_ids, ())
+
+    def test_program_config_and_snapshot(self):
+        import tempfile
+        from dataclasses import replace
+
+        from pc_ai_monitor import config as cfg
+
+        a = "program:v1:" + "a" * 64
+        current = cfg.Config()
+        self.assertEqual(current.bar_program_ids, ())
+        self.assertFalse(current.bar_programs_enabled)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            chosen = replace(current, bar_program_ids=(a,), bar_programs_enabled=True)
+            self.assertTrue(cfg.save(chosen, path))
+            self.assertEqual(cfg.load(path), chosen)
+            path.write_text(
+                '[bar]\nprogram_ids = ["'
+                + a
+                + '", "bad", 3, "'
+                + a
+                + '"]\nprograms_enabled = "true"\n'
+            )
+            loaded = cfg.load(path)
+            self.assertEqual(loaded.bar_program_ids, (a,))
+            self.assertFalse(loaded.bar_programs_enabled)
+            self.assertEqual(loaded.watch, current.watch)
+        self.assertEqual(Snapshot().programs(), [])
+        self.assertEqual(Snapshot(stats={"programs": None}).programs(), [])
+
+    def test_installed_config_without_program_keys_loads_with_defaults(self):
+        # The real config written by the installed version has a [bar] table
+        # without programs_enabled/program_ids: it must load unchanged, opt-out.
+        import tempfile
+
+        from pc_ai_monitor import config as cfg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                "[bar]\nhide_zero = true\nalways_show = []\nonly = []\n"
+                'units = "gb"\nmodels = "separate"\nrouter_indicators = false\n'
+            )
+            loaded = cfg.load(path)
+        self.assertFalse(loaded.bar_programs_enabled)
+        self.assertEqual(loaded.bar_program_ids, ())
+        self.assertEqual(loaded.watch, cfg.DEFAULT_WATCH)
+
+    def test_picker_preserves_draft_absence_and_safe_identity(self):
+        from unittest.mock import patch
+
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.settings import SettingsSection
+
+        a, b = ("program:v1:" + c * 64 for c in "ab")
+        page = SettingsSection(cfg.Config(bar_program_ids=(a,)), lambda updated: None)
+        self._cleanup_pending(page)
+
+        def snap(pid=10, status="partial"):
+            return Snapshot(
+                stats={
+                    "programs": [
+                        {
+                            "id": i,
+                            "name": "python3",
+                            "executable": "/usr/bin/python3",
+                            "pids": [pid],
+                            "memory_kb": 1024,
+                            "memory_metric": "pss" if status == "full" else "rss",
+                            "coverage": {"status": status, "measured": 1, "total": 2},
+                            "args": "--token SECRET",
+                        }
+                        for i in (a, b)
+                    ]
+                }
+            )
+
+        with patch.object(cfg, "save") as save:
+            page.update_snapshot(snap())
+            row = page._program_rows[a]
+            self.assertTrue(row.get_active())
+            self.assertFalse(row.get_use_markup())
+            self.assertFalse(page._collect().bar_programs_enabled)
+            self.assertEqual(page._collect().bar_program_ids, (a,))
+            self.assertNotEqual(row.get_title(), page._program_rows[b].get_title())
+            self.assertIn("RSS", row.get_subtitle())
+            self.assertIn("parcial", row.get_subtitle())
+            self.assertIn("/usr/bin/python3", row.get_subtitle())
+            self.assertNotIn("SECRET", row.get_subtitle() + row.get_title())
+            row.set_active(False)
+            page._program_rows[b].set_active(True)
+            pending = page._pending
+            page.update_snapshot(snap(99, "unreadable"))
+            self.assertIs(page._program_rows[a], row)
+            self.assertEqual(page._pending, pending)
+            page.update_snapshot(Snapshot())
+            self.assertIn("No activo", page._program_rows[b].get_subtitle())
+            self.assertTrue(page._program_rows[b].get_active())
+            self.assertEqual(page._collect().bar_program_ids, (b,))
+            page._program_rows[b].set_active(False)
+            self.assertEqual(page._collect().bar_program_ids, ())
+            page.update_snapshot(snap())
+            self.assertFalse(page._program_rows[a].get_active())
+            self.assertFalse(page._program_rows[b].get_active())
+            page.update_snapshot(snap(status="full"))
+            self.assertIn("PSS", page._program_rows[a].get_subtitle())
+            save.assert_not_called()
+
+    def test_opt_in_apply_persists_absence_and_disable_retains_selection(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from gi.repository import GLib
+
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.settings import SettingsSection
+
+        key = "program:v1:" + "a" * 64
+        applied = []
+        page = SettingsSection(cfg.Config(bar_program_ids=(key,)), applied.append)
+        self._cleanup_pending(page)
+        self.assertTrue(page._program_rows[key].get_active())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            save = cfg.save
+            with patch.object(
+                cfg, "save", side_effect=lambda config, _path=None: save(config, path)
+            ):
+                for enabled in (True, False):
+                    page._programs_enabled.set_active(enabled)
+                    GLib.source_remove(page._pending)
+                    page._apply()
+                    restored = cfg.load(path)
+                    self.assertEqual(restored.bar_programs_enabled, enabled)
+                    self.assertEqual(restored.bar_program_ids, (key,))
+                    self.assertEqual(restored.watch, cfg.DEFAULT_WATCH)
+                    self.assertEqual(restored.bar_models, "separate")
+        self.assertEqual(len(applied), 2)
+
+    def test_switch_text_says_it_affects_the_bar_and_recursos(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.settings import SettingsSection
+
+        page = SettingsSection(cfg.Config(), lambda updated: None)
+        subtitle = page._programs_enabled.get_subtitle()
+        self.assertIn("barra", subtitle)
+        self.assertIn("Recursos", subtitle)
+
+    def test_lazy_settings_uses_last_snapshot_without_collection(self):
+        from unittest.mock import patch
+
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.app import MonitorApplication
+
+        key = "program:v1:" + "c" * 64
+        snapshot = Snapshot(
+            stats={
+                "programs": [
+                    {
+                        "id": key,
+                        "name": "editor",
+                        "memory_kb": 1024,
+                        "memory_metric": "rss",
+                        "coverage": {"status": "not_sampled", "total": 1},
+                    }
+                ]
+            }
+        )
+        with (
+            patch.object(cfg, "load", return_value=cfg.Config()),
+            patch("pc_ai_monitor.app.Collector") as collector,
+        ):
+            app = MonitorApplication()
+            app._on_snapshot(snapshot)
+            with patch.object(
+                app, "_wrap", side_effect=lambda title, content, **kw: content
+            ):
+                page = app._build_section("config")
+            self.assertIs(page._snapshot, snapshot)
+            self.assertIn(key, page._program_rows)
+            collector.assert_not_called()
+
+    def test_pill_preview_shows_programs_only_with_the_switch(self):
+        from dataclasses import replace
+
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.blocks.tablas_vista import pill_chips
+
+        key = "program:v1:" + "d" * 64
+        snapshot = Snapshot(
+            stats={
+                "memory": {"total_gib": 100.0},
+                "programs": [
+                    {
+                        "id": key,
+                        "name": "editor",
+                        "memory_kb": 2 * 1024**2,
+                        "memory_metric": "pss",
+                        "coverage": {"status": "full", "total": 1},
+                    }
+                ],
+            }
+        )
+        selected = replace(cfg.Config(), bar_program_ids=(key,))
+        self.assertFalse(
+            any("RAM programas" in text for text, _ in pill_chips(selected, snapshot))
+        )
+        enabled = replace(selected, bar_programs_enabled=True)
+        texts = [text for text, _ in pill_chips(enabled, snapshot)]
+        block = next(text for text in texts if "RAM programas" in text)
+        self.assertIn("no sumar", block)
+        self.assertIn(f"editor·{key[-64:-56]} PSS 2.0G", block)
+        # Enabled but the program is gone: no block (absent entries stay in
+        # the picker, not on the bar).
+        gone = Snapshot(stats={"memory": {"total_gib": 100.0}, "programs": []})
+        self.assertFalse(
+            any("RAM programas" in text for text, _ in pill_chips(enabled, gone))
+        )
+
+
+class RecursosProgramsTests(SettingsTests):
+    """L23: Recursos lists the selected programs only when the switch is on,
+    apart from the treemap and its «RSS total»."""
+
+    KEY = "program:v1:" + "e" * 64
+
+    def _snapshot(self, enabled, ids=None):
+        from dataclasses import replace
+
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor.datos import Collector
+
+        ids = (self.KEY,) if ids is None else ids
+        config = replace(
+            cfg.Config(), bar_programs_enabled=enabled, bar_program_ids=ids
+        )
+        collector = Collector(config)
+        collector._stats = {
+            "memory": {"total_gib": 100.0, "used_gib": 40.0, "available_gib": 60.0},
+            "groups": {"pi": {"rss_gib": 3.0, "pids": []}},
+            "programs": [
+                {
+                    "id": self.KEY,
+                    "name": "editor",
+                    "executable": "/opt/editor/editor",
+                    "memory_kb": 5 * 1024**2,
+                    "memory_metric": "pss",
+                    "coverage": {"status": "full", "total": 2, "measured": 2},
+                }
+            ],
+        }
+        return collector.snapshot()
+
+    def _texts(self, box):
+        from gi.repository import Gtk
+
+        found = []
+        stack = [box]
+        while stack:
+            widget = stack.pop()
+            if isinstance(widget, Gtk.Label):
+                found.append(widget.get_text())
+            child = widget.get_first_child()
+            while child is not None:
+                stack.append(child)
+                child = child.get_next_sibling()
+        return found
+
+    def test_switch_on_shows_the_list_outside_the_treemap(self):
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        block = GroupsBlock()
+        block.update_snapshot(self._snapshot(True))
+        self.assertTrue(block._programs.get_visible())
+        texts = self._texts(block._programs)
+        self.assertIn("PROGRAMAS SELECCIONADOS · NO SUMAR", texts)
+        self.assertIn(f"editor · {self.KEY[-64:-56]}", texts)
+        self.assertIn("5.00G PSS", texts)
+        # Never inside the treemap nor its total.
+        self.assertEqual(block._donut._center_value, "3.00G")
+        self.assertNotIn("editor", " ".join(s.label for s in block._donut._slices))
+
+    def test_switch_off_hides_the_list(self):
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        block = GroupsBlock()
+        block.update_snapshot(self._snapshot(True))
+        block.update_snapshot(self._snapshot(False))
+        self.assertFalse(block._programs.get_visible())
+        self.assertEqual(self._texts(block._programs), [])
+
+    def test_switch_on_without_selection_shows_nothing(self):
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        block = GroupsBlock()
+        block.update_snapshot(self._snapshot(True, ids=()))
+        self.assertFalse(block._programs.get_visible())
+
+    def test_absent_selected_program_is_marked_not_dropped(self):
+        from dataclasses import replace
+
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        snapshot = self._snapshot(True)
+        snapshot = replace(snapshot, stats=dict(snapshot.stats or {}, programs=[]))
+        block = GroupsBlock()
+        block.update_snapshot(snapshot)
+        self.assertTrue(block._programs.get_visible())
+        self.assertIn("ausente", self._texts(block._programs))
+
+    def test_recursos_page_passes_the_switch_through(self):
+        from pc_ai_monitor.pages.recursos import RecursosPage
+
+        page = RecursosPage()
+        groups = page._blocks[2]
+        page.update_snapshot(self._snapshot(True))
+        self.assertTrue(groups._programs.get_visible())
+        page.update_snapshot(self._snapshot(False))
+        self.assertFalse(groups._programs.get_visible())
 
 
 class TokenParserTests(unittest.TestCase):
@@ -720,9 +1098,7 @@ class TokenParserTests(unittest.TestCase):
             },
         }
         lines = [
-            json.dumps(
-                {"type": "session_meta", "payload": {"type": "session_meta"}}
-            ),
+            json.dumps({"type": "session_meta", "payload": {"type": "session_meta"}}),
             json.dumps(
                 {
                     "type": "turn_context",
@@ -777,7 +1153,7 @@ class TokenParserTests(unittest.TestCase):
                     "server_tool_use": {"web_search_requests": 0},
                 },
             ),
-            '{linea rota',  # mal formada: se saltea
+            "{linea rota",  # mal formada: se saltea
             self._claude_assistant(
                 "claude-fixture-b",
                 {
@@ -838,9 +1214,7 @@ class TokenParserTests(unittest.TestCase):
         self.assertEqual(payload["input"], 1000)
         self.assertEqual(payload["output"], 550)
         self.assertEqual(payload["cache_read"], 1700)  # cache_read_input_tokens
-        self.assertEqual(
-            payload["cache_write"], 340
-        )  # cache_creation_input_tokens
+        self.assertEqual(payload["cache_write"], 340)  # cache_creation_input_tokens
         self.assertEqual(payload["reasoning"], 205)  # thinking_tokens
         self.assertEqual(payload["total"], 3590)
         self.assertEqual(payload["turns"], 2)
@@ -892,9 +1266,7 @@ class TokenParserTests(unittest.TestCase):
             },
         }
         with path.open("a") as handle:
-            handle.write(
-                self._codex_turn(appended) + "\n"
-            )
+            handle.write(self._codex_turn(appended) + "\n")
 
         second = self.tokens.collect_codex_cli()
         self.assertEqual(second["total"], first["total"] + 850)
@@ -1035,10 +1407,13 @@ class ConfigMigrationTests(unittest.TestCase):
             self.assertTrue(cfg.migrate_legacy_config(new, legacy))
 
             self.assertEqual(
-                new.read_text(), legacy.read_text(), "el contenido queda igual",
+                new.read_text(),
+                legacy.read_text(),
+                "el contenido queda igual",
             )
             self.assertTrue(
-                legacy.is_file(), "el original se copia, nunca se mueve ni borra",
+                legacy.is_file(),
+                "el original se copia, nunca se mueve ni borra",
             )
 
     def test_does_not_overwrite_an_existing_new_config(self):
@@ -1051,12 +1426,13 @@ class ConfigMigrationTests(unittest.TestCase):
             new = Path(tmp) / "macacoview" / "config.toml"
             legacy.parent.mkdir(parents=True)
             new.parent.mkdir(parents=True)
-            legacy.write_text("[[watch]]\nname = \"viejo\"\n")
-            new.write_text("[[watch]]\nname = \"nuevo\"\n")
+            legacy.write_text('[[watch]]\nname = "viejo"\n')
+            new.write_text('[[watch]]\nname = "nuevo"\n')
 
             self.assertFalse(cfg.migrate_legacy_config(new, legacy))
             self.assertEqual(
-                new.read_text(), "[[watch]]\nname = \"nuevo\"\n",
+                new.read_text(),
+                '[[watch]]\nname = "nuevo"\n',
                 "la config nueva nunca se pisa con la vieja",
             )
 
@@ -1068,9 +1444,12 @@ class ConfigMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             new = Path(tmp) / "macacoview" / "config.toml"
 
-            self.assertFalse(cfg.migrate_legacy_config(new, Path(tmp) / "no-existe.toml"))
             self.assertFalse(
-                new.exists(), "sin nada que migrar no se crea el directorio nuevo",
+                cfg.migrate_legacy_config(new, Path(tmp) / "no-existe.toml")
+            )
+            self.assertFalse(
+                new.exists(),
+                "sin nada que migrar no se crea el directorio nuevo",
             )
 
     def test_migration_copies_only_the_config_file(self):
@@ -1082,13 +1461,14 @@ class ConfigMigrationTests(unittest.TestCase):
             legacy_dir = Path(tmp) / "pc-ai-monitor"
             legacy_dir.mkdir()
             legacy = legacy_dir / "config.toml"
-            legacy.write_text("[ui]\ntheme = \"gentle\"\n")
+            legacy.write_text('[ui]\ntheme = "gentle"\n')
             (legacy_dir / ".bak-precfg-bar").write_text("no es nuestro")
             new = Path(tmp) / "macacoview" / "config.toml"
 
             self.assertTrue(cfg.migrate_legacy_config(new, legacy))
             self.assertEqual(
-                [p.name for p in new.parent.iterdir()], ["config.toml"],
+                [p.name for p in new.parent.iterdir()],
+                ["config.toml"],
                 "solo config.toml viaja al directorio nuevo",
             )
 
@@ -1108,14 +1488,19 @@ class ConfigMigrationTests(unittest.TestCase):
             try:
                 loaded = cfg.load(cfg.CONFIG_PATH)
             finally:
-                cfg.CONFIG_PATH, cfg.LEGACY_CONFIG_PATH = original_config, original_legacy
+                cfg.CONFIG_PATH, cfg.LEGACY_CONFIG_PATH = (
+                    original_config,
+                    original_legacy,
+                )
 
             self.assertEqual(
-                tuple(entry.name for entry in loaded.watch), ("chrome",),
+                tuple(entry.name for entry in loaded.watch),
+                ("chrome",),
                 "load usa la config migrada, no los defaults",
             )
             self.assertTrue(
-                legacy.is_file(), "el original sigue intacto después de migrar",
+                legacy.is_file(),
+                "el original sigue intacto después de migrar",
             )
 
 
@@ -1132,19 +1517,23 @@ class StatsConfigPathTests(unittest.TestCase):
             config.parent.mkdir(parents=True)
             config.write_text(
                 "[[watch]]\n"
-                "name = \"grupo-de-prueba\"\n"
+                'name = "grupo-de-prueba"\n'
                 "match = ['^este-proceso-no-existe$']\n"
             )
             env = dict(os.environ, HOME=tmp)
             out = subprocess.run(
-                ["python3", str(script)], capture_output=True, text=True, env=env,
+                ["python3", str(script)],
+                capture_output=True,
+                text=True,
+                env=env,
                 check=False,
             )
 
         self.assertEqual(out.returncode, 0, out.stderr)
         data = json.loads(out.stdout)
         self.assertIn(
-            "grupo-de-prueba", data["groups"],
+            "grupo-de-prueba",
+            data["groups"],
             "el [[watch]] de la ruta nueva define los grupos del colector",
         )
 
@@ -1186,7 +1575,10 @@ class CollectorDecisionsTests(unittest.TestCase):
     def _metrics(self, sessions):
         return {
             "recent": [
-                {"ts": f"2026-11-04T10:{index // 60:02d}:{index % 60:02d}+0100", "session": session}
+                {
+                    "ts": f"2026-11-04T10:{index // 60:02d}:{index % 60:02d}+0100",
+                    "session": session,
+                }
                 for index, session in enumerate(sessions)
             ]
         }
@@ -1224,7 +1616,9 @@ class CollectorDecisionsTests(unittest.TestCase):
         from pc_ai_monitor.datos import DECISIONS_CAP, Collector
 
         collector = Collector(cfg.Config())
-        collector._record_decisions(self._metrics([f"rtr-{i}" for i in range(2100)]), now=100.0)
+        collector._record_decisions(
+            self._metrics([f"rtr-{i}" for i in range(2100)]), now=100.0
+        )
 
         decisions = collector.snapshot().decisions
         self.assertEqual(len(decisions), DECISIONS_CAP)
@@ -1264,5 +1658,8 @@ class CollectorDecisionsTests(unittest.TestCase):
 
         snapshot = collector.snapshot()
         self.assertEqual(snapshot.router(), {"router": {"version": "1.0.0"}})
-        self.assertEqual(snapshot.recent_routes(), [{"ts": "2026-11-04T10:00:00+0100", "session": "rtr-1"}])
+        self.assertEqual(
+            snapshot.recent_routes(),
+            [{"ts": "2026-11-04T10:00:00+0100", "session": "rtr-1"}],
+        )
         self.assertEqual(len(snapshot.decisions), 1)

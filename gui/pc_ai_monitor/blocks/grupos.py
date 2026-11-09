@@ -11,6 +11,7 @@ from gi.repository import Gtk
 
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks import programas_vista as programas
 from pc_ai_monitor.blocks.recursos_vista import (
     GroupTreemap,
     top_processes,
@@ -75,6 +76,12 @@ class GroupsBlock(Block):
 
         self.body.append(legend)
 
+        # RAM por programa (L23): lista aparte, fuera del treemap y del «RSS
+        # total» — PSS/RSS de programas se superponen con los grupos.
+        self._programs = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self._programs.set_visible(False)
+        self.body.append(self._programs)
+
         self._detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self._revealer = Gtk.Revealer()
         self._revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
@@ -118,6 +125,48 @@ class GroupsBlock(Block):
                 f"{GROUP_LABELS[key]} · {gib(values[key], 2)} GiB · "
                 f"{percent(values[key], total, 1)} del RSS visible"
             )
+
+        self._render_programs(snapshot)
+
+    def _render_programs(self, snapshot: Snapshot) -> None:
+        while (child := self._programs.get_first_child()) is not None:
+            self._programs.remove(child)
+        rows = programas.selected_programs(
+            snapshot.programs(), snapshot.shown_program_ids
+        )
+        self._programs.set_visible(bool(rows))
+        if not rows:
+            return
+
+        heading = Gtk.Label(label=programas.RECURSOS_HEADING, xalign=0)
+        heading.add_css_class("section-head")
+        heading.set_tooltip_text(programas.RECURSOS_TIP)
+        self._programs.append(heading)
+        for key, program in rows:
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            line.add_css_class("legend-row")
+            if program is None:
+                name = Gtk.Label(
+                    label=f"Programa · {programas.short_id(key)}", xalign=0
+                )
+                value = Gtk.Label(label="ausente", xalign=1)
+                line.set_tooltip_text(programas.ABSENT_SUBTITLE)
+            else:
+                name = Gtk.Label(label=programas.program_title(program, key), xalign=0)
+                value = Gtk.Label(
+                    label=f"{gib(programas.program_gib(program), 2)}G "
+                    f"{programas.metric_label(program)}",
+                    xalign=1,
+                )
+                line.set_tooltip_text(programas.program_subtitle(program))
+            name.set_use_markup(False)
+            name.set_hexpand(True)
+            name.set_ellipsize(3)
+            line.append(name)
+            value.add_css_class("mono")
+            value.add_css_class("muted")
+            line.append(value)
+            self._programs.append(line)
 
     def redraw(self) -> None:
         self._donut.queue_draw()

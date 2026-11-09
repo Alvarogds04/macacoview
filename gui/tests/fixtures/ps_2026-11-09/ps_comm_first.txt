@@ -1,0 +1,6 @@
+kthreadd                                                               2       0     0     0  0.0 [kthreadd]
+kworker/0:0H-kblockd                                                  10       2     0     0  0.0 [kworker/0:0H-kblockd]
+pi                                                                  5454    5410  1000 351588 2.8 pi
+pi                                                                  5890    5870  1000 1463080 9.4 pi
+pi                                                                475647    5890  1000 344220 31.3 pi
+Isolated Web Co                                                  2352565   52343  1000 702012 0.1 /snap/firefox/9137/usr/lib/firefox/firefox -contentproc

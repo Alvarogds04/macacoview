@@ -16,6 +16,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
+from pc_ai_monitor.blocks import programas_vista as programas
 from pc_ai_monitor.blocks.tablas_vista import pill_chips
 from pc_ai_monitor.datos import Snapshot
 
@@ -267,6 +268,28 @@ class SettingsSection(Gtk.ScrolledWindow):
         self._router_indicators.connect("notify::active", self._on_change)
         panel.add(self._router_indicators)
 
+        # Opt-in, apagado de fábrica: los programas no tocan grupos ni modelos.
+        # Controla la barra y Recursos (L23). Apagarlo no borra la selección
+        # ni cambia qué se muestrea.
+        self._programs_enabled = Adw.SwitchRow(title=programas.SWITCH_TITLE)
+        self._programs_enabled.set_subtitle(programas.SWITCH_SUBTITLE)
+        self._programs_enabled.set_active(current.bar_programs_enabled)
+        self._programs_enabled.connect("notify::active", self._on_change)
+        panel.add(self._programs_enabled)
+
+        # -- RAM por programa ----------------------------------------------------
+        # Las filas salen del snapshot habitual: abrir la lista no escanea nada.
+        self._program_group = Adw.PreferencesGroup(
+            title="RAM por programa (selección opcional)",
+            description=programas.PICKER_DESCRIPTION,
+        )
+        page.add(self._program_group)
+        self._program_rows: dict[str, Adw.SwitchRow] = {}
+        self._program_selection = set(current.bar_program_ids)
+        self._program_status = Adw.ActionRow(title="Sin datos de programas")
+        self._program_group.add(self._program_status)
+        self._refresh_programs()
+
         # -- monitoreo ---------------------------------------------------------
         watching = Adw.PreferencesGroup(
             title="Monitoreo",
@@ -323,7 +346,44 @@ class SettingsSection(Gtk.ScrolledWindow):
         never show stale chips when the machine changes under the settings.
         """
         self._snapshot = snapshot
+        self._refresh_programs()
         self._refresh_preview()
+
+    # -- RAM por programa ------------------------------------------------------
+
+    def _refresh_programs(self) -> None:
+        """Diff of rows: polling never applies nor overwrites pending toggles."""
+        snapshot = self._snapshot or Snapshot()
+        live = programas.live_programs(snapshot.programs())
+        wanted = set(live) | self._program_selection
+        for key in list(self._program_rows):
+            if key not in wanted:
+                self._program_group.remove(self._program_rows.pop(key))
+        for key in sorted(wanted, key=lambda k: (live.get(k, {}).get("name", ""), k)):
+            row = self._program_rows.get(key)
+            if row is None:
+                row = Adw.SwitchRow(title=f"Programa · {programas.short_id(key)}")
+                row.set_use_markup(False)
+                row.set_active(key in self._program_selection)
+                row.connect("notify::active", self._on_program_change, key)
+                self._program_rows[key] = row
+                self._program_group.add(row)
+            program = live.get(key)
+            if program:
+                row.set_title(programas.program_title(program, key))
+                row.set_subtitle(programas.program_subtitle(program))
+            else:
+                row.set_subtitle(programas.ABSENT_SUBTITLE)
+        title, subtitle = programas.coverage_summary(snapshot.stats)
+        self._program_status.set_title(title)
+        self._program_status.set_subtitle(subtitle)
+
+    def _on_program_change(self, row: Adw.SwitchRow, _param, key: str) -> None:
+        if row.get_active():
+            self._program_selection.add(key)
+        else:
+            self._program_selection.discard(key)
+        self._on_change()
 
     def _refresh_preview(self) -> None:
         while (child := self._pill_preview.get_first_child()) is not None:
@@ -372,6 +432,8 @@ class SettingsSection(Gtk.ScrolledWindow):
             bar_units="percent" if self._units.get_selected() == 1 else "gb",
             bar_models="combined" if self._models.get_selected() == 1 else "separate",
             bar_router_indicators=self._router_indicators.get_active(),
+            bar_programs_enabled=self._programs_enabled.get_active(),
+            bar_program_ids=tuple(sorted(self._program_selection)),
             watch=tuple(
                 replace(entry, visible=self._watch_switches[index].get_active())
                 for index, entry in enumerate(self._config.watch)

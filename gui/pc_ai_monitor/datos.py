@@ -76,6 +76,9 @@ class Snapshot:
     # Cada entrada es una copia de ``recent`` con ``_seen`` (monotonic del
     # sondeo que la vio por primera vez). Sin él, las demás páginas no cambian.
     decisions: tuple[dict[str, Any], ...] = ()
+    # RAM por programa en Recursos (L23): los IDs elegidos, solo con
+    # [bar] programs_enabled encendido; apagado = tupla vacía = nada se muestra.
+    shown_program_ids: tuple[str, ...] = ()
 
     def memory(self) -> dict[str, Any]:
         return (self.stats or {}).get("memory", {})
@@ -96,6 +99,10 @@ class Snapshot:
 
     def models(self) -> list[dict[str, Any]]:
         return (self.stats or {}).get("models", [])
+
+    def programs(self) -> list[dict[str, Any]]:
+        """Programs discovered by the collector (RAM por programa); may be absent."""
+        return (self.stats or {}).get("programs", []) or []
 
     def groups(self) -> dict[str, Any]:
         return (self.stats or {}).get("groups", {})
@@ -193,12 +200,15 @@ class Collector:
                 ),
                 history=tuple(self._history),
                 hidden_groups=tuple(
-                    entry.name
-                    for entry in self._config.watch
-                    if not entry.visible
+                    entry.name for entry in self._config.watch if not entry.visible
                 ),
                 collected_at=dict(self._collected_at),
                 decisions=tuple(self._decisions),
+                shown_program_ids=(
+                    tuple(self._config.bar_program_ids)
+                    if self._config.bar_programs_enabled
+                    else ()
+                ),
             )
 
     # -- worker -----------------------------------------------------------

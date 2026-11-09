@@ -7,6 +7,7 @@ function, so the design rules are testable without a display. The widgets in
 / ``settings`` only paint what these decide.
 """
 
+from pc_ai_monitor.blocks import programas_vista as programas
 from pc_ai_monitor.config import Config
 from pc_ai_monitor.datos import Snapshot
 from pc_ai_monitor.formato import gib, safe
@@ -132,6 +133,30 @@ def pill_chips(config: Config, snapshot: Snapshot | None) -> list[tuple[str, str
 
     if config.bar_router_indicators:
         chips.append(router_chip(snapshot))
+
+    # Same block the collector appends to the bar: opt-in, only programs that
+    # are present now, and marked «no sumar» because they overlap the rest.
+    if config.bar_programs_enabled:
+        present = [
+            (key, program)
+            for key, program in programas.selected_programs(
+                snapshot.programs(), config.bar_program_ids
+            )
+            if program is not None
+        ]
+        if present:
+            text = "  ".join(
+                programas.program_chip(
+                    program, key, unit(programas.program_gib(program))
+                )
+                for key, program in present
+            )
+            chips.append(
+                (
+                    f"RAM programas ({programas.NO_SUM}): {text}",
+                    "Se superponen con grupos, modelos y GPU/GTT: no se suman.",
+                )
+            )
     return chips
 
 

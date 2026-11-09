@@ -130,6 +130,7 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           cp "$GITHUB_WORKSPACE/scripts/macacoview-stats" "$HOME/.local/bin/macacoview-stats"
           chmod +x "$HOME/.local/bin/macacoview-stats"
+          install -m 644 "$GITHUB_WORKSPACE/scripts/macacoview_programs.py" "$HOME/.local/bin/macacoview_programs.py"
 
           port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
           log=$(mktemp)

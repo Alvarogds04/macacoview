@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+import re
 import shutil
 import tomllib
 
@@ -70,6 +71,9 @@ models = "separate"
 # Bloque de estado del router (A/F, JEV, sesiones, RAM libre, cola) en la barra.
 # Viene OCULTO: activalo acá o desde el menú de configuración cuando lo quieras.
 router_indicators = false
+# Programas adicionales: selección explícita por ID estable, desactivada por defecto.
+programs_enabled = false
+program_ids = []
 
 # Grupos de procesos que arma el colector. Cada patrón de `match` es una
 # expresión regular que se busca sobre el nombre del proceso (comm) y sobre su
@@ -150,6 +154,13 @@ def _as_keys(raw: Any) -> tuple[str, ...]:
     if not isinstance(raw, list):
         return ()
     return tuple(str(item).strip().lower() for item in raw if str(item).strip())
+
+
+def _as_program_ids(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(dict.fromkeys(item for item in raw if isinstance(item, str)
+                              and re.fullmatch(r"program:v1:[0-9a-f]{64}", item)))
 
 
 @dataclass(frozen=True)
@@ -244,6 +255,9 @@ class Config:
     bar_only: tuple[str, ...] = ()
     bar_units: str = "gb"
     bar_models: str = "separate"
+    # Opt-in: los programas no modifican los grupos/modelos existentes.
+    bar_programs_enabled: bool = False
+    bar_program_ids: tuple[str, ...] = ()
     # Opt-in: el bloque de estado del router no se muestra salvo que se active.
     bar_router_indicators: bool = False
     # Grupos de procesos vigilados ([[watch]]): los de siempre por defecto.
@@ -317,6 +331,8 @@ def load(path: Path = CONFIG_PATH) -> Config:
           bar_router_indicators=_as_bool(
               bar.get("router_indicators"), defaults.bar_router_indicators
           ),
+          bar_programs_enabled=_as_bool(bar.get("programs_enabled"), False),
+          bar_program_ids=_as_program_ids(bar.get("program_ids")),
           watch=_as_watch(raw.get("watch"), defaults.watch),
       )
 
@@ -369,6 +385,8 @@ only = [{listed(config.bar_only)}]
 units = "{config.bar_units}"
 models = "{config.bar_models}"
 router_indicators = {str(config.bar_router_indicators).lower()}
+programs_enabled = {str(config.bar_programs_enabled).lower()}
+program_ids = [{listed(_as_program_ids(config.bar_program_ids))}]
 
 {watch_blocks}"""
     try:

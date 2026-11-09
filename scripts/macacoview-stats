@@ -7,6 +7,10 @@ import subprocess
 from pathlib import Path
 import sys
 
+# Resolve the adjacent installed helper, including when invoked via runpy.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from macacoview_programs import PS_COLUMNS, discover_programs, parse_ps
+
 
 def run(cmd):
     try:
@@ -50,41 +54,9 @@ swap_used = max(0, swap_total - swap_free)
 # Procesos
 # --------------------------------------------------
 
-ps_output = run([
-    "ps",
-    "-eo",
-    "pid=,ppid=,uid=,rss=,%cpu=,comm=,args="
-])
+ps_output = run(["ps", "-eo", PS_COLUMNS])
 
-processes = []
-
-for line in ps_output.splitlines():
-    try:
-        parts = line.strip().split(None, 6)
-
-        if len(parts) < 7:
-            continue
-
-        pid = int(parts[0])
-        ppid = int(parts[1])
-        uid = int(parts[2])
-        rss = int(parts[3])
-        cpu = float(parts[4])
-        comm = parts[5]
-        args = parts[6]
-
-        processes.append({
-            "pid": pid,
-            "ppid": ppid,
-            "uid": uid,
-            "rss_kb": rss,
-            "cpu": cpu,
-            "comm": comm,
-            "args": args,
-        })
-
-    except Exception:
-        continue
+processes, skipped = parse_ps(ps_output)
 
 
 # --------------------------------------------------
@@ -339,12 +311,8 @@ data = {
 }
 
 
-# --------------------------------------------------
-# Chip builder
-# --------------------------------------------------
-
 BAR_CONFIG = WATCH_CONFIG
-BAR_DEFAULTS = {"hide_zero": True, "always_show": [], "only": [], "units": "gb", "models": "separate"}
+BAR_DEFAULTS = {"hide_zero": True, "always_show": [], "only": [], "units": "gb", "models": "separate", "programs_enabled": False, "program_ids": []}
 
 
 def _load_bar_config():
@@ -360,6 +328,8 @@ def _load_bar_config():
     except Exception:
         return dict(BAR_DEFAULTS)
 
+    if not isinstance(section, dict):
+        return dict(BAR_DEFAULTS)
     always = section.get("always_show") or []
     only = section.get("only") or []
     units = str(section.get("units", "gb")).lower()
@@ -370,7 +340,30 @@ def _load_bar_config():
         "only": [str(item).lower() for item in only] if isinstance(only, list) else [],
         "units": units if units in ("gb", "percent") else "gb",
         "models": models if models in ("separate", "combined") else "separate",
+        "programs_enabled": section.get("programs_enabled") is True,
+        "program_ids": [p for p in section.get("program_ids", [])
+                        if isinstance(p, str) and re.fullmatch(r"program:v1:[0-9a-f]{64}", p)]
+                       if isinstance(section.get("program_ids"), list) else [],
     }
+
+
+bar_config = _load_bar_config()
+
+# Independent accounting: these values overlap watch/model/GPU measurements.
+discovered = discover_programs(processes, selected_ids=bar_config["program_ids"])
+data["programs"] = discovered["programs"]
+data["program_coverage"] = discovered["coverage"]
+data["program_enumeration"] = {
+    "scope": "ps_snapshot",
+    "complete": bool(ps_output.strip()) and skipped == 0,
+    "process_count": len(processes),
+    "skipped_rows": skipped,
+}
+
+
+# --------------------------------------------------
+# Chip builder
+# --------------------------------------------------
 
 
 def _fmt(value, config, mem_total):
@@ -400,7 +393,7 @@ def _build_chips(models, groups, memory=None):
     por defecto, `always_show`/`only` para acotar, `units` (gb o percent) y
     `models` (un chip por modelo o una métrica sumada).
     """
-    config = _load_bar_config()
+    config = bar_config
     mem_total = float((memory or {}).get("total_gib") or 0.0)
     parts = []
 
@@ -443,6 +436,21 @@ def _build_chips(models, groups, memory=None):
                 f'{entry["icon"] or "\U0001f9e9"}{_fmt(value, config, mem_total)}'
             )
 
+    selected = []
+    if config["programs_enabled"]:
+        for program in data["programs"]:
+            if program["id"] not in config["program_ids"]:
+                continue
+            metric = "PSS" if program["memory_metric"] == "pss" else "RSS"
+            if metric == "RSS":
+                detail = {"partial": "PSS parcial", "not_sampled": "PSS no muestreada",
+                          "race": "PSS: proceso cambiado"}.get(program["coverage"]["status"], "PSS inaccesible")
+                metric += f" ({detail})"
+            name = "".join(c for c in program["name"] if c.isprintable() and c != "|")
+            selected.append(f'{name}·{program["id"][-64:-56]} '
+                            f'{metric} {_fmt(program["memory_kb"] / 1024**2, config, mem_total)}')
+    if selected:
+        parts.append("RAM programas (no sumar): " + "  ".join(selected))
     return "  ".join(parts) if parts else "\u2014"
 
 

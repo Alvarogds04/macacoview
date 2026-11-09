@@ -60,6 +60,44 @@ y puertos expuestos— y cada cabecera una pill con la edad de los datos de su
 sección (verde < 10 s, ámbar desde 10 s); si el colector de una sección falla,
 un banner lo anuncia arriba.
 
+## RAM por programa
+
+En **Configuración → RAM por programa** puede elegir programas observables y
+activar **Mostrar programas seleccionados**. Ese interruptor controla dos sitios:
+la barra superior y la lista «Programas seleccionados · no sumar» de **Recursos**,
+bajo la leyenda de grupos. Apagado, no aparecen en ninguno de los dos. Viene
+apagado, con la selección vacía; los grupos y modelos existentes no cambian. Se
+guarda en `[bar]` de `~/.config/macacoview/config.toml`, como
+`programs_enabled = true` y `program_ids = ["program:v1:…"]`. Un config que no
+tiene esas claves carga igual, con la opción apagada.
+
+La lista usa los snapshots habituales: abrirla no inicia otro escaneo. Cada fila
+muestra el ejecutable y un ID opaco corto que distingue intérpretes con el mismo
+nombre; nunca los argumentos. El ID no depende del PID. Una selección ausente
+queda como «No activo o no observable», se puede desmarcar y vuelve a aparecer
+cuando el programa reaparece. Apagar el interruptor no borra la selección.
+
+Primero se descubren y agrupan todos los procesos observables con su RSS.
+**PSS** se lee solo para los IDs guardados, incluidos los miembros de la misma
+aplicación agrupados con ellos; nunca para otros descendientes. Sin selección no
+se lee smaps. El interruptor solo controla qué se muestra: no borra IDs ni cambia
+lo que se muestrea.
+
+**PSS** reparte las páginas compartidas entre procesos. Si no cubre todo el grupo,
+se usa **RSS (PSS parcial)**, **RSS (PSS inaccesible)**, **RSS (PSS no muestreada)**
+o **RSS (PSS: proceso cambiado)**. Estas etiquetas describen a PSS; no quieren
+decir que el RSS esté incompleto. RSS puede contar dos veces las páginas
+compartidas. La RAM usada del sistema es **total − disponible**; la caché y el
+kernel no se atribuyen por completo a programas. Los programas se superponen con
+los grupos, los modelos y GPU/GTT, así que nunca se suman al «RSS total» de
+Recursos ni a ninguna otra medida.
+
+El colector pide `ps -eo comm:64=,pid=,…`, con el nombre primero. Una RSS de 7
+cifras con un %CPU de 4 se come el relleno de las columnas que van detrás, y así
+un nombre de ancho fijo puesto detrás se partía en «pi … p» + «i». Con el nombre
+primero, ningún desborde le quita espacio. La captura real está en
+`tests/fixtures/ps_2026-11-09/`.
+
 ## Temas
 
 Cuatro, desde la cabecera: **Gentle** (default, el tema activo de gentle-ai),
