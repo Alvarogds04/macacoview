@@ -1,0 +1,166 @@
+<!doctype html>
+<!-- MacacoView design system — rendered from design/system.md (source: gui/pc_ai_monitor/theme.py, graphite surfaces L25). -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>MacacoView — sistema de diseño</title>
+<style>
+  :root {
+    --bg: #17191e; --element: #1e2128; --subtle: #24272f; --border: #313342;
+    --text: #F3F6F9; --muted: #5C6170; --accent: #E0C15A; --blue: #7FB4CA;
+    --green: #B7CC85; --warning: #DEBA87; --error: #CB7C94; --selection: #232A40;
+    --s0: #8FB8DD; --s1: #B99BF2; --s2: #E0C15A; --s3: #A4DAA7; --s4: #C99AD6; --s5: #7FB4CA; --s6: #A3B5D6; --s7: #8394A3;
+    --sec: var(--s7);
+    --ui: "Adwaita Sans", Cantarell, system-ui, sans-serif;
+    --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 var(--ui); }
+  main { width: 1440px; padding: 40px 48px 56px; display: flex; flex-direction: column; gap: 36px; }
+  h1 { margin: 0; font: 700 22px var(--mono); }
+  h1 b { color: var(--accent); }
+  .lead { margin: 6px 0 0; color: var(--sec); max-width: 900px; }
+  h2 { margin: 0 0 12px; font: 700 11px var(--ui); letter-spacing: .1em; text-transform: uppercase; color: var(--sec); }
+  .grid { display: grid; gap: 12px; }
+  .sw { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--element); }
+  .sw i { display: block; height: 64px; }
+  .sw div { padding: 8px 10px; font: 12px var(--mono); }
+  .sw span { display: block; font: 11px var(--ui); color: var(--sec); }
+  .flag { color: var(--warning); }
+  .row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .card { background: var(--element); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .card-title { color: var(--sec); font: 700 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+  .mono { font-family: var(--mono); }
+  table { border-collapse: collapse; }
+  td { padding: 6px 16px 6px 0; border-top: 1px solid var(--border); vertical-align: baseline; }
+  td:first-child { color: var(--sec); font-size: 12px; width: 140px; }
+  .box { background: var(--subtle); border: 1px solid var(--border); }
+  .chip { background: var(--subtle); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 11px; }
+  .chip-warn { border-color: var(--warning); color: var(--warning); }
+  .age { font: 10px var(--mono); border-radius: 999px; padding: 1px 8px; background: var(--subtle); border: 1px solid var(--border); color: var(--green); }
+  .age.warn { color: var(--warning); border-color: var(--warning); }
+  .kbd { font: 700 10px var(--mono); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; color: var(--sec); background: var(--subtle); }
+  .btn { font: 600 13px var(--ui); color: var(--text); background: var(--subtle); border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  .btn.sug { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .btn.sug .kbd { color: var(--bg); background: transparent; border-color: var(--bg); }
+  .btn.des { color: var(--error); border-color: var(--error); background: var(--element); }
+  .btn[aria-disabled="true"] { background: var(--subtle); color: var(--sec); border-color: var(--border); cursor: default; }
+  .btn:focus-visible, .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pill { background: var(--element); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; display: inline-flex; gap: 8px; align-items: center; }
+  .vp { font: 700 13px var(--ui); }
+  .bar { width: 220px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; }
+  .lamp { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--green); }
+  .lamp.warn { background: var(--warning); border-radius: 1.5px; transform: rotate(45deg) scale(.9); }
+  .lamp.crit { background: var(--error); border-radius: 2px; }
+  .lamp.off { background: transparent; border: 1.5px solid var(--muted); }
+  .switch { width: 42px; height: 24px; border-radius: 999px; background: var(--border); border: 0; position: relative; cursor: pointer; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--text); }
+  .switch[aria-checked="true"] { background: var(--accent); }
+  .switch[aria-checked="true"]::after { left: 21px; background: var(--bg); }
+  .side { width: 168px; border: 1px solid var(--border); border-radius: 8px; padding: 6px; background: var(--bg); }
+  .side div { display: flex; justify-content: space-between; padding: 4px 8px; border-radius: 6px; font-size: 12px; }
+  .side .sel { background: var(--selection); box-shadow: inset 3px 0 0 var(--accent); color: var(--accent); }
+  .side .sel small { color: var(--text); }
+  .side small { font: 10px var(--mono); color: var(--sec); }
+</style>
+</head>
+<body>
+<main aria-label="Sistema de diseño de MacacoView">
+  <header>
+    <h1>macaco<b>view</b> · sistema de diseño</h1>
+    <p class="lead">Tema Gentle de <span class="mono">gui/pc_ai_monitor/theme.py</span> con las superficies grafito elegidas en L25. Solo modo oscuro. Cada valor sale de la fuente; el único uso propuesto (texto secundario en <span class="mono">#8394A3</span>) está marcado.</p>
+  </header>
+
+  <section aria-labelledby="c-h">
+    <h2 id="c-h">Colores</h2>
+    <div class="grid" style="grid-template-columns:repeat(7,1fr)">
+      <div class="sw"><i style="background:var(--bg)"></i><div>#17191e<span>background · L25</span></div></div>
+      <div class="sw"><i style="background:var(--element)"></i><div>#1e2128<span>element · L25</span></div></div>
+      <div class="sw"><i style="background:var(--subtle)"></i><div>#24272f<span>subtle · L25</span></div></div>
+      <div class="sw"><i style="background:var(--border)"></i><div>#313342<span>border</span></div></div>
+      <div class="sw"><i style="background:var(--selection)"></i><div>#232A40<span>selection</span></div></div>
+      <div class="sw"><i style="background:var(--text)"></i><div>#F3F6F9<span>text · 14.9:1</span></div></div>
+      <div class="sw"><i style="background:var(--muted)"></i><div>#5C6170<span class="flag">muted · 2.6:1, no apto texto</span></div></div>
+      <div class="sw"><i style="background:var(--accent)"></i><div>#E0C15A<span>accent · 9.2:1</span></div></div>
+      <div class="sw"><i style="background:var(--blue)"></i><div>#7FB4CA<span>blue · 7.1:1</span></div></div>
+      <div class="sw"><i style="background:var(--green)"></i><div>#B7CC85<span>green · ok</span></div></div>
+      <div class="sw"><i style="background:var(--warning)"></i><div>#DEBA87<span>warning · viejo</span></div></div>
+      <div class="sw"><i style="background:var(--error)"></i><div>#CB7C94<span>error · caído</span></div></div>
+      <div class="sw"><i style="background:var(--s1)"></i><div>#B99BF2<span>series[1] · Abito</span></div></div>
+      <div class="sw"><i style="background:var(--s7)"></i><div>#8394A3<span>series[7] · texto 2.º (propuesta)</span></div></div>
+    </div>
+    <div class="grid" style="grid-template-columns:repeat(8,1fr);margin-top:12px" role="group" aria-label="Series de gráficos">
+      <div class="sw"><i style="background:var(--s0);height:22px"></i><div>#8FB8DD<span>series 0 · Pi</span></div></div>
+      <div class="sw"><i style="background:var(--s1);height:22px"></i><div>#B99BF2<span>series 1</span></div></div>
+      <div class="sw"><i style="background:var(--s2);height:22px"></i><div>#E0C15A<span>series 2</span></div></div>
+      <div class="sw"><i style="background:var(--s3);height:22px"></i><div>#A4DAA7<span>series 3</span></div></div>
+      <div class="sw"><i style="background:var(--s4);height:22px"></i><div>#C99AD6<span>series 4</span></div></div>
+      <div class="sw"><i style="background:var(--s5);height:22px"></i><div>#7FB4CA<span>series 5</span></div></div>
+      <div class="sw"><i style="background:var(--s6);height:22px"></i><div>#A3B5D6<span>series 6</span></div></div>
+      <div class="sw"><i style="background:var(--s7);height:22px"></i><div>#8394A3<span>series 7</span></div></div>
+    </div>
+  </section>
+
+  <div class="row">
+    <section aria-labelledby="t-h" style="flex:1">
+      <h2 id="t-h">Tipografía</h2>
+      <table>
+        <tr><td>KPI 22/700 mono</td><td><span class="mono" style="font-size:22px;font-weight:700">51.1 GiB</span></td></tr>
+        <tr><td>Fila 13/600</td><td><span style="font-size:13px;font-weight:600">Abito · Qwen3.6-35B-A3B</span></td></tr>
+        <tr><td>Pill 13/700</td><td><span class="vp" style="color:var(--green)">Todo al día</span></td></tr>
+        <tr><td>Mono 12</td><td><span class="mono" style="font-size:12px">:11002 · ctx 131 072</span></td></tr>
+        <tr><td>Título card 11/700</td><td><span class="card-title">Modelos locales</span></td></tr>
+        <tr><td>Muted 11</td><td><span style="font-size:11px;color:var(--sec)">≈ 20 GiB reservados</span></td></tr>
+        <tr><td>Badge 10 mono</td><td><span class="mono" style="font-size:10px;color:var(--sec)">51G</span></td></tr>
+      </table>
+    </section>
+    <section aria-labelledby="sp-h" style="width:300px">
+      <h2 id="sp-h">Espaciado y radio</h2>
+      <div class="row" style="gap:10px;align-items:center">
+        <span class="kbd">1×5</span><span class="age">1×8</span><span class="chip">2×10</span><span class="pill">5×10</span><span class="card">8×10</span>
+      </div>
+      <div class="row" style="gap:10px;margin-top:14px">
+        <div class="box" style="width:44px;height:44px;border-radius:4px" title="radio 4"></div>
+        <div class="box" style="width:44px;height:44px;border-radius:6px" title="radio 6"></div>
+        <div class="box" style="width:44px;height:44px;border-radius:8px" title="radio 8"></div>
+        <div class="box" style="width:64px;height:44px;border-radius:999px" title="radio 999"></div>
+      </div>
+      <p style="font-size:11px;color:var(--sec)">Radios 4 · 6 · 8 · 999. Sin sombras en la fuente (headerbar <span class="mono">box-shadow: none</span>).</p>
+    </section>
+    <section aria-labelledby="sb-h">
+      <h2 id="sb-h">Sidebar</h2>
+      <div class="side" role="list">
+        <div class="sel" role="listitem">Home <small>abito</small></div>
+        <div role="listitem">Motores <small>gufo</small></div>
+        <div role="listitem">Recursos <small>51G</small></div>
+      </div>
+    </section>
+  </div>
+
+  <section aria-labelledby="k-h">
+    <h2 id="k-h">Componentes</h2>
+    <div class="row" style="align-items:center">
+      <button class="btn sug" type="button">Actualizar Abito <span class="kbd">Ctrl U</span></button>
+      <button class="btn" type="button">Encender</button>
+      <button class="btn des" type="button">Apagar Abito</button>
+      <button class="btn" type="button" aria-disabled="true">Actualizar · sin canal</button>
+      <span class="pill">⇄ Cambiar a Abito <span class="kbd">Ctrl E</span></span>
+      <span class="chip">pi · 8 PIDs</span><span class="chip chip-warn">no sumar</span>
+      <span class="age">4 s</span><span class="age warn">2 min</span>
+      <span><i class="lamp"></i> ok</span><span><i class="lamp warn"></i> viejo</span><span><i class="lamp crit"></i> caído</span><span><i class="lamp off"></i> apagado</span>
+      <button class="switch" type="button" role="switch" aria-checked="true" aria-label="Interruptor encendido"></button>
+      <button class="switch" type="button" role="switch" aria-checked="false" aria-label="Interruptor apagado"></button>
+    </div>
+    <div class="row" style="margin-top:16px;align-items:center">
+      <div><div class="card-title" style="margin-bottom:6px">progressbar (accent)</div><div class="bar"><i style="width:62%;background:var(--accent)"></i></div></div>
+      <div><div class="card-title" style="margin-bottom:6px">.bar-green</div><div class="bar"><i style="width:100%;background:var(--green)"></i></div></div>
+      <div><div class="card-title" style="margin-bottom:6px">.bar-warning</div><div class="bar"><i style="width:40%;background:var(--warning)"></i></div></div>
+      <div><div class="card-title" style="margin-bottom:6px">.bar-error</div><div class="bar"><i style="width:30%;background:var(--error)"></i></div></div>
+      <div><div class="card-title" style="margin-bottom:6px">.inv-ctx (blue)</div><div class="bar"><i style="width:75%;background:var(--blue)"></i></div></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,6 +1,7 @@
 {
   "title": "MacacoView",
   "brief": "Visual redesign of pc-ai-monitor as MacacoView (GTK4 + libadwaita). 01 plus visual alternatives: 04 and 05 (~85% less text), and 06 combining 01 + 04 + 05 at ~60% less text.",
+  "feature": "odd/tasks/macacoview-gtk.md",
   "artboards": [
     {
       "file": "01-cabina-densa.html",
@@ -36,6 +37,13 @@
       "tradeoff": "Live prototype of 06: one simulation clock, demo remote (play/pause, 1×/5×/20×) and 10 scenarios; Motores carries every element of today's real blocks; the other pages arrive in a second pass",
       "width": 1440,
       "height": 1200
+    },
+    {
+      "file": "08-acciones-con-progreso.html",
+      "title": "Acciones con progreso",
+      "tradeoff": "Honest progress: a % only where a real number exists (llama.cpp compile), otherwise stage N/M + pulsing bar + elapsed vs typical/limit; inline bar in the starting card plus a header pill and sidebar badge visible from every page; Home switches for Abito/Gufo with switch confirmation; inline disabled reasons; Pi sessions by PSS. Needs the update and switch commands to stream stage events, which they do not today (only exit codes)",
+      "width": 1400,
+      "height": 1000
     }
   ]
 }
