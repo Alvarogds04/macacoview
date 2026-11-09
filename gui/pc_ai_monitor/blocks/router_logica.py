@@ -18,7 +18,9 @@ Reglas S11: un valor que no llega es «—», nunca un cero inventado.
 
 # pyright: reportAttributeAccessIssue=false
 
+import re
 import time
+from datetime import datetime
 
 from pc_ai_monitor.blocks.rendimiento_logica import kv_percentage, spec_ratio
 from pc_ai_monitor.formato import count, safe
@@ -143,6 +145,59 @@ def with_seen(entries: list[dict], now: float) -> list[dict]:
     return [{**entry, "_seen": now} for entry in entries]
 
 
+_TS_OFFSET = re.compile(r"([+-]\d{2})(\d{2})$")
+
+
+def parse_ts(value: object) -> float | None:
+    """Epoch del ``ts`` ISO 8601 de una decisión; ``None`` si no se puede parsear.
+
+    El router vivo estampa el offset sin dos puntos (``+0200``) —
+    ``fromisoformat`` lo acepta desde 3.11, con la forma clásica como
+    respaldo. Un ``ts`` sin offset se lee en hora local; nada parseable
+    devuelve ``None`` y la decisión cae al respaldo ``_seen`` (L21.1).
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            moment = datetime.fromisoformat(_TS_OFFSET.sub(r"\1:\2", text))
+        except ValueError:
+            return None
+    try:
+        return moment.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def decision_age(
+    entry: dict, now: float | None = None, now_epoch: float | None = None
+) -> float | None:
+    """Edad de la decisión en segundos; ``None`` si ningún reloj la fecha.
+
+    Regla L21.1: la edad sale del ``ts`` propio de la decisión (hora de
+    pared) — ``_seen`` (monotonic del sondeo que la vio por primera vez) es
+    solo el respaldo cuando el ``ts`` no se puede parsear. Así una decisión
+    vieja muestra su edad real y cae de las ventanas cortas, aunque el
+    colector la haya visto recién.
+    """
+    ts = parse_ts(entry.get("ts"))
+    if ts is not None:
+        wall = time.time() if now_epoch is None else now_epoch
+        return max(0.0, wall - ts)
+    seen = entry.get("_seen")
+    if seen is None:
+        return None
+    moment = time.monotonic() if now is None else now
+    return max(0.0, moment - seen)
+
+
 def filter_decisions(
     entries: list[dict],
     route: str = "",
@@ -150,21 +205,21 @@ def filter_decisions(
     window_min: int = DEFAULT_WINDOW_MIN,
     search: str = "",
     now: float | None = None,
+    now_epoch: float | None = None,
 ) -> list[dict]:
     """Filtros compartidos por la tabla y el gráfico (S8).
 
-    Ventana por ``_seen`` (la marca del colector); una decisión sin marca se
-    considera recién vista. Devuelve la más nueva primero.
+    Ventana por la edad real de cada decisión (``ts`` propio, respaldo
+    ``_seen``): una decisión vieja queda fuera aunque se haya visto hace un
+    momento. Devuelve la más nueva primero.
     """
-    if now is None:
-        now = time.monotonic()
     window_s = window_min * 60
     needle = search.strip().lower()
 
     out: list[dict] = []
     for entry in entries:
-        seen = entry.get("_seen")
-        if seen is not None and now - seen >= window_s:
+        age = decision_age(entry, now=now, now_epoch=now_epoch)
+        if age is not None and age >= window_s:
             continue
         if route and entry.get("chosen") != route:
             continue
@@ -182,32 +237,36 @@ def filter_decisions(
                 continue
         out.append(entry)
 
-    return sorted(out, key=lambda entry: entry.get("_seen") or 0.0, reverse=True)
+    return sorted(
+        out,
+        key=lambda entry: decision_age(entry, now=now, now_epoch=now_epoch) or 0.0,
+    )
 
 
 def duration_text(seconds: float | None) -> str:
-    """Edad compacta: «30s», «2m», «1h 01m». Nunca negativa."""
+    """Edad compacta: «30s», «2m», «1h 01m», «44d». Nunca negativa."""
     total = max(0, round(safe(seconds)))
     if total < 60:
         return f"{total}s"
     if total < 3600:
         return f"{total // 60}m"
-    return f"{total // 3600}h {total % 3600 // 60:02d}m"
+    if total < 86400:
+        return f"{total // 3600}h {total % 3600 // 60:02d}m"
+    return f"{total // 86400}d"
 
 
-def decision_rows(entries: list[dict], now: float | None = None) -> list[dict]:
+def decision_rows(
+    entries: list[dict], now: float | None = None, now_epoch: float | None = None
+) -> list[dict]:
     """Filas de la tabla «Decisiones»: hace, sesión, ruta, decisor, confianza, latencia."""
-    if now is None:
-        now = time.monotonic()
-
     rows: list[dict] = []
     for entry in entries:
-        seen = entry.get("_seen")
+        age = decision_age(entry, now=now, now_epoch=now_epoch)
         confidence = entry.get("confidence")
         latency = entry.get("total_latency_ms")
         rows.append(
             {
-                "hace": duration_text(now - seen) if seen is not None else UNKNOWN,
+                "hace": duration_text(age) if age is not None else UNKNOWN,
                 "sesion": str(entry.get("session") or UNKNOWN),
                 "ruta": str(entry.get("chosen") or UNKNOWN),
                 "decisor": decider_label(entry.get("decider")),
@@ -223,29 +282,60 @@ def decision_rows(entries: list[dict], now: float | None = None) -> list[dict]:
 
 
 def minute_buckets(
-    entries: list[dict], window_min: int = DEFAULT_WINDOW_MIN, now: float | None = None
+    entries: list[dict],
+    window_min: int = DEFAULT_WINDOW_MIN,
+    now: float | None = None,
+    now_epoch: float | None = None,
 ) -> list[dict]:
     """Cubetas por minuto para «Rutas en el tiempo» (la más vieja primero).
 
     Recibe las decisiones YA filtradas: la tabla y el gráfico comparten el
-    mismo filtro (S8). Categorías apiladas: local / cloud / cola.
+    mismo filtro (S8). Categorías apiladas: local / cloud / cola. La edad
+    que posiciona cada cubeta es la real (``ts`` propio, respaldo ``_seen``).
     """
-    if now is None:
-        now = time.monotonic()
-
     buckets = [
         {"min": m, "label": f"-{m}m", "local": 0, "cloud": 0, "cola": 0}
         for m in range(window_min - 1, -1, -1)
     ]
     for entry in entries:
-        seen = entry.get("_seen")
-        age = now - seen if seen is not None else 0.0
-        index = window_min - 1 - int(age // 60)
+        age = decision_age(entry, now=now, now_epoch=now_epoch)
+        if age is None:
+            index = window_min - 1
+        else:
+            index = window_min - 1 - int(age // 60)
         if index < 0:
             continue
         category = route_category(entry.get("chosen"))
         buckets[index][category] += 1
     return buckets
+
+
+def empty_window_note(
+    entries: list[dict],
+    window_min: int = DEFAULT_WINDOW_MIN,
+    now: float | None = None,
+    now_epoch: float | None = None,
+) -> str | None:
+    """Nota de ventana vacía con historial (L21.1), o ``None`` si no aplica.
+
+    «sin decisiones en los últimos N min · la última fue hace X»: aplica
+    cuando la ventana activa no contiene ninguna decisión pero hay historial
+    fechado. Sin decisiones, o con alguna dentro de la ventana, no hay nada
+    que aclarar.
+    """
+    ages = [
+        age
+        for age in (
+            decision_age(entry, now=now, now_epoch=now_epoch) for entry in entries
+        )
+        if age is not None
+    ]
+    if not ages or min(ages) < window_min * 60:
+        return None
+    return (
+        f"sin decisiones en los últimos {window_min} min · "
+        f"la última fue hace {duration_text(min(ages))}"
+    )
 
 
 # -- tarjetas de motor (exactamente dos: Abito y Gufo) ------------------------
@@ -278,7 +368,11 @@ def abito_card(data: dict) -> dict:
     """Abito desde el ``/status`` del router: ctx vivo, nunca exclusive_ctx (L9)."""
     healthy = bool(data.get("healthy"))
     ctx = data.get("ctx")
-    slots = f"{data.get('slot_busy', 0)}/{data.get('slots', 0)}" if data.get("slots") else None
+    slots = (
+        f"{data.get('slot_busy', 0)}/{data.get('slots', 0)}"
+        if data.get("slots")
+        else None
+    )
     ctx_total = int(ctx) if isinstance(ctx, (int, float)) and ctx else None
     return _card(
         "Abito",
@@ -377,7 +471,9 @@ def confirm_row(item: dict) -> dict:
         "id": str(item.get("id") or "?"),
         "countdown": countdown_text(item.get("expires_in_s")),
         "reason": str(item.get("reason") or ""),
-        "options": [str(option.get("route") or "?") for option in item.get("options") or []],
+        "options": [
+            str(option.get("route") or "?") for option in item.get("options") or []
+        ],
         "default": str(item.get("default") or ""),
     }
 
@@ -482,7 +578,9 @@ def sessions_rows(sessions: list[dict]) -> list[dict]:
     for session in sessions:
         rows.append(
             {
-                "id": str(session.get("short_id") or session.get("session_id") or UNKNOWN),
+                "id": str(
+                    session.get("short_id") or session.get("session_id") or UNKNOWN
+                ),
                 "workflow": str(session.get("workflow") or UNKNOWN),
                 "route": str(session.get("route") or UNKNOWN),
                 "ctx": session.get("estimated_context"),

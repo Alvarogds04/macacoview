@@ -9,10 +9,16 @@ Todo lo que decide valores vive acá sin GTK; los bloques
 from collections import defaultdict
 from collections.abc import Callable
 
-from pc_ai_monitor.formato import count, safe
+from pc_ai_monitor.formato import count, safe, truncate
+from pc_ai_monitor.formato import tokens as fmt_tokens
 from pc_ai_monitor.widgets.base import Slice
 
 TOP_SLICES = 8
+TOP_MODELS = 8
+# El paso entre columnas del gráfico es ~42 px al ancho de la tarjeta:
+# etiquetas de 7 caracteres entran sin pisarse (L21.5); el nombre completo
+# va en el tooltip de cada columna.
+MODEL_LABEL_LIMIT = 7
 RESTO_COLOR = "#5a6b7d"
 
 
@@ -53,6 +59,49 @@ def models_with_total(models: list[dict]) -> list[dict]:
     counted = [model for model in models if safe(model.get("total")) > 0]
     counted.sort(key=lambda model: safe(model.get("total")), reverse=True)
     return counted
+
+
+def model_columns(
+    models: list[dict],
+    colour_for: Callable[[str, int], str],
+    top: int = TOP_MODELS,
+) -> tuple[list[Slice], list[str]]:
+    """Columnas de «Por modelo» (L21.5): ``(slices, tooltips)`` alineados.
+
+    Con 53 modelos los nombres y los valores se pisaban en una franja
+    ilegible: quedan los top N por total y el resto se agrupa en «resto (M)»
+    con su suma. La etiqueta se recorta con elipsis; el nombre completo va
+    en el tooltip. La nota de los modelos sin conteo sigue aparte, en
+    ``uncounted_note``.
+    """
+    counted = models_with_total(models)
+    chosen = counted[:top]
+    excluded = counted[top:]
+
+    slices: list[Slice] = []
+    tooltips: list[str] = []
+    for index, model in enumerate(chosen):
+        full = str(model.get("name") or "?")
+        value = safe(model.get("total"))
+        slices.append(
+            Slice(
+                label=truncate(full, MODEL_LABEL_LIMIT),
+                value=value,
+                color=colour_for(full, index),
+            )
+        )
+        tooltips.append(f"{full} · {fmt_tokens(value)} tokens")
+
+    if excluded:
+        rest_total = sum(safe(model.get("total")) for model in excluded)
+        label = f"resto ({len(excluded)})"
+        slices.append(Slice(label=label, value=rest_total, color=RESTO_COLOR))
+        names = [str(model.get("name") or "?") for model in excluded]
+        listed = ", ".join(names[:10])
+        if len(names) > 10:
+            listed += f" … y {len(names) - 10} más"
+        tooltips.append(f"{label}: {listed} · {fmt_tokens(rest_total)} tokens")
+    return slices, tooltips
 
 
 def uncounted_note(models: list[dict], limit: int = 6) -> str:

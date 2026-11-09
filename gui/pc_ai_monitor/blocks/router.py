@@ -103,7 +103,9 @@ class DecisionesBlock(Block):
         self._route_dd = Gtk.DropDown(model=Gtk.StringList(strings=["todas las rutas"]))
         self._route_dd.set_tooltip_text("filtrar por ruta")
         self._decider_values: list[str] = [""]
-        self._decider_dd = Gtk.DropDown(model=Gtk.StringList(strings=["todos los decisores"]))
+        self._decider_dd = Gtk.DropDown(
+            model=Gtk.StringList(strings=["todos los decisores"])
+        )
         self._decider_dd.set_tooltip_text("filtrar por decisor")
         self._win_buttons: list[Gtk.ToggleButton] = []
         for minutes in logica.WINDOW_MINUTES:
@@ -130,7 +132,9 @@ class DecisionesBlock(Block):
         decisions_card.append(filters)
 
         grid = Gtk.Grid(column_spacing=10, row_spacing=2)
-        for column, header in enumerate(("HACE", "SESIÓN", "RUTA", "DECISOR", "CONFIANZA", "LATENCIA")):
+        for column, header in enumerate(
+            ("HACE", "SESIÓN", "RUTA", "DECISOR", "CONFIANZA", "LATENCIA")
+        ):
             label = Gtk.Label(label=header, xalign=0)
             label.add_css_class("muted")
             grid.attach(label, column, 0, 1, 1)
@@ -183,7 +187,9 @@ class DecisionesBlock(Block):
     def _on_window(self, button: Gtk.ToggleButton) -> None:
         if not button.get_active():
             return
-        for minutes, widget in zip(logica.WINDOW_MINUTES, self._win_buttons, strict=True):
+        for minutes, widget in zip(
+            logica.WINDOW_MINUTES, self._win_buttons, strict=True
+        ):
             if widget is button:
                 self._win = minutes
         self._refresh_views()
@@ -194,8 +200,12 @@ class DecisionesBlock(Block):
         routes = sorted({str(entry.get("chosen") or "") for entry in entries} - {""})
         deciders = sorted({str(entry.get("decider") or "") for entry in entries} - {""})
 
-        def _rebuild(values: list[str], options: list[str], dd: Gtk.DropDown, all_label: str) -> list[str]:
-            previous = values[dd.get_selected()] if dd.get_selected() < len(values) else ""
+        def _rebuild(
+            values: list[str], options: list[str], dd: Gtk.DropDown, all_label: str
+        ) -> list[str]:
+            previous = (
+                values[dd.get_selected()] if dd.get_selected() < len(values) else ""
+            )
             new_values = ["", *options]
             labels = [all_label]
             labels.extend(
@@ -206,25 +216,34 @@ class DecisionesBlock(Block):
             dd.set_selected(new_values.index(previous) if previous in new_values else 0)
             return new_values
 
-        self._route_values = _rebuild(self._route_values, routes, self._route_dd, "todas las rutas")
-        self._decider_values = _rebuild(self._decider_values, deciders, self._decider_dd, "todos los decisores")
+        self._route_values = _rebuild(
+            self._route_values, routes, self._route_dd, "todas las rutas"
+        )
+        self._decider_values = _rebuild(
+            self._decider_values, deciders, self._decider_dd, "todos los decisores"
+        )
 
     def _refresh_views(self) -> None:
         entries = self._entries()
+        now = time.monotonic()
+        now_epoch = time.time()
         filtered = logica.filter_decisions(
             entries,
             route=self._route_value(),
             decider=self._decider_value(),
             window_min=self._win,
             search=self._search.get_text(),
+            now=now,
+            now_epoch=now_epoch,
         )
-        now = time.monotonic()
 
         # Tabla: la más nueva primero, a lo sumo MAX_TABLE_ROWS filas.
         for child in tuple(self._data_rows):
             self._grid.remove(child)
         self._data_rows = []
-        rows = logica.decision_rows(filtered, now=now)[:MAX_TABLE_ROWS]
+        rows = logica.decision_rows(filtered, now=now, now_epoch=now_epoch)[
+            :MAX_TABLE_ROWS
+        ]
         palette = theme.active()
         route_colors = {
             "local": palette.accent,
@@ -247,7 +266,9 @@ class DecisionesBlock(Block):
                 label = Gtk.Label(xalign=0)
                 if column == 2:
                     color = route_colors[category]
-                    label.set_markup(f'<span foreground="{color}">● {row["ruta"]}</span>')
+                    label.set_markup(
+                        f'<span foreground="{color}">● {row["ruta"]}</span>'
+                    )
                     label.set_tooltip_text(f"{category}: {row['ruta']}")
                 else:
                     label.set_text(text)
@@ -260,12 +281,33 @@ class DecisionesBlock(Block):
             self._data_rows.extend(row_widgets)
 
         empty = not rows
+        if empty:
+            # Ventana vacía con historial: la nota nombra la última decisión
+            # real (L21.1). Con otros filtros activos el mensaje es el de
+            # siempre, porque la causa puede ser el filtro y no la edad.
+            other_filters = bool(
+                self._route_value()
+                or self._decider_value()
+                or self._search.get_text().strip()
+            )
+            note = (
+                None
+                if other_filters
+                else logica.empty_window_note(
+                    entries, self._win, now=now, now_epoch=now_epoch
+                )
+            )
+            self._table_empty.set_text(note or logica.EMPTY_DECISIONS_TEXT)
         self._table_empty.set_visible(empty)
 
         # Gráfico: mismas decisiones filtradas, mismas ventanas.
-        buckets = logica.minute_buckets(filtered, window_min=self._win, now=now)
+        buckets = logica.minute_buckets(
+            filtered, window_min=self._win, now=now, now_epoch=now_epoch
+        )
         self._chart.set_data(buckets)
-        total = sum(bucket["local"] + bucket["cloud"] + bucket["cola"] for bucket in buckets)
+        total = sum(
+            bucket["local"] + bucket["cloud"] + bucket["cola"] for bucket in buckets
+        )
         self._chart_empty.set_visible(total == 0)
 
     def visible_rows(self) -> int:
@@ -383,7 +425,10 @@ class ConfirmRowBlock(Block):
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         router = snapshot.router()
-        self._flash_line.set_text(logica.flash_lifecycle_line(router.get("flash_lifecycle") or {}) or logica.UNKNOWN)
+        self._flash_line.set_text(
+            logica.flash_lifecycle_line(router.get("flash_lifecycle") or {})
+            or logica.UNKNOWN
+        )
 
         now = time.monotonic()
         self._pending = [

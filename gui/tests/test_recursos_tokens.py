@@ -12,7 +12,9 @@ Nunca se toca la red ni el administrador: ``_aislamiento.isolate()`` al
 importar, y los snapshots se arman acá con valores de INVENTARIO-APP.md.
 """
 
+import json
 import unittest
+from pathlib import Path
 
 try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
     import _sandbox
@@ -28,6 +30,8 @@ _aislamiento.isolate()
 
 from pc_ai_monitor.datos import GROUP_KEYS, Sample, Snapshot
 from pc_ai_monitor.formato import gib_label
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def make_snapshot(hidden=(), with_history=True):
@@ -344,6 +348,56 @@ class TokensVistaTests(unittest.TestCase):
         )
 
 
+class ModelColumnsTests(unittest.TestCase):
+    """L21.5: «Por modelo» top N + «resto (M)", etiquetas legibles."""
+
+    @classmethod
+    def setUpClass(cls):
+        fixture = FIXTURES / "live_2026-11-05" / "tokens_pi.json"
+        cls.MODELS = json.loads(fixture.read_text())["pi"]["models"]
+
+    def test_top_n_plus_resto_from_the_live_fixture(self):
+        from pc_ai_monitor.blocks.tokens_vista import (
+            TOP_MODELS,
+            model_columns,
+            models_with_total,
+        )
+
+        slices, tooltips = model_columns(self.MODELS, colour_for=lambda _n, _i: "#abc")
+
+        counted = len(models_with_total(self.MODELS))
+        self.assertLessEqual(len(slices), TOP_MODELS + 1)
+        self.assertEqual(len(tooltips), len(slices))
+        # El «resto» agrupa los modelos CON conteo fuera del top N: los sin
+        # conteo nunca fueron columnas (van en la nota).
+        self.assertEqual(slices[-1].label, f"resto ({counted - TOP_MODELS})")
+
+    def test_resto_total_is_the_sum_of_the_excluded_models(self):
+        from pc_ai_monitor.blocks.tokens_vista import TOP_MODELS, model_columns
+        from pc_ai_monitor.formato import safe
+
+        slices, _tooltips = model_columns(self.MODELS, colour_for=lambda _n, _i: "#abc")
+
+        ordered = sorted(self.MODELS, key=lambda m: safe(m.get("total")), reverse=True)
+        excluded = ordered[TOP_MODELS:]
+        resto = slices[-1]
+        self.assertEqual(resto.value, sum(safe(m.get("total")) for m in excluded))
+
+    def test_largest_model_is_first_with_its_full_name_in_the_tooltip(self):
+        from pc_ai_monitor.blocks.tokens_vista import model_columns
+        from pc_ai_monitor.formato import safe
+
+        slices, tooltips = model_columns(self.MODELS, colour_for=lambda _n, _i: "#abc")
+
+        ordered = sorted(self.MODELS, key=lambda m: safe(m.get("total")), reverse=True)
+        largest = str(ordered[0]["name"])
+        self.assertEqual(slices[0].value, safe(ordered[0]["total"]))
+        self.assertTrue(tooltips[0].startswith(largest))
+        # La etiqueta se recorta con elipsis; el nombre completo va al tooltip.
+        self.assertNotEqual(slices[0].label, largest)
+        self.assertIn("…", slices[0].label)
+
+
 # ---------------------------------------------------------------------------
 # Comportamiento conservado, a través de la interfaz pública de los widgets
 # ---------------------------------------------------------------------------
@@ -553,6 +607,51 @@ class ProviderDonutTests(WidgetCase):
         self.assertEqual(sub.get_first_child().get_next_sibling().get_text(), "gufo")
 
 
+class ModelTokensBlockTests(WidgetCase):
+    """«POR MODELO»: 53 modelos no vuelven a pisar nombres y valores (L21.5)."""
+
+    def _block(self):
+        from pc_ai_monitor.blocks.usage import ModelTokensBlock
+        from pc_ai_monitor.datos import Snapshot
+
+        fixture = FIXTURES / "live_2026-11-05" / "tokens_pi.json"
+        pi = json.loads(fixture.read_text())["pi"]
+        block = ModelTokensBlock()
+        block.update_snapshot(Snapshot(tokens={"pi": pi}))
+        return block
+
+    def test_columns_capped_at_top_n_plus_resto(self):
+        from pc_ai_monitor.blocks.tokens_vista import TOP_MODELS
+
+        block = self._block()
+
+        self.assertLessEqual(len(block._columns._slices), TOP_MODELS + 1)
+        self.assertTrue(block._columns._slices[-1].label.startswith("resto ("))
+
+    def test_uncounted_note_is_kept(self):
+        block = self._block()
+
+        self.assertIn("Sin conteo de tokens", block._note.get_text())
+
+    def test_motion_over_a_column_shows_its_full_name_tooltip(self):
+        """L21.5: el nombre completo vive en el tooltip de cada columna."""
+        import cairo
+
+        block = self._block()
+        columns = block._columns
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 560, 170)
+        columns._draw(columns, cairo.Context(surface), 560, 170)
+
+        self.assertEqual(len(columns._rects), len(columns._slices))
+        _item, rx, ry, rw, rh = columns._rects[0]
+        block._on_motion(None, rx + rw / 2, ry + rh / 2)
+        self.assertEqual(columns.get_tooltip_text(), block._tooltips[0])
+
+        # Fuera de toda columna: sin tooltip (GTK devuelve None al vaciarlo).
+        block._on_motion(None, -100.0, -100.0)
+        self.assertFalse(columns.get_tooltip_text())
+
+
 class CodexBlockTests(WidgetCase):
     """«SUSCRIPCIÓN CODEX»: ventanas con color por presión y nota de plan."""
 
@@ -679,11 +778,15 @@ class TreemapHeaderTests(unittest.TestCase):
         treemap = recursos_vista.GroupTreemap()
         treemap.set_data([Slice("Pi", 6.8, "#8FB8DD")], "6.80G", "RSS total")
         calls = []
-        with mock.patch.object(recursos_vista, "draw_text", lambda *a, **k: calls.append(a)):
+        with mock.patch.object(
+            recursos_vista, "draw_text", lambda *a, **k: calls.append(a)
+        ):
             import cairo
 
             surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 400, 190)
             treemap._draw(treemap, cairo.Context(surface), 400, 190)
         caption = next(c for c in calls if "RSS total" in c[2])
         top_of_text, font = caption[4], caption[6]
-        self.assertLessEqual(top_of_text + font * 1.6, recursos_vista.GroupTreemap.HEADER)
+        self.assertLessEqual(
+            top_of_text + font * 1.6, recursos_vista.GroupTreemap.HEADER
+        )

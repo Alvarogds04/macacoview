@@ -13,7 +13,10 @@ los fixtures medidos ``router_status_real_2026-11-04`` / ``router_metrics_real_2
 """
 
 import json
+import re
+import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -34,6 +37,10 @@ STATUS = json.loads((FIXTURES / "router_status_real_2026-11-04.json").read_text(
 METRICS = json.loads((FIXTURES / "router_metrics_real_2026-11-04.json").read_text())
 
 NOW = 10_000.0
+# «Ahora» de pared fijo para las muestras: age = BASE_EPOCH - ts, exacta.
+# Entero: el ``ts`` ISO no guarda sub-segundos y una base fracciona­ria
+# desplazaría cada edad hasta casi un segundo.
+BASE_EPOCH = int(time.time())
 
 # Texto Prometheus mínimo del motor Gufo: en curso 1, ventana KV al 31.4 %,
 # especulación 300/400 borradores → MTP 0.750.
@@ -48,9 +55,17 @@ GUFO_SLOTS_TEXT = json.dumps([{"is_processing": False, "n_ctx": 131072}])
 
 
 def decision(age_s, route, decider, session, confidence=None, latency=None):
-    """Una decisión con ``_seen`` (lo que el colector le agrega) a ``age_s``."""
+    """Una decisión con edad ``age_s``: el ``ts`` propio (pared) y ``_seen``
+    (lo que el colector le agrega, monotonic) coinciden en la edad.
+
+    El ``ts`` se estampa contra ``BASE_EPOCH`` (fijo al importar): las edades
+    que afirman los tests son exactas, no dependen del reloj del momento.
+    """
+    ts = datetime.fromtimestamp(BASE_EPOCH - age_s, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S+0000"
+    )
     return {
-        "ts": "2026-11-04T10:00:00+0100",
+        "ts": ts,
         "session": session,
         "chosen": route,
         "decider": decider,
@@ -60,12 +75,15 @@ def decision(age_s, route, decider, session, confidence=None, latency=None):
     }
 
 
-SAMPLE_DECISIONS = [
-    decision(30, "abito", "jev", "rtr-aaa", 0.96, 778),
-    decision(120, "nan-qwen-flash", "affinity", "pi-bbb", None, 9.8),
-    decision(600, "queue", "human_confirmation", "cnf-ccc"),
-    decision(840, "abito", "deterministic_privacy", "rtr-ddd", 0.55, 640),
-]
+def sample_decisions():
+    """Decisiones de muestra recién estampadas: el ``ts`` es hora de pared,
+    así que se generan al correr el test, no al importar el módulo."""
+    return [
+        decision(30, "abito", "jev", "rtr-aaa", 0.96, 778),
+        decision(120, "nan-qwen-flash", "affinity", "pi-bbb", None, 9.8),
+        decision(600, "queue", "human_confirmation", "cnf-ccc"),
+        decision(840, "abito", "deterministic_privacy", "rtr-ddd", 0.55, 640),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +95,10 @@ class KpiTests(unittest.TestCase):
     def test_kpi_values_from_the_real_metrics_fixture(self):
         from pc_ai_monitor.blocks.router_logica import kpi_values
 
-        kpis = {k["label"]: k["value"] for k in kpi_values(STATUS["router"], METRICS["telemetry"])}
+        kpis = {
+            k["label"]: k["value"]
+            for k in kpi_values(STATUS["router"], METRICS["telemetry"])
+        }
 
         self.assertEqual(kpis["DECISIONES"], "118")
         self.assertEqual(kpis["% LOCAL"], "53.4 %")
@@ -105,21 +126,27 @@ class FilterTests(unittest.TestCase):
     def test_filter_by_route(self):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
-        out = filter_decisions(SAMPLE_DECISIONS, route="abito", now=NOW)
+        out = filter_decisions(
+            sample_decisions(), route="abito", now=NOW, now_epoch=BASE_EPOCH
+        )
 
         self.assertEqual([d["session"] for d in out], ["rtr-aaa", "rtr-ddd"])
 
     def test_filter_by_decider(self):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
-        out = filter_decisions(SAMPLE_DECISIONS, decider="affinity", now=NOW)
+        out = filter_decisions(
+            sample_decisions(), decider="affinity", now=NOW, now_epoch=BASE_EPOCH
+        )
 
         self.assertEqual([d["session"] for d in out], ["pi-bbb"])
 
     def test_window_drops_old_decisions(self):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
-        out = filter_decisions(SAMPLE_DECISIONS, window_min=2, now=NOW)
+        out = filter_decisions(
+            sample_decisions(), window_min=2, now=NOW, now_epoch=BASE_EPOCH
+        )
 
         # Ventana de 2 minutos: la de 30 s entra, la de 120 s cae (límite
         # excluyente >120 s) y las de 600/840 s también.
@@ -129,11 +156,21 @@ class FilterTests(unittest.TestCase):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
         self.assertEqual(
-            [d["session"] for d in filter_decisions(SAMPLE_DECISIONS, search="cnf", now=NOW)],
+            [
+                d["session"]
+                for d in filter_decisions(
+                    sample_decisions(), search="cnf", now=NOW, now_epoch=BASE_EPOCH
+                )
+            ],
             ["cnf-ccc"],
         )
         self.assertEqual(
-            [d["session"] for d in filter_decisions(SAMPLE_DECISIONS, search="afinidad", now=NOW)],
+            [
+                d["session"]
+                for d in filter_decisions(
+                    sample_decisions(), search="afinidad", now=NOW, now_epoch=BASE_EPOCH
+                )
+            ],
             ["pi-bbb"],
         )
 
@@ -141,13 +178,20 @@ class FilterTests(unittest.TestCase):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
         self.assertEqual(
-            filter_decisions(SAMPLE_DECISIONS, route="abito", decider="affinity", now=NOW), []
+            filter_decisions(
+                sample_decisions(),
+                route="abito",
+                decider="affinity",
+                now=NOW,
+                now_epoch=BASE_EPOCH,
+            ),
+            [],
         )
 
     def test_newest_first(self):
         from pc_ai_monitor.blocks.router_logica import filter_decisions
 
-        out = filter_decisions(SAMPLE_DECISIONS, now=NOW)
+        out = filter_decisions(sample_decisions(), now=NOW, now_epoch=BASE_EPOCH)
 
         self.assertEqual(out[0]["session"], "rtr-aaa")
 
@@ -161,7 +205,9 @@ class BucketTests(unittest.TestCase):
     def test_buckets_stack_local_cloud_and_cola(self):
         from pc_ai_monitor.blocks.router_logica import minute_buckets
 
-        buckets = minute_buckets(SAMPLE_DECISIONS, window_min=15, now=NOW)
+        buckets = minute_buckets(
+            sample_decisions(), window_min=15, now=NOW, now_epoch=BASE_EPOCH
+        )
 
         self.assertEqual(len(buckets), 15)
         self.assertEqual(buckets[0]["label"], "-14m")  # la más vieja primero
@@ -174,8 +220,10 @@ class BucketTests(unittest.TestCase):
     def test_buckets_respect_the_same_filters(self):
         from pc_ai_monitor.blocks.router_logica import filter_decisions, minute_buckets
 
-        filtered = filter_decisions(SAMPLE_DECISIONS, route="abito", now=NOW)
-        buckets = minute_buckets(filtered, window_min=15, now=NOW)
+        filtered = filter_decisions(
+            sample_decisions(), route="abito", now=NOW, now_epoch=BASE_EPOCH
+        )
+        buckets = minute_buckets(filtered, window_min=15, now=NOW, now_epoch=BASE_EPOCH)
 
         self.assertEqual(sum(b["local"] for b in buckets), 2)
         self.assertEqual(sum(b["cloud"] for b in buckets), 0)
@@ -184,9 +232,138 @@ class BucketTests(unittest.TestCase):
         """Lo que acaba de llegar del colector sin marca entra como recién visto."""
         from pc_ai_monitor.blocks.router_logica import minute_buckets
 
-        buckets = minute_buckets([{"chosen": "abito", "session": "rtr-x"}], window_min=5, now=NOW)
+        buckets = minute_buckets(
+            [{"chosen": "abito", "session": "rtr-x"}],
+            window_min=5,
+            now=NOW,
+            now_epoch=BASE_EPOCH,
+        )
 
         self.assertEqual(buckets[-1]["local"], 1)
+
+
+# ---------------------------------------------------------------------------
+# router_logica: la edad sale del ``ts`` propio de cada decisión (L21.1)
+# ---------------------------------------------------------------------------
+
+# Salida viva del router guardada en el chequeo en vivo del 2026-11-05:
+# decisiones fechadas el 2026-09-21/22 (hace ~44 días) que mostraban «hace 11s».
+LIVE_METRICS = json.loads(
+    (FIXTURES / "live_2026-11-05" / "router_metrics.json").read_text()
+)
+LIVE_RECENT = LIVE_METRICS["recent"]
+# «Ahora» fijado a la hora del chequeo en vivo, en epoch y en un monotonic
+# arbitrario del mismo testeable.
+LIVE_NOW = datetime.fromisoformat("2026-11-05T21:57:00+01:00").timestamp()
+LIVE_MONO = 50_000.0
+
+
+def iso_utc(epoch: float) -> str:
+    """El formato real del router: ISO 8601 con offset sin dos puntos."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S+0000"
+    )
+
+
+class TimestampAgeTests(unittest.TestCase):
+    """L21.1: edad, ventana y cubetas desde el ``ts``, ``_seen`` de respaldo."""
+
+    def test_live_decisions_age_by_their_own_ts(self):
+        from pc_ai_monitor.blocks.router_logica import decision_age
+
+        ages = [decision_age(e, now=LIVE_MONO, now_epoch=LIVE_NOW) for e in LIVE_RECENT]
+
+        self.assertEqual(len(ages), len(LIVE_RECENT))
+        self.assertTrue(all(age is not None and age > 40 * 86400 for age in ages))
+
+    def test_live_rows_show_days_not_seconds(self):
+        from pc_ai_monitor.blocks.router_logica import decision_rows, with_seen
+
+        rows = decision_rows(
+            with_seen(LIVE_RECENT, LIVE_MONO), now=LIVE_MONO, now_epoch=LIVE_NOW
+        )
+
+        self.assertEqual(len(rows), 10)
+        for row in rows:
+            match = re.fullmatch(r"(\d+)d", row["hace"])
+            assert match is not None, row["hace"]
+            self.assertGreater(int(match.group(1)), 40)
+
+    def test_live_decisions_fall_out_of_the_15min_window(self):
+        from pc_ai_monitor.blocks.router_logica import filter_decisions, with_seen
+
+        out = filter_decisions(
+            with_seen(LIVE_RECENT, LIVE_MONO),
+            window_min=15,
+            now=LIVE_MONO,
+            now_epoch=LIVE_NOW,
+        )
+
+        self.assertEqual(out, [])
+
+    def test_recent_ts_sits_in_the_5min_window_and_its_minute_bucket(self):
+        from pc_ai_monitor.blocks.router_logica import filter_decisions, minute_buckets
+
+        entry = {
+            **LIVE_RECENT[0],
+            "ts": iso_utc(LIVE_NOW - 30),
+            "_seen": LIVE_MONO - 10_000,
+        }
+
+        out = filter_decisions([entry], window_min=5, now=LIVE_MONO, now_epoch=LIVE_NOW)
+        self.assertEqual([e["session"] for e in out], [entry["session"]])
+
+        buckets = minute_buckets(
+            [entry], window_min=5, now=LIVE_MONO, now_epoch=LIVE_NOW
+        )
+        self.assertEqual(buckets[-1]["local"], 1)
+        self.assertEqual(sum(b["local"] + b["cloud"] + b["cola"] for b in buckets), 1)
+
+    def test_unparsable_ts_falls_back_to_seen(self):
+        from pc_ai_monitor.blocks.router_logica import decision_age, filter_decisions
+
+        entry = {**LIVE_RECENT[0], "ts": "no-es-una-fecha", "_seen": LIVE_MONO - 45}
+        self.assertEqual(decision_age(entry, now=LIVE_MONO, now_epoch=LIVE_NOW), 45)
+
+        # 45 s entra en la ventana de 1 min; 90 s no.
+        self.assertEqual(
+            len(
+                filter_decisions(
+                    [entry], window_min=1, now=LIVE_MONO, now_epoch=LIVE_NOW
+                )
+            ),
+            1,
+        )
+        old = {**entry, "_seen": LIVE_MONO - 90}
+        self.assertEqual(
+            filter_decisions([old], window_min=1, now=LIVE_MONO, now_epoch=LIVE_NOW), []
+        )
+
+    def test_empty_window_note_names_the_last_decision_age(self):
+        from pc_ai_monitor.blocks.router_logica import empty_window_note, with_seen
+
+        note = empty_window_note(
+            with_seen(LIVE_RECENT, LIVE_MONO), 15, now=LIVE_MONO, now_epoch=LIVE_NOW
+        )
+        self.assertEqual(
+            note, "sin decisiones en los últimos 15 min · la última fue hace 44d"
+        )
+
+        # Con una decisión reciente en la ventana, la nota no aplica; tampoco
+        # sin historial.
+        recent = {**LIVE_RECENT[0], "ts": iso_utc(LIVE_NOW - 30)}
+        self.assertIsNone(
+            empty_window_note([recent], 15, now=LIVE_MONO, now_epoch=LIVE_NOW)
+        )
+        self.assertIsNone(empty_window_note([], 15, now=LIVE_MONO, now_epoch=LIVE_NOW))
+
+    def test_duration_text_has_a_days_tier(self):
+        from pc_ai_monitor.blocks.router_logica import duration_text
+
+        self.assertEqual(duration_text(30), "30s")
+        self.assertEqual(duration_text(125), "2m")
+        self.assertEqual(duration_text(3700), "1h 01m")
+        self.assertEqual(duration_text(44 * 86400 + 3600), "44d")
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +559,7 @@ class DecisionRowsTests(unittest.TestCase):
     def test_rows_from_stamped_decisions(self):
         from pc_ai_monitor.blocks.router_logica import decision_rows
 
-        rows = decision_rows(SAMPLE_DECISIONS, now=NOW)
+        rows = decision_rows(sample_decisions(), now=NOW, now_epoch=BASE_EPOCH)
 
         self.assertEqual(rows[0]["sesion"], "rtr-aaa")
         self.assertEqual(rows[0]["hace"], "30s")
@@ -394,7 +571,9 @@ class DecisionRowsTests(unittest.TestCase):
     def test_rows_from_the_real_fixture_without_seen(self):
         from pc_ai_monitor.blocks.router_logica import decision_rows, with_seen
 
-        rows = decision_rows(with_seen(METRICS["recent"], NOW), now=NOW)
+        rows = decision_rows(
+            with_seen(METRICS["recent"], NOW), now=NOW, now_epoch=BASE_EPOCH
+        )
 
         self.assertEqual(len(rows), 10)
         self.assertEqual(rows[0]["sesion"], "cnf-fdd61157")
@@ -431,13 +610,26 @@ class WidgetRouterTests(unittest.TestCase):
     def _snapshot(self):
         import time
 
-        from pc_ai_monitor.blocks.router_logica import with_seen
         from pc_ai_monitor.datos import Snapshot
 
+        # Edad simulada por el ``ts`` propio (la regla L21.1): el ``_seen``
+        # reciente ya no hace a una decisión vieja parecer fresca.
+        now_wall = time.time()
+        now_mono = time.monotonic()
+        decisions = []
+        for index, entry in enumerate(METRICS["recent"]):
+            ts = datetime.fromtimestamp(now_wall - 40 * index - 20, tz=timezone.utc)
+            decisions.append(
+                {
+                    **entry,
+                    "ts": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"),
+                    "_seen": now_mono,
+                }
+            )
         return Snapshot(
             router_status=STATUS,
             router_metrics=METRICS,
-            decisions=tuple(with_seen(METRICS["recent"], time.monotonic())),
+            decisions=tuple(decisions),
         )
 
     def _page(self):
@@ -468,13 +660,75 @@ class WidgetRouterTests(unittest.TestCase):
 
         # Ventana de 5 minutos: las decisiones de más de 5 min desaparecen.
         decisiones._win_buttons[0].set_active(True)
+        now_wall = time.time()
         stamped = [
-            {**entry, "_seen": time.monotonic() - 60 * i}
+            {
+                **entry,
+                "ts": datetime.fromtimestamp(
+                    now_wall - 60 * i, tz=timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%S+0000"),
+                "_seen": time.monotonic(),
+            }
             for i, entry in enumerate(METRICS["recent"])
         ]
-        page.update_snapshot(Snapshot(router_status=STATUS, router_metrics=METRICS, decisions=tuple(stamped)))
+        page.update_snapshot(
+            Snapshot(
+                router_status=STATUS, router_metrics=METRICS, decisions=tuple(stamped)
+            )
+        )
         self.assertLess(decisiones.visible_rows(), 10)
         self.assertGreater(decisiones.visible_rows(), 0)
+
+    def test_empty_window_note_names_the_last_decision_in_the_table(self):
+        """L21.1: ventana vacía con historial → la nota nombra la última edad."""
+        import time
+
+        from pc_ai_monitor.blocks.router_logica import with_seen
+        from pc_ai_monitor.datos import Snapshot
+
+        page = self._page()
+        decisiones = page._blocks[1]
+        now_wall = time.time()
+
+        def stamped(age_s):
+            return [
+                {
+                    **entry,
+                    "ts": datetime.fromtimestamp(
+                        now_wall - age_s, tz=timezone.utc
+                    ).strftime("%Y-%m-%dT%H:%M:%S+0000"),
+                }
+                for entry in METRICS["recent"]
+            ]
+
+        # Todas las decisiones con ts de hace 44 días: la tabla queda vacía y
+        # la nota nombra la edad de la última, no el texto genérico.
+        with mock_http_none(page_module()):
+            page.update_snapshot(
+                Snapshot(
+                    router_status=STATUS,
+                    router_metrics=METRICS,
+                    decisions=tuple(with_seen(stamped(44 * 86400), time.monotonic())),
+                )
+            )
+
+        self.assertTrue(decisiones._table_empty.get_visible())
+        self.assertEqual(
+            decisiones._table_empty.get_text(),
+            "sin decisiones en los últimos 15 min · la última fue hace 44d",
+        )
+
+        # Con una decisión reciente en la ventana no hay nota que dar.
+        with mock_http_none(page_module()):
+            page.update_snapshot(
+                Snapshot(
+                    router_status=STATUS,
+                    router_metrics=METRICS,
+                    decisions=tuple(with_seen(stamped(30)[:1], time.monotonic())),
+                )
+            )
+
+        self.assertFalse(decisiones._table_empty.get_visible())
 
     def test_kpi_strip_has_six_live_values(self):
         page = self._page()
@@ -535,7 +789,9 @@ class WidgetRouterTests(unittest.TestCase):
         }
 
         with mock.patch.object(
-            router_blocks, "_http_text", side_effect=lambda path, timeout=3.0: texts[path]
+            router_blocks,
+            "_http_text",
+            side_effect=lambda path, timeout=3.0: texts[path],
         ):
             card = engines._gufo_worker()
 
@@ -581,6 +837,8 @@ class WidgetRouterTests(unittest.TestCase):
         joined = "\n".join(texts)
         self.assertIn("cnf-abc123", joined)
         self.assertIn("caduca en", joined)
+
+
 # ---------------------------------------------------------------------------
 # Doble de las lecturas HTTP al motor: sin red en los tests de widgets
 # ---------------------------------------------------------------------------

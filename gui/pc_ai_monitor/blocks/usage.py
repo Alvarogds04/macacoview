@@ -15,7 +15,7 @@ from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block
 from pc_ai_monitor.blocks.tokens_vista import (
     codex_note,
-    models_with_total,
+    model_columns,
     provider_slices,
     provider_totals,
     uncounted_note,
@@ -298,7 +298,12 @@ class ProviderDonutBlock(Block):
 
 
 class ModelTokensBlock(Block):
-    """Token totals per model, columns scaled to the largest one."""
+    """Token totals per model: top N by total, the rest grouped (L21.5).
+
+    Con 53 modelos el gráfico era una franja ilegible: quedan los top N y
+    «resto (M)». Los nombres se recortan con elipsis y el nombre completo
+    vive en el tooltip de cada columna.
+    """
 
     title = "POR MODELO"
 
@@ -306,23 +311,35 @@ class ModelTokensBlock(Block):
         super().__init__()
         self._columns = Columnas(height=170)
         self.body.append(self._columns)
+        self._tooltips: list[str] = []
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_motion)
+        self._columns.add_controller(motion)
         self._note = chips.note("")
         self.body.append(self._note)
 
+    def _on_motion(self, _controller, x: float, y: float) -> None:
+        """Tooltip por columna: el nombre completo vive acá, no en la barra."""
+        text = ""
+        for index, (item, rx, ry, rw, rh) in enumerate(
+            getattr(self._columns, "_rects", [])
+        ):
+            del item
+            if rx - 4 <= x <= rx + rw + 4 and ry - 14 <= y <= ry + rh + 16:
+                text = self._tooltips[index] if index < len(self._tooltips) else ""
+                break
+        self._columns.set_tooltip_text(text)
+
     def update_snapshot(self, snapshot: Snapshot) -> None:
         pi = snapshot.tokens_section("pi")
-        models = models_with_total(pi.get("models") or [])
+        models = pi.get("models") or []
 
-        slices = [
-            Slice(
-                label=str(model.get("name") or "?"),
-                value=safe(model.get("total")),
-                color=theme.active().chart_series(index),
-            )
-            for index, model in enumerate(models)
-        ]
+        slices, self._tooltips = model_columns(
+            models,
+            colour_for=lambda _name, index: theme.active().chart_series(index),
+        )
         self._columns.set_data(slices)
-        self._note.set_text(uncounted_note(pi.get("models") or []))
+        self._note.set_text(uncounted_note(models))
 
     def redraw(self) -> None:
         self._columns.queue_draw()
