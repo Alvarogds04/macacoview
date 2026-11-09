@@ -51,9 +51,11 @@ THEMES: dict[str, Palette] = {
     "gentle": Palette(
         key="gentle",
         label="Gentle",
-        background="#06080f",
-        element="#0b0d15",
-        subtle="#0d0f14",
+        # MacacoView's own graphite surfaces (user choice, L25): a dark grey
+        # with a blue cast instead of gentle-pi's near-black #06080f.
+        background="#17191e",
+        element="#1e2128",
+        subtle="#24272f",
         border="#313342",
         text="#F3F6F9",
         muted="#5C6170",
@@ -215,6 +217,12 @@ FIELD_SOURCES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Fields MacacoView owns per theme: the gentle-pi refresh never overwrites them.
+APP_OWNED_FIELDS: dict[str, frozenset[str]] = {
+    "gentle": frozenset({"background", "element", "subtle"}),
+}
+
+
 def load_external(directory: Path = GENTLE_PI_THEMES) -> int:
     """Refresh the embedded palettes from the gentle-pi theme files.
 
@@ -236,7 +244,8 @@ def load_external(directory: Path = GENTLE_PI_THEMES) -> int:
         updates = {
             field: value
             for field, candidates in FIELD_SOURCES.items()
-            if (value := _pick(variables, *candidates)) is not None
+            if field not in APP_OWNED_FIELDS.get(key, frozenset())
+            and (value := _pick(variables, *candidates)) is not None
         }
         if not updates:
             continue
