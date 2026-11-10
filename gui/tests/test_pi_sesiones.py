@@ -44,6 +44,10 @@ FIXTURE = (
 )
 PROMPT_MARKER = "SECRET-PROMPT-TEXT"
 ENV_MARKER = "SECRET_TOKEN_VALUE"
+# The capture was taken as uid 1000; the fake world gives those rows the uid
+# running the tests, so "the current user" means the same thing on any runner.
+CAPTURE_UID = 1000
+OTHER_UID = 4242 if os.getuid() != 4242 else 4243
 
 
 def _load(name):
@@ -113,8 +117,9 @@ class World:
         env = [f"{key}={self.real(value)}" for key, value in (row.get("env") or {}).items()]
         env.append(f"OTHER_SECRET={ENV_MARKER}")
         (directory / "environ").write_bytes("\0".join(env).encode() + b"\0")
+        uid = os.getuid() if row["uid"] == CAPTURE_UID else row["uid"]
         self.processes.append({
-            "pid": row["pid"], "ppid": row["ppid"], "uid": row["uid"],
+            "pid": row["pid"], "ppid": row["ppid"], "uid": uid,
             "rss_kb": row["rss_kb"], "cpu": row["cpu"], "comm": row["comm"],
             "args": row["comm"],
         })
@@ -149,11 +154,11 @@ class World:
                 return self._session_file(entry, infos)
         raise KeyError(file_suffix)
 
-    def collect(self, module=None):
+    def collect(self, module=None, **kwargs):
         module = module or _load("macacoview_pi_sessions")
         return module.collect_pi_sessions(
             self.processes, proc_root=self.proc, agent_dir=self.agent,
-            btime=self.data["btime"], clk_tck=self.data["clk_tck"],
+            btime=self.data["btime"], clk_tck=self.data["clk_tck"], **kwargs,
         )
 
 
@@ -355,6 +360,289 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(sessions[277162]["name"], "koda · pid 277162")
 
 
+@contextlib.contextmanager
+def recorded_reads():
+    """Every path the collector opens or reads (a spy, not a block).
+
+    Opened paths are resolved, so a symlink counts as its target; readlink
+    paths stay as given (resolving a link does not open its target). Resolved
+    once the patches are gone: realpath itself calls os.readlink.
+    """
+    raw: list[str] = []
+    links: list[str] = []
+    seen: list[str] = []
+
+    def note(path, into=raw):
+        if isinstance(path, (str, bytes, os.PathLike)):
+            into.append(os.fsdecode(path))
+
+    builtin_open, os_open = open, os.open
+    read_text, read_bytes, readlink = Path.read_text, Path.read_bytes, os.readlink
+
+    def spy_open(path, *args, **kwargs):
+        note(path)
+        return builtin_open(path, *args, **kwargs)
+
+    def spy_os_open(path, *args, **kwargs):
+        note(path)
+        return os_open(path, *args, **kwargs)
+
+    def spy_read_text(path, *args, **kwargs):
+        note(path)
+        return read_text(path, *args, **kwargs)
+
+    def spy_read_bytes(path, *args, **kwargs):
+        note(path)
+        return read_bytes(path, *args, **kwargs)
+
+    def spy_readlink(path, *args, **kwargs):
+        note(path, links)
+        return readlink(path, *args, **kwargs)
+
+    with (
+        patch("builtins.open", spy_open),
+        patch("os.open", spy_os_open),
+        patch.object(Path, "read_text", spy_read_text),
+        patch.object(Path, "read_bytes", spy_read_bytes),
+        patch("os.readlink", spy_readlink),
+    ):
+        yield seen
+    seen.extend(os.path.realpath(path) for path in raw)
+    seen.extend(os.path.abspath(path) for path in links)
+
+
+class EnvironTrustTests(unittest.TestCase):
+    """PI_SESSION_FILE / PI_SESSION_ID come from another process's environ.
+
+    They are untrusted input: a file is read only when it resolves to a regular
+    ``.jsonl`` owned by the current user inside the two Pi session roots, and an
+    id only when it looks like one. Anything else is ignored and the session
+    falls back to the other methods; the rejected target is never opened.
+    """
+
+    PI = 2922080  # no session file was created at its start: unmapped without environ
+    SESSION_ID = "01a1c48f-5fbe-7503-974e-b7e83a9f846e"
+    SESSION_FILE = f"2026-11-10T08-24-52-927Z_{SESSION_ID}.jsonl"
+    OTHER_ID = "01a1ad91-f4ee-77ee-b6e1-35188e3d1afc"
+    OTHER_FILE = f"2026-11-05T21-16-26-223Z_{OTHER_ID}.jsonl"
+    OUTSIDE_ID = "01a1c48f-0000-7000-8000-0000000ff51d"
+    OUTSIDE_NAME = "FUERA DE LA RAIZ"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="macacoview-pi-environ-")
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.world = self.fresh_world("w0")
+
+    def fresh_world(self, name):
+        world = World(self.base / name, capture())
+        world.cwd = os.readlink(world.proc / str(self.PI) / "cwd")
+        world.dir = world.agent / "sessions" / session_dir(world.cwd)
+        # A well-formed session file the user owns, outside both Pi roots.
+        world.outside = self.base / name / "outside" / f"2026-11-10T09-00-00-000Z_{self.OUTSIDE_ID}.jsonl"
+        world.outside.parent.mkdir(parents=True)
+        self.write_session(world.outside, self.OUTSIDE_ID, world.cwd, self.OUTSIDE_NAME)
+        return world
+
+    @staticmethod
+    def write_session(path, session_id, cwd, name=None):
+        compact = (",", ":")
+        lines = [json.dumps({"type": "session", "id": session_id, "cwd": cwd}, separators=compact)]
+        if name:
+            info = {"type": "session_info", "id": "i", "name": name}
+            lines.append(json.dumps(info, separators=compact))
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def child(self, world, env, pid=99999101, starttime=51088545, uid=None, ppid=None):
+        row = next(r for r in world.data["processes"] if r["pid"] == 3159608)
+        world._process(dict(row, pid=pid, ppid=ppid or self.PI, starttime=starttime,
+                            env=env, uid=CAPTURE_UID if uid is None else uid))
+
+    def session(self, world, **kwargs):
+        return {s["pid"]: s for s in world.collect(**kwargs)}[self.PI]
+
+    def assert_unmapped(self, session):
+        self.assertIsNone(session["session_id"])
+        self.assertIsNone(session["session_source"])
+        self.assertEqual(session["name"], f"local-ai-tooling · pid {self.PI}")
+
+    # -- accepted ----------------------------------------------------------
+
+    def test_session_file_inside_a_root_maps_the_session_exactly(self):
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.dir / self.SESSION_FILE)})
+        session = self.session(self.world)
+        self.assertEqual(session["session_id"], self.SESSION_ID)
+        self.assertEqual(session["session_source"], "environ")
+        self.assertEqual(session["session_confidence"], "exact")
+
+    def test_gentle_agents_root_is_accepted_too(self):
+        path = self.write_session(
+            self.world.agent / "gentle-agents" / "sessions" / f"2026-11-10T09-00-00-000Z_{self.OUTSIDE_ID}.jsonl",
+            self.OUTSIDE_ID, self.world.cwd, "Subagente")
+        self.child(self.world, {"PI_SESSION_FILE": str(path)})
+        session = self.session(self.world)
+        self.assertEqual(session["session_id"], self.OUTSIDE_ID)
+        self.assertEqual(session["name"], "Subagente")
+        self.assertEqual(session["session_confidence"], "exact")
+
+    def test_session_id_alone_is_looked_up_in_the_session_dirs(self):
+        self.child(self.world, {"PI_SESSION_ID": self.SESSION_ID})
+        session = self.session(self.world)
+        self.assertEqual(session["session_id"], self.SESSION_ID)
+        self.assertEqual(session["session_source"], "environ")
+        self.assertEqual(session["session_confidence"], "exact")
+
+    def test_disagreeing_children_pick_the_newest_with_high_confidence(self):
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.dir / self.OTHER_FILE)},
+                   pid=99999101, starttime=51088000)
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.dir / self.SESSION_FILE)},
+                   pid=99999102, starttime=51088545)
+        session = self.session(self.world)
+        self.assertEqual(session["session_id"], self.SESSION_ID)
+        self.assertEqual(session["session_source"], "environ")
+        self.assertEqual(session["session_confidence"], "high")
+
+    # -- rejected: never opened, the session falls back --------------------
+
+    def rejected_values(self, world):
+        inside = world.dir
+        escape = inside / f"2026-11-10T09-00-01-000Z_{self.OUTSIDE_ID}.jsonl"
+        escape.symlink_to(world.outside)
+        notes = self.write_session(inside / "notas.json", self.OUTSIDE_ID, world.cwd, self.OUTSIDE_NAME)
+        renamed = inside / f"2026-11-10T09-00-02-000Z_{self.OUTSIDE_ID}.jsonl"
+        renamed.symlink_to(notes)
+        folder = inside / f"2026-11-10T09-00-03-000Z_{self.OUTSIDE_ID}.jsonl"
+        folder.mkdir()
+        climb = os.path.relpath(world.outside, inside)
+        return {
+            "outside the roots": str(world.outside),
+            "symlink escaping the root": str(escape),
+            "dot-dot escaping the root": f"{inside}/{climb}",
+            "not .jsonl": str(notes),
+            ".jsonl symlink to a non-jsonl file": str(renamed),
+            "a directory": str(folder),
+            "relative path": f"sessions/{session_dir(world.cwd)}/{self.SESSION_FILE}",
+            "missing file": str(inside / f"2026-11-10T09-00-04-000Z_{self.OUTSIDE_ID}.jsonl"),
+        }
+
+    def test_untrusted_session_files_are_ignored_and_never_opened(self):
+        cases = self.rejected_values(self.world)
+        for n, (label, value) in enumerate(cases.items()):
+            with self.subTest(label):
+                world = self.fresh_world(f"case{n}")
+                value = self.rejected_values(world)[label]
+                self.child(world, {"PI_SESSION_FILE": value})
+                with recorded_reads() as reads:
+                    sessions = world.collect()
+                session = {s["pid"]: s for s in sessions}[self.PI]
+                self.assert_unmapped(session)
+                self.assertNotIn(os.path.realpath(world.outside), reads)
+                self.assertFalse([p for p in reads if p.endswith("notas.json")])
+                text = json.dumps(sessions)
+                self.assertNotIn(self.OUTSIDE_NAME, text)
+                self.assertNotIn(self.OUTSIDE_ID, text)
+
+    def test_rejected_file_falls_back_to_a_valid_session_id(self):
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.outside),
+                                "PI_SESSION_ID": self.SESSION_ID})
+        with recorded_reads() as reads:
+            session = self.session(self.world)
+        self.assertEqual(session["session_id"], self.SESSION_ID)
+        self.assertEqual(session["session_source"], "environ")
+        self.assertNotIn(os.path.realpath(self.world.outside), reads)
+
+    def test_rejected_environ_lets_start_time_map_the_session(self):
+        # 277162 is mapped by start time; a bogus child must not take that away.
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.outside)}, ppid=277162)
+        session = {s["pid"]: s for s in self.world.collect()}[277162]
+        self.assertTrue(session["session_id"].endswith("305218"))
+        self.assertEqual(session["session_source"], "start_time")
+
+    def test_session_file_owned_by_another_user_is_ignored(self):
+        # Files can only be created as ourselves, so the collector runs as
+        # another uid that also owns every captured process.
+        for process in self.world.processes:
+            if process["uid"] == os.getuid():
+                process["uid"] = OTHER_UID
+        self.child(self.world, {"PI_SESSION_FILE": str(self.world.dir / self.SESSION_FILE)},
+                   uid=OTHER_UID)
+        with patch("os.getuid", return_value=OTHER_UID):
+            session = self.session(self.world)
+        self.assertNotEqual(session["session_source"], "environ")
+
+    def test_malformed_session_ids_are_ignored(self):
+        for n, value in enumerate(("../../../etc/passwd", "x" * 200, "id con espacios", "a/b")):
+            with self.subTest(value=value[:20]):
+                world = self.fresh_world(f"id{n}")
+                self.child(world, {"PI_SESSION_ID": value})
+                sessions = world.collect()
+                self.assert_unmapped({s["pid"]: s for s in sessions}[self.PI])
+                self.assertNotIn(value, json.dumps(sessions))
+
+    def test_reader_refuses_symlinks_and_fifos_without_blocking(self):
+        module = _load("macacoview_pi_sessions")
+        real = self.world.dir / self.SESSION_FILE
+        self.assertIsNotNone(module.read_session_file(real)[0])
+        link = self.base / "link.jsonl"
+        link.symlink_to(real)
+        self.assertEqual(module.read_session_file(link), (None, None))
+        fifo = self.base / "fifo.jsonl"
+        os.mkfifo(fifo)
+        self.assertEqual(module.read_session_file(fifo), (None, None))
+        self.assertEqual(module.read_session_file(self.base), (None, None))
+
+
+class OwnerTests(unittest.TestCase):
+    """Only the current user's pi processes are listed, sampled or read."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="macacoview-pi-owner-")
+        self.addCleanup(self.tmp.cleanup)
+        self.world = World(Path(self.tmp.name), capture())
+        self.bash = next(r for r in self.world.data["processes"] if r["pid"] == 3159608)
+        self.pi = next(r for r in self.world.data["processes"] if r["pid"] == 2922080)
+        self.session_file = str(
+            self.world.agent / "sessions" / session_dir(self.world.real(self.pi["cwd"]))
+            / EnvironTrustTests.SESSION_FILE)
+
+    def test_another_users_pi_is_never_listed_or_read(self):
+        self.world._process(dict(self.pi, pid=99998001, ppid=1, uid=OTHER_UID))
+        self.world._process(dict(self.bash, pid=99998002, ppid=99998001, uid=OTHER_UID,
+                                 env={"PI_SESSION_FILE": self.session_file}))
+        with recorded_reads() as reads:
+            sessions = self.world.collect()
+        self.assertNotIn(99998001, {s["pid"] for s in sessions})
+        self.assertEqual(len(sessions), 11)
+        foreign = [p for p in reads if Path(p).is_relative_to(self.world.proc / "99998001")
+                   or Path(p).is_relative_to(self.world.proc / "99998002")]
+        self.assertEqual(foreign, [])
+
+    def test_another_users_descendant_is_counted_but_never_read(self):
+        # e.g. a sudo child: its RSS (from ps) is part of what the session
+        # launched, but its /proc entries belong to someone else.
+        before = {s["pid"]: s for s in self.world.collect()}[2922080]
+        self.world._process(dict(self.bash, pid=99998003, ppid=2922080, uid=0,
+                                 env={"PI_SESSION_FILE": self.session_file}))
+        with recorded_reads() as reads:
+            session = {s["pid"]: s for s in self.world.collect()}[2922080]
+        self.assertIn(99998003, session["pids"])
+        self.assertEqual(session["rss_kb"], before["rss_kb"] + self.bash["rss_kb"])
+        self.assertEqual(session["pss_kb"], before["pss_kb"])
+        self.assertEqual(session["pss_coverage"]["not_sampled"],
+                         before["pss_coverage"]["not_sampled"] + 1)
+        self.assertIsNone(session["session_source"])
+        self.assertEqual([p for p in reads if Path(p).is_relative_to(self.world.proc / "99998003")], [])
+
+    def test_another_users_pi_inside_a_tree_is_a_descendant_not_an_entry(self):
+        self.world._process(dict(self.pi, pid=99998004, ppid=2922080, uid=OTHER_UID))
+        with recorded_reads() as reads:
+            sessions = {s["pid"]: s for s in self.world.collect()}
+        self.assertNotIn(99998004, sessions)
+        self.assertIn(99998004, sessions[2922080]["pids"])
+        self.assertEqual([p for p in reads if Path(p).is_relative_to(self.world.proc / "99998004")], [])
+
+
 class CollectorScriptTests(unittest.TestCase):
     """macacoview-stats emits pi_sessions without renaming anything it had."""
 
@@ -520,6 +808,117 @@ class CostTests(unittest.TestCase):
         self.assertIsNone(Snapshot(stats={"groups": {}}).pi_sessions())
         self.assertIsNone(Snapshot().pi_sessions())
         self.assertEqual(Snapshot(stats={"pi_sessions": []}).pi_sessions(), [])
+
+
+class StatsResilienceTests(unittest.TestCase):
+    """The 5 s sessions carry-forward in Collector._collect_stats (S20, R4-001).
+
+    A failed or slow sessions run never stops Recursos from refreshing, a
+    carried list never outlives a few intervals, and an odd payload never
+    raises out of the collector thread.
+    """
+
+    def setUp(self):
+        from pc_ai_monitor import config as cfg
+        from pc_ai_monitor import datos
+
+        self.datos = datos
+        self.tmp = tempfile.TemporaryDirectory(prefix="macacoview-pi-resilience-")
+        self.addCleanup(self.tmp.cleanup)
+        stats_bin = Path(self.tmp.name) / "stats"
+        stats_bin.write_text("")
+        self.collector = datos.Collector(cfg.Config(stats_bin=stats_bin))
+        self.clock = [1000.0]
+        self.calls: list[bool] = []
+        self.sessions = [{"pid": 1, "name": "koda · 5218"}]
+        self.full_fails = False
+        self.used = 1.0
+        self.raw: str | None = None
+
+    def fake_run(self, argv, timeout):
+        full = "--no-pi-sessions" not in argv
+        self.calls.append(full)
+        if self.raw is not None:
+            return self.raw, None
+        if full and self.full_fails:
+            return None, f"timeout de {timeout:.0f}s: stats"
+        payload: dict[str, Any] = {"memory": {"used_gib": self.used}, "groups": {}}
+        if full:
+            payload["pi_sessions"] = self.sessions
+            payload["pi_sessions_coverage"] = {"status": "full"}
+        return json.dumps(payload), None
+
+    def tick(self, seconds=1.0):
+        with (
+            patch.object(self.datos, "_run", self.fake_run),
+            patch.object(self.datos.time, "monotonic", lambda: self.clock[0]),
+        ):
+            result = self.collector._collect_stats()
+        self.clock[0] += seconds
+        self.used += 1.0
+        return result
+
+    def test_a_failed_sessions_run_does_not_make_every_tick_pay_for_it(self):
+        self.full_fails = True
+        for _ in range(3):
+            self.tick()
+        # One full attempt, then light runs until the interval elapses.
+        self.assertEqual(self.calls, [True, False, False])
+        snapshot = self.collector.snapshot()
+        self.assertEqual((snapshot.stats or {})["memory"]["used_gib"], 3.0)
+        self.assertNotIn("recursos", " ".join(snapshot.errors))
+
+    def test_a_carried_list_expires_when_sessions_keep_failing(self):
+        self.tick()  # t=1000: full run, list read
+        self.full_fails = True
+        seen = {}
+        for _ in range(29):  # ends at t=1029, a light run (full ones fail)
+            now = self.clock[0]
+            self.tick()
+            seen[now - 1000.0] = self.collector.snapshot().pi_sessions()
+        max_age = self.datos.PI_SESSIONS_MAX_AGE_S
+        self.assertGreaterEqual(max_age, self.datos.PI_SESSIONS_INTERVAL_S)
+        self.assertEqual(seen[1.0], self.sessions)
+        self.assertEqual(seen[max_age], self.sessions)
+        # Past its age the stale list is gone: Recursos falls back to processes.
+        self.assertTrue(all(value is None for age, value in seen.items() if age > max_age))
+        # Meanwhile the rest of the snapshot kept refreshing.
+        stats = self.collector.snapshot().stats or {}
+        self.assertEqual(stats["memory"]["used_gib"], self.used - 1.0)
+        self.assertNotIn("pi_sessions_coverage", stats)
+
+    def test_a_new_good_read_brings_the_list_back_and_records_its_time(self):
+        self.tick()
+        self.assertEqual(self.collector.snapshot().collected_at.get("pi_sessions"), 1000.0)
+        self.full_fails = True
+        for _ in range(20):
+            self.tick()
+        self.assertIsNone(self.collector.snapshot().pi_sessions())
+        self.full_fails = False
+        while not self.calls[-1] or self.collector.snapshot().pi_sessions() is None:
+            self.tick()
+            self.assertLess(len(self.calls), 60)
+        snapshot = self.collector.snapshot()
+        self.assertEqual(snapshot.pi_sessions(), self.sessions)
+        self.assertEqual(snapshot.collected_at["pi_sessions"], self.clock[0] - 1.0)
+
+    def test_a_payload_that_is_not_an_object_never_raises(self):
+        self.tick()
+        good = self.collector.snapshot()
+        for raw in ("[]", "null", "3", '"texto"'):
+            with self.subTest(raw=raw):
+                self.raw = raw
+                self.assertTrue(self.tick())
+                snapshot = self.collector.snapshot()
+                self.assertEqual(snapshot.stats, good.stats)
+                self.assertTrue(any(e.startswith("recursos:") for e in snapshot.errors))
+
+    def test_odd_memory_and_groups_never_raise(self):
+        self.raw = json.dumps({"memory": [], "groups": 3, "pi_sessions": "x"})
+        self.assertTrue(self.tick())
+        snapshot = self.collector.snapshot()
+        self.assertEqual(snapshot.history[-1].used_gib, 0.0)
+        self.assertIsNone(snapshot.pi_sessions())
 
 
 # ---------------------------------------------------------------------------

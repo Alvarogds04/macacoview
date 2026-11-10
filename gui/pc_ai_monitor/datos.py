@@ -45,6 +45,9 @@ DECISIONS_MAX_AGE_S = 3600.0
 # como mucho cada tantos segundos y entre medio arrastra la última lista.
 PI_SESSIONS_INTERVAL_S = 5.0
 PI_SESSIONS_KEYS = ("pi_sessions", "pi_sessions_coverage")
+# Una lista arrastrada no vive más que esto: si las lecturas con sesiones
+# siguen fallando, se descarta en vez de mostrarse como actual para siempre.
+PI_SESSIONS_MAX_AGE_S = 3 * PI_SESSIONS_INTERVAL_S
 
 # Ordered like the watch entries: pi, hermes, firefox, system, other. Single
 # source of truth: the [[watch]] defaults in config, so a renamed default entry
@@ -183,6 +186,7 @@ class Collector:
         self._decision_keys: set[tuple[Any, Any]] = set()
         self._next_pi_sessions = 0.0
         self._pi_sessions: dict[str, Any] = {}
+        self._pi_sessions_at: float | None = None
 
     # -- public API -------------------------------------------------------
 
@@ -315,6 +319,10 @@ class Collector:
 
         now = time.monotonic()
         want_sessions = now >= self._next_pi_sessions
+        if want_sessions:
+            # Agendado antes de correr: una lectura con sesiones que falla o
+            # tarda no hace pagar el costo a cada tick; las livianas siguen.
+            self._next_pi_sessions = now + PI_SESSIONS_INTERVAL_S
         argv = [str(self._config.stats_bin)]
         if not want_sessions:
             argv.append("--no-pi-sessions")
@@ -329,21 +337,31 @@ class Collector:
             self._set_error("recursos", f"JSON inválido: {parse_error}")
             return True
 
-        if isinstance(stats, dict):
-            if want_sessions:
-                self._next_pi_sessions = now + PI_SESSIONS_INTERVAL_S
-                self._pi_sessions = {
-                    key: stats[key] for key in PI_SESSIONS_KEYS if key in stats
-                }
-            else:
-                for key, value in self._pi_sessions.items():
-                    stats.setdefault(key, value)
+        if not isinstance(stats, dict):
+            self._set_error(
+                "recursos", f"JSON inválido: se esperaba un objeto, no {type(stats).__name__}"
+            )
+            return True
+
+        if want_sessions:
+            self._pi_sessions = {
+                key: stats[key] for key in PI_SESSIONS_KEYS if key in stats
+            }
+            self._pi_sessions_at = now
+        elif (
+            self._pi_sessions_at is not None
+            and now - self._pi_sessions_at <= PI_SESSIONS_MAX_AGE_S
+        ):
+            for key, value in self._pi_sessions.items():
+                stats.setdefault(key, value)
 
         with self._lock:
             self._stats = stats
             self._history.append(self._sample_from(stats))
             self._errors.pop("recursos", None)
             self._collected_at["stats"] = time.monotonic()
+            if want_sessions:
+                self._collected_at["pi_sessions"] = now
         return True
 
     def _collect_ports(self) -> bool:
@@ -399,8 +417,10 @@ class Collector:
 
     @staticmethod
     def _sample_from(stats: dict[str, Any]) -> Sample:
-        memory = stats.get("memory", {})
-        groups = stats.get("groups", {})
+        memory = stats.get("memory")
+        groups = stats.get("groups")
+        memory = memory if isinstance(memory, dict) else {}
+        groups = groups if isinstance(groups, dict) else {}
 
         def group_value(name: str) -> float:
             entry = groups.get(name) or {}

@@ -3,6 +3,8 @@
 Read-only and unprivileged: /proc of the same user and the first line plus the
 ``session_info`` entries of Pi session files. Never writes, never signals,
 never exports prompts or environment values other than the session id.
+Only pi processes of the current uid get an entry; inside a tree, processes of
+another uid are counted from ps but their /proc entries are never read.
 
 Tree: the pi process plus every descendant via ppid -- through shells, MCP
 servers, LSPs -- stopping at a nested pi, which is a subagent with its own
@@ -13,6 +15,9 @@ themselves, but they overlap the watch groups: never add them to group RSS.
 Session identity, most to least reliable (``session_source``):
   environ     PI_SESSION_ID / PI_SESSION_FILE in a descendant's environ (Pi
               sets them for bash tool children). Exact while such a child runs.
+              Untrusted input: the file only when it resolves to a regular
+              .jsonl of the current user inside the Pi session roots, the id
+              only when it looks like one; otherwise ignored.
   start_time  the session file name carries its creation time; a new session
               is created within a second of the process start. High: unique
               file in the window with the same header cwd, not claimed by
@@ -28,6 +33,7 @@ import json
 import mmap
 import os
 import re
+import stat
 from pathlib import Path
 
 from macacoview_programs import (
@@ -45,6 +51,7 @@ NAME_LIMIT = 80
 _FILE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3})Z_([0-9A-Za-z-]+)\.jsonl$")
 _INFO_MARKER = b'\n{"type":"session_info"'
 _ENV_KEYS = (b"PI_SESSION_ID", b"PI_SESSION_FILE")
+_SESSION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{0,63}")
 
 
 def session_dir_name(cwd):
@@ -69,7 +76,19 @@ def read_session_file(path):
     """
     header, name = None, None
     try:
-        with open(path, "rb") as handle:
+        # Never follow a final symlink, never block on a FIFO: regular files only.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None, None
+    try:
+        handle = os.fdopen(fd, "rb")
+    except OSError:
+        os.close(fd)
+        return None, None
+    try:
+        with handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return None, None
             first = handle.readline(LINE_LIMIT)
             try:
                 parsed = json.loads(first)
@@ -123,14 +142,16 @@ def _listing(directory):
             continue
         path = Path(directory) / name
         try:
-            mtime = path.stat().st_mtime
+            info = os.lstat(path)
         except OSError:
             continue
-        entries.append((path, created, mtime))
+        if stat.S_ISREG(info.st_mode):
+            entries.append((path, created, info.st_mtime))
     return entries
 
 
 def _environ_session(directory):
+    """Raw (PI_SESSION_ID, PI_SESSION_FILE) of one process; untrusted values."""
     try:
         raw = (directory / "environ").read_bytes()
     except OSError:
@@ -141,6 +162,36 @@ def _environ_session(directory):
         if sep and key in _ENV_KEYS:
             found[key] = os.fsdecode(value)
     return found.get(b"PI_SESSION_ID") or None, found.get(b"PI_SESSION_FILE") or None
+
+
+def _trusted_id(value):
+    return value if value and _SESSION_ID.fullmatch(value) else None
+
+
+def _trusted_file(value, roots, uid):
+    """The real path of ``value`` if it is safe to read, else None.
+
+    Safe: absolute, resolves (symlinks and «..» included) to a regular
+    ``.jsonl`` file owned by ``uid`` strictly inside one of ``roots``, given as
+    (root, its real path). Returned under ``root``, as the listings name it.
+    """
+    if not value or not os.path.isabs(value) or "\0" in value:
+        return None
+    real = Path(os.path.realpath(value))
+    if real.suffix != ".jsonl":
+        return None
+    inside = next(((root, real_root) for root, real_root in roots
+                   if real != real_root and real.is_relative_to(real_root)), None)
+    if inside is None:
+        return None
+    try:
+        info = os.lstat(real)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+        return None
+    root, real_root = inside
+    return root / real.relative_to(real_root)
 
 
 def _measure(proc_root, process):
@@ -168,19 +219,26 @@ def _btime(proc_root):
 
 
 def collect_pi_sessions(processes, proc_root=Path("/proc"), agent_dir=None,
-                        btime=None, clk_tck=None):
-    """One dict per pi process in the ps snapshot, sorted by PID."""
+                        btime=None, clk_tck=None, uid=None):
+    """One dict per pi process of ``uid`` (default: ours) in the ps snapshot, by PID."""
     proc_root = Path(proc_root)
     agent_dir = Path(agent_dir) if agent_dir is not None else Path.home() / ".pi" / "agent"
     btime = btime if btime is not None else _btime(proc_root)
     clk_tck = clk_tck or os.sysconf("SC_CLK_TCK")
+    uid = os.getuid() if uid is None else uid
 
     by_pid = {p["pid"]: p for p in processes}
     kids = {}
     for process in processes:
         kids.setdefault(process["ppid"], []).append(process["pid"])
-    roots = sorted(pid for pid, p in by_pid.items() if p["comm"] == PI_COMM)
+    # Another user's pi is never an entry: its /proc is not ours to read.
+    roots = sorted(pid for pid, p in by_pid.items()
+                   if p["comm"] == PI_COMM and p.get("uid") == uid)
     root_set = set(roots)
+    session_roots = [
+        (root, Path(os.path.realpath(root)))
+        for root in (agent_dir / "sessions", agent_dir / "gentle-agents" / "sessions")
+    ]
 
     entries = {}
     for root in roots:
@@ -206,6 +264,10 @@ def collect_pi_sessions(processes, proc_root=Path("/proc"), agent_dir=None,
         pss_sum, root_pss, start = None, None, None
         env_hits = []
         for pid in tree:
+            if by_pid[pid].get("uid") != uid:
+                # e.g. a sudo child: counted from ps, its /proc never read.
+                counts["not_sampled"] += 1
+                continue
             pss, status, starttime = _measure(proc_root, by_pid[pid])
             counts[status] += 1
             if pss is not None:
@@ -214,6 +276,8 @@ def collect_pi_sessions(processes, proc_root=Path("/proc"), agent_dir=None,
                 root_pss, start = pss, starttime
             else:
                 session_id, session_file = _environ_session(proc_root / str(pid))
+                session_id = _trusted_id(session_id)
+                session_file = _trusted_file(session_file, session_roots, uid)
                 if session_id or session_file:
                     env_hits.append((starttime or 0, session_id, session_file))
         try:
@@ -289,8 +353,8 @@ def _map_sessions(entries, agent_dir):
         distinct = {(sid, sfile) for _, sid, sfile in entry["_env"]}
         _, session_id, session_file = max(entry["_env"], key=lambda hit: hit[0])
         path = None
-        if session_file and session_file.endswith(".jsonl") and Path(session_file).is_file():
-            path = Path(session_file)
+        if session_file:  # already resolved and checked by _trusted_file
+            path = session_file
         elif session_id:
             for directory in candidate_dirs(entry):
                 path = next((p for p, _, _ in listing(directory)
