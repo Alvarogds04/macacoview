@@ -32,6 +32,7 @@ from pc_ai_monitor.blocks.actualizaciones_logica import (
     UpdateRow,
     UpdatesView,
     confirm_text,
+    disabled_reason,
     parse_update_result,
     parse_updates,
     update_args,
@@ -80,9 +81,15 @@ class ActualizacionesBlock(Block):
         self.body.append(self._rows_box)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        all_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         self._all_button = Gtk.Button(label="Actualizar todo")
+        self._all_button.set_halign(Gtk.Align.START)
         self._all_button.connect("clicked", self._on_update_all_clicked)
-        actions.append(self._all_button)
+        all_box.append(self._all_button)
+        # S16: el motivo de un botón apagado se lee, no sólo en el tooltip.
+        self._all_why = _why_label()
+        all_box.append(self._all_why)
+        actions.append(all_box)
 
         self._spinner = Gtk.Spinner()
         self._spinner.set_visible(False)
@@ -139,6 +146,7 @@ class ActualizacionesBlock(Block):
             self._all_button.set_sensitive(False)
             self._all_button.set_label("Actualizar todo")
             self._all_button.set_tooltip_text(view.error)
+            _set_why(self._all_why, "Sin lista de actualizaciones: mirá el aviso de arriba.")
             return
 
         self._error_label.set_visible(False)
@@ -162,6 +170,13 @@ class ActualizacionesBlock(Block):
             f"Actualizar todo ({view.count})" if view.count else "Actualizar todo"
         )
         self._all_button.set_sensitive(bool(view.count) and not self._busy)
+        if self._busy:
+            all_reason = "Hay una actualización en curso; esperá a que termine."
+        elif not view.count:
+            all_reason = "Nada para actualizar: todo está al día o sin canal."
+        else:
+            all_reason = ""
+        _set_why(self._all_why, all_reason)
         self._all_button.set_tooltip_text(
             f"Actualiza los {view.count} componentes con versión nueva, "
             "uno detrás de otro."
@@ -211,11 +226,17 @@ class ActualizacionesBlock(Block):
         button.connect("clicked", self._on_row_clicked, row.id)
         line.append(button)
 
+        # S16: por qué «Actualizar» está apagado, debajo de la fila.
+        why = _why_label()
+        why.set_margin_start(26)
+        widget.append(why)
+
         progress = progreso.ProgressInline(f"update:{row.id}")
         widget.append(progress)
 
         return {
             "widget": widget,
+            "why": why,
             "progress": progress,
             "name": name,
             "installed": installed,
@@ -242,7 +263,15 @@ class ActualizacionesBlock(Block):
         button = widgets["button"]
         running = progreso.HUB.running(f"update:{row.id}")
         button.set_label("Actualizando…" if running else "Actualizar")
-        button.set_sensitive(row.button_enabled and not self._busy and not running)
+        enabled = row.button_enabled and not self._busy and not running
+        button.set_sensitive(enabled)
+        if enabled or running:
+            reason = ""  # en curso: lo explica su bloque de progreso
+        elif not row.button_enabled:
+            reason = disabled_reason(row)
+        else:
+            reason = "Hay otra actualización en curso; esperá a que termine."
+        _set_why(widgets["why"], reason)
         button.set_tooltip_text(row.apply or row.reason or "Actualiza este componente.")
         # La frase completa (qué hace la actualización) vive en el tooltip (S12).
         widgets["widget"].set_tooltip_text(row.apply or row.reason or "")
@@ -395,6 +424,20 @@ class ActualizacionesBlock(Block):
         dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
         dialog.add_button("Actualizar", Gtk.ResponseType.ACCEPT)
         return dialog
+
+
+def _why_label() -> Gtk.Label:
+    label = Gtk.Label(xalign=0)
+    label.add_css_class("why")
+    label.set_wrap(True)
+    label.set_max_width_chars(60)
+    label.set_visible(False)
+    return label
+
+
+def _set_why(label: Gtk.Label, text: str) -> None:
+    label.set_text(text)
+    label.set_visible(bool(text))
 
 
 def _short_name(name: str) -> str:

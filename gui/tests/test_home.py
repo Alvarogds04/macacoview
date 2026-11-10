@@ -1467,3 +1467,47 @@ class LocalModelsCardTests(unittest.TestCase):
         self.assertEqual(len(dialogs), 1)
         self.assertIsInstance(dialogs[0], Adw.MessageDialog)
         self.assertEqual(dialogs[0].get_heading(), confirm_text("abito")[0])
+
+
+class HomeDisabledReasonTests(unittest.TestCase):
+    """S16 también en Home: un botón apagado dice por qué, visible."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def test_every_disabled_button_in_home_says_why(self):
+        import pc_ai_monitor.blocks.home as home_blocks
+        from pc_ai_monitor.pages.home import HomePage
+
+        try:
+            from test_motores_vista import silent_disabled_buttons
+        except ModuleNotFoundError:
+            from tests.test_motores_vista import silent_disabled_buttons
+
+        poller = FakePoller()
+        poller.state.resident_info = RESIDENT_ABITO
+        poller.state.status = parse_engine_status(CliResult(0, stdout=STATUS_AL_DIA))
+        poller.state.available_label = "0.28.1"
+        poller.state.inventory = [
+            {"model": "abito", "port": 11002, "ctx": 131072, "healthy": True},
+            {"model": "coder", "port": 11004, "ctx": 32768, "healthy": False,
+             "problem": "missing_model_file"},
+        ]
+        with mock.patch.object(home_blocks, "POLLER", poller):
+            page = HomePage()
+        page.update_snapshot(home_snapshot())
+        for block in page._blocks:
+            block._render()
+
+        self.assertEqual(silent_disabled_buttons(page), [])
+        update = page._blocks[3]
+        self.assertFalse(update._button.get_sensitive())
+        self.assertEqual(update._why.get_text(), "Ya corre la más nueva.")

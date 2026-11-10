@@ -52,17 +52,18 @@ class EngineOption(Gtk.Box):
         self._detail.set_max_width_chars(46)
         self.append(self._detail)
 
-        self._reason = Gtk.Label(xalign=0)
-        self._reason.add_css_class("muted")
-        self._reason.set_wrap(True)
-        self._reason.set_max_width_chars(46)
-        self._reason.set_visible(False)
-        self.append(self._reason)
-
         self._button = Gtk.Button()
         self._button.add_css_class("suggested-action")
         self._button.connect("clicked", lambda _b: on_click(engine))
         self.append(self._button)
+
+        # S16: motivo visible bajo el botón cuando está apagado.
+        self._reason = Gtk.Label(xalign=0)
+        self._reason.add_css_class("why")
+        self._reason.set_wrap(True)
+        self._reason.set_max_width_chars(46)
+        self._reason.set_visible(False)
+        self.append(self._reason)
 
     def render(self, view: dict) -> None:
         self._status.set_text(view["status"])

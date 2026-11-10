@@ -33,6 +33,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block, home_logica, progreso
+from pc_ai_monitor.blocks.actualizaciones_logica import sentence
 from pc_ai_monitor.blocks.engine_logica import (
     CONFIRMATION_TEXT,
     CliResult,
@@ -1131,8 +1132,11 @@ class InventarioRowBlock(Block):
 
     def _build_row(self, name: str) -> dict:
         # Orden del artboard (07, fila 3): lámpara, nombre, estado, barra de
-        # contexto (~40 % de la fila), puerto y acción a la derecha.
+        # contexto (~40 % de la fila), puerto y acción a la derecha; debajo,
+        # el motivo cuando la acción está apagada (S16).
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         widget = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        outer.append(widget)
         lamp = Lamp(10)
         widget.append(lamp)
         name_label = Gtk.Label(label=name, xalign=0)
@@ -1160,8 +1164,11 @@ class InventarioRowBlock(Block):
         power.add_css_class("flat")
         power.connect("clicked", self._on_power, name)
         widget.append(power)
+        why = _why()
+        why.set_max_width_chars(80)
+        outer.append(why)
         return {
-            "name": name, "widget": widget, "lamp": lamp,
+            "name": name, "widget": outer, "why": why, "lamp": lamp,
             "name_label": name_label, "state": state_label,
             "ctx": ctx_bar, "port": port,
             "power": power, "reason": "",
@@ -1181,8 +1188,19 @@ class InventarioRowBlock(Block):
         row["power"].set_icon_name(
             "system-shutdown-symbolic" if view["healthy"] else "media-playback-start-symbolic"
         )
-        blocked = view["blocked"] or row["name"] in self._running
+        running = row["name"] in self._running
+        blocked = view["blocked"] or running
         row["power"].set_sensitive(not blocked)
+        verb = "Apagar" if view["healthy"] else "Encender"
+        if not blocked:
+            why = ""
+        elif running:
+            why = f"«{verb}»: hay una orden en curso sobre {row['name']}; esperá a que termine."
+        elif not manager_ok:
+            why = f"«{verb}»: local-ai-models no respondió; no se actúa sobre un estado viejo."
+        else:
+            why = f"«{verb}»: {view['reason'] or 'no disponible'}."
+        _set_why(row["why"], why)
         row["power"].set_tooltip_text(
             f"{'Apagar' if view['healthy'] else 'Encender'} {row['name']}"
             + (f" (bloqueado: {view['reason']})" if view["reason"] else "")
@@ -1342,6 +1360,11 @@ class UpdateCardBlock(Block):
         self._button.connect("clicked", lambda _b: self.request_update())
         card.append(self._button)
 
+        # S16: por qué el botón está apagado, visible bajo él.
+        self._why = _why()
+        self._why.set_max_width_chars(30)
+        card.append(self._why)
+
         self._message = Gtk.Label(xalign=0)
         self._message.add_css_class("muted")
         self._message.add_css_class("caption")
@@ -1393,8 +1416,12 @@ class UpdateCardBlock(Block):
         self._rail.set_tooltip_text(card.rail_tooltip)
 
         self._button.set_label(card.button_label)
-        self._button.set_sensitive(card.button_enabled and not state.updating)
+        enabled = card.button_enabled and not state.updating
+        self._button.set_sensitive(enabled)
         self._button.set_tooltip_text(card.button_tooltip + " (Ctrl U)")
+        # En curso lo explica el bloque de progreso; si no, el motivo real.
+        running = state.updating or progreso.HUB.running("engine-update")
+        _set_why(self._why, "" if enabled or running else sentence(card.button_tooltip))
 
         # Mientras el bloque de progreso muestra la acción, el mensaje suelto
         # sobraría (dice lo mismo).

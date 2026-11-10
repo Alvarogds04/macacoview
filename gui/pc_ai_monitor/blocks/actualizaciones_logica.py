@@ -311,6 +311,28 @@ def confirm_text(row: UpdateRow) -> tuple[str, str]:
     return title, body
 
 
+def sentence(text: str) -> str:
+    """«ya está en la última …» → «Ya está en la última ….»"""
+    text = text.strip()
+    if not text:
+        return ""
+    text = text[0].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def disabled_reason(row: UpdateRow) -> str:
+    """S16: por qué «Actualizar» está apagado, en una frase visible.
+
+    El motivo es el del administrador (``reason``, contrato L8); sin motivo,
+    el de la píldora. Una fila actualizable no tiene motivo.
+    """
+    if row.updatable:
+        return ""
+    if row.reason:
+        return sentence(row.reason)
+    return sentence(row.pill_tooltip)
+
+
 def update_args(row: UpdateRow, with_build: bool = False) -> tuple[str, ...]:
     """La orden completa: ``update <id> [--build] --yes --json``."""
     args = ["update", row.id]

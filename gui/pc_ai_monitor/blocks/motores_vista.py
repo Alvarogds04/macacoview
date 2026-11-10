@@ -197,18 +197,19 @@ class ResidenteVistaBlock(Block):
         hint.add_css_class("muted")
         box.append(hint)
 
-        reason = Gtk.Label(xalign=0)
-        reason.add_css_class("muted")
-        reason.set_wrap(True)
-        reason.set_max_width_chars(40)
-        reason.set_visible(False)
-        box.append(reason)
-
         button = Gtk.Button()
         button.add_css_class("suggested-action")
         button.set_halign(Gtk.Align.START)
         button.connect("clicked", lambda _b, e=engine: self._ask_confirmation(e))
         box.append(button)
+
+        # S16: el motivo de un «Cambiar a …» apagado, visible bajo el botón.
+        reason = Gtk.Label(xalign=0)
+        reason.add_css_class("why")
+        reason.set_wrap(True)
+        reason.set_max_width_chars(40)
+        reason.set_visible(False)
+        box.append(reason)
 
         return {
             "widget": box,

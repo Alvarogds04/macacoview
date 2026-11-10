@@ -271,6 +271,43 @@ def _load_inventory() -> tuple[list[dict] | None, str | None]:
     return inventory, None
 
 
+def engine_button_reasons(
+    model: dict, running: bool, manager_ok: bool
+) -> tuple[str, str]:
+    """S16: (motivo de «Encender», motivo de «Apagar») cuando están apagados.
+
+    Vacío = el botón está activo o su bloque de progreso ya lo explica.
+    """
+    if running:
+        return "", ""
+    name = str(model.get("model", ""))
+    if not manager_ok:
+        reason = "local-ai-models no respondió: no se puede actuar sobre un estado viejo."
+        return reason, reason
+    healthy = bool(model.get("healthy", False))
+    problem = model.get("problem")
+    capacity = model.get("capacity_reason")
+    start = ""
+    if healthy:
+        start = "«Encender»: ya está encendido y sano."
+    elif problem:
+        detail = PROBLEM_MESSAGES.get(str(problem), f"problema: {problem}")
+        start = f"«Encender»: {detail}."
+    elif capacity:
+        start = f"«Encender»: {str(capacity).rstrip('.')}."
+    stop = "" if healthy else f"«Apagar»: {name} ya está apagado."
+    return start, stop
+
+
+def _why_label() -> Gtk.Label:
+    label = Gtk.Label(xalign=0)
+    label.add_css_class("why")
+    label.set_wrap(True)
+    label.set_max_width_chars(55)
+    label.set_visible(False)
+    return label
+
+
 class EngineControlBlock(Gtk.Box):
     """Tarjeta de un modelo informado por el administrador."""
 
@@ -317,6 +354,13 @@ class EngineControlBlock(Gtk.Box):
         buttons.append(self._stop_button)
         self.append(buttons)
 
+        # S16: cada botón apagado dice por qué, visible bajo los botones.
+        self._start_why = _why_label()
+        self.append(self._start_why)
+        self._stop_why = _why_label()
+        self.append(self._stop_why)
+        self._manager_ok = True
+
         self._notification = Gtk.Label(xalign=0)
         self._notification.add_css_class("muted")
         self._notification.set_wrap(True)
@@ -342,10 +386,13 @@ class EngineControlBlock(Gtk.Box):
     def update_model(self, model: dict) -> None:
         """Actualiza datos reales sin pisar el indicador de acción en curso."""
         self._model = model
+        self._manager_ok = True
         self._render()
 
     def set_manager_unavailable(self) -> None:
         """Evita acciones sobre datos viejos si no responde el administrador."""
+        self._manager_ok = False
+        self._render_why(False)
         if self._running_action is None:
             self._state_label.set_text("estado no disponible")
             self._state_label.remove_css_class("success")
@@ -396,7 +443,9 @@ class EngineControlBlock(Gtk.Box):
             self._state_label.remove_css_class("success")
 
         self._reason_label.set_text(reason)
-        self._reason_label.set_visible(bool(reason))
+        # S16: the same reason now sits under «Encender» (``_start_why``);
+        # showing it twice would only add text.
+        self._reason_label.set_visible(False)
 
         from pc_ai_monitor.blocks.progreso import HUB
 
@@ -408,6 +457,17 @@ class EngineControlBlock(Gtk.Box):
         )
         self._start_button.set_sensitive(can_start)
         self._stop_button.set_sensitive(not action_running and healthy)
+        self._render_why(action_running)
+
+    def _render_why(self, action_running: bool) -> None:
+        start, stop = engine_button_reasons(
+            self._model, running=action_running, manager_ok=self._manager_ok
+        )
+        if start == stop and start:
+            stop = ""  # un solo motivo para los dos
+        for label, text in ((self._start_why, start), (self._stop_why, stop)):
+            label.set_text(text)
+            label.set_visible(bool(text))
 
     def _on_start(self, _button: Gtk.Button) -> None:
         self._action_callback(self.model_name, "ensure")

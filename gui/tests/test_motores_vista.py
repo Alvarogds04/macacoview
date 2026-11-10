@@ -375,9 +375,6 @@ class _Result:
         self.failure = failure
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class DisabledActionLookTests(unittest.TestCase):
     """Un «Actualizar» deshabilitado no puede verse como uno activo."""
@@ -404,3 +401,211 @@ class RingTextFitTests(unittest.TestCase):
         font = instrumentos.ring_font(size, size, thickness)
         # «91 %» en monospace ocupa ~2.6 veces el tamaño de fuente.
         self.assertLessEqual(font * 2.6, inner)
+
+
+# ---------------------------------------------------------------------------
+# S16 / T13: todo botón deshabilitado dice por qué, visible, en línea
+# ---------------------------------------------------------------------------
+
+UPDATES_FIXTURE = (
+    __import__("pathlib").Path(__file__).parent / "fixtures" / "updates_real_2026-11-04.json"
+).read_text()
+
+INVENTORY = [
+    {"model": "abito", "alias": "abito", "port": 11002, "ctx": 131072,
+     "healthy": False, "problem": None, "required_kib": None},
+    {"model": "coder", "alias": "coder", "port": 11004, "ctx": 32768,
+     "healthy": False, "problem": "missing_model_file", "required_kib": None},
+]
+
+
+def _labels_of(widget):
+    found = []
+    child = widget.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk_Label()):
+            found.append(child)
+        found.extend(_labels_of(child))
+        child = child.get_next_sibling()
+    return found
+
+
+def Gtk_Label():
+    from gi.repository import Gtk
+
+    return Gtk.Label
+
+
+def _visible(widget) -> bool:
+    while widget is not None:
+        if not widget.get_visible():
+            return False
+        widget = widget.get_parent()
+    return True
+
+
+def _buttons(widget):
+    from gi.repository import Gtk
+
+    found = []
+    child = widget.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Button):
+            found.append(child)
+        found.extend(_buttons(child))
+        child = child.get_next_sibling()
+    return found
+
+
+def silent_disabled_buttons(root, max_up: int = 4):
+    """Botones visibles e inactivos sin una etiqueta «.why» visible y con
+    texto en su vecindad (hasta ``max_up`` ancestros)."""
+    silent = []
+    for button in _buttons(root):
+        if not _visible(button) or button.get_sensitive():
+            continue
+        ancestor, explained = button, False
+        for _level in range(max_up):
+            ancestor = ancestor.get_parent()
+            if ancestor is None:
+                break
+            if any(
+                label.has_css_class("why") and label.get_text() and _visible(label)
+                for label in _labels_of(ancestor)
+            ):
+                explained = True
+                break
+        if not explained:
+            silent.append(button.get_label() or button.get_icon_name() or repr(button))
+    return silent
+
+
+class DisabledReasonLogicTests(unittest.TestCase):
+    def test_update_row_reason_comes_from_the_manager(self):
+        from pc_ai_monitor.blocks.actualizaciones_logica import (
+            CliResult,
+            disabled_reason,
+            parse_updates,
+        )
+
+        view = parse_updates(CliResult(0, stdout=UPDATES_FIXTURE))
+        rows = {row.id: row for row in view.rows}
+        self.assertEqual(disabled_reason(rows["engine-abito"]), "")
+        self.assertEqual(
+            disabled_reason(rows["engine-gufo"]), "Ya está en la última publicación (0.28.1)."
+        )
+        self.assertEqual(
+            disabled_reason(rows["weights-models"]),
+            "Los pesos se descargan a mano; no hay manifiesto upstream.",
+        )
+
+    def test_engine_card_reasons(self):
+        from pc_ai_monitor.blocks.motores import engine_button_reasons
+
+        stopped = dict(INVENTORY[0])
+        self.assertEqual(
+            engine_button_reasons(stopped, running=False, manager_ok=True),
+            ("", "«Apagar»: abito ya está apagado."),
+        )
+        healthy = dict(stopped, healthy=True)
+        self.assertEqual(
+            engine_button_reasons(healthy, running=False, manager_ok=True),
+            ("«Encender»: ya está encendido y sano.", ""),
+        )
+        broken = dict(INVENTORY[1])
+        start, stop = engine_button_reasons(broken, running=False, manager_ok=True)
+        self.assertEqual(start, "«Encender»: falta el archivo del modelo.")
+        self.assertEqual(stop, "«Apagar»: coder ya está apagado.")
+        tight = dict(stopped, capacity_reason="no hay margen para conservar 20 GiB")
+        self.assertEqual(
+            engine_button_reasons(tight, running=False, manager_ok=True)[0],
+            "«Encender»: no hay margen para conservar 20 GiB.",
+        )
+        both = engine_button_reasons(stopped, running=False, manager_ok=False)
+        self.assertEqual(both[0], both[1])
+        self.assertIn("local-ai-models", both[0])
+        # Con una acción en curso lo explica su bloque de progreso.
+        self.assertEqual(engine_button_reasons(stopped, running=True, manager_ok=True), ("", ""))
+
+
+class DisabledReasonWidgetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from gi.repository import Adw, Gtk
+
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+        Adw.init()
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _page(self, resident='{"resident": "none", "abito": {}, "gufo": {}}'):
+        import pc_ai_monitor.blocks.motores_vista as vista
+        from pc_ai_monitor.blocks import actualizaciones, motores
+        from pc_ai_monitor.pages.motores import MotoresPage
+
+        def manager(*args):
+            if args[:2] == ("status", "--json"):
+                return _Result(0, stdout=json.dumps(INVENTORY))
+            return _Result(0, stdout="route=local")
+
+        patches = [
+            mock.patch.object(vista, "_run_manager", lambda *a, **k: _Result(0, stdout=resident)),
+            mock.patch.object(motores, "_run_manager", manager),
+            mock.patch.object(actualizaciones, "run_manager",
+                              lambda *a, **k: _Result(0, stdout=UPDATES_FIXTURE)),
+            mock.patch.object(vista, "_http_text", lambda *a, **k: None),
+            mock.patch.object(vista, "_run_gufo_flash_status", lambda: ("", None, "missing")),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        page = MotoresPage()
+        page.update_snapshot(motores_snapshot())
+        residente, actualizaciones_b, rendimiento, inventario = page._blocks
+        GLib_pump_until(lambda: not (
+            residente._refreshing or actualizaciones_b._refreshing
+            or rendimiento._refreshing or inventario._refreshing
+        ))
+        GLib_pump_until(lambda: len(inventario._cards) == 2 and bool(actualizaciones_b._rows))
+        return page
+
+    def test_every_disabled_button_in_motores_says_why(self):
+        page = self._page()
+        self.assertEqual(silent_disabled_buttons(page), [])
+
+    def test_specific_reasons_are_visible(self):
+        page = self._page()
+        updates, inventory = page._blocks[1], page._blocks[3]
+        gufo_row = updates._rows["engine-gufo"]
+        self.assertFalse(gufo_row["button"].get_sensitive())
+        self.assertTrue(gufo_row["why"].get_visible())
+        self.assertEqual(gufo_row["why"].get_text(), "Ya está en la última publicación (0.28.1).")
+        card = inventory._cards["abito"]
+        self.assertEqual(card._stop_why.get_text(), "«Apagar»: abito ya está apagado.")
+        self.assertTrue(card._stop_why.get_visible())
+        self.assertFalse(card._start_why.get_visible())
+
+    def test_busy_updates_and_unknown_resident_still_say_why(self):
+        page = self._page(resident="not json")
+        updates = page._blocks[1]
+        updates._busy = True
+        updates._render()
+        self.assertFalse(updates._all_button.get_sensitive())
+        self.assertEqual(silent_disabled_buttons(page), [])
+
+
+def GLib_pump_until(condition, timeout: float = 5.0) -> None:
+    context = GLib.MainContext.default()
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        context.iteration(False)
+        time.sleep(0.01)
+
+
+if __name__ == "__main__":
+    unittest.main()
