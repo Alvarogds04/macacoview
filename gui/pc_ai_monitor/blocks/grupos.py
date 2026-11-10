@@ -2,19 +2,21 @@
 
 The treemap is the picture (biggest block = biggest RSS); the legend keeps
 the exact numbers and is the click target: clicking a row — or a tile —
-opens that group's process list right below, in place. The Pi group opens
-its per-session view instead (S17, ``pi_sesiones.PiSessionsView``) when the
-collector reports ``pi_sessions``; an older collector keeps the process list.
+opens that group's process list right below, in place. The Pi group is the
+exception (S17, design 08 tab 4): when the collector reports ``pi_sessions``
+and the page listens through ``on_pi_sessions``, the block does not draw the
+sessions itself — it hands them to the page, which shows the wide sessions
+card next to this one. Without a listener, or with an older collector, Pi
+keeps the process list like every other group.
 """
 
 # pyright: reportAttributeAccessIssue=false
 
-from gi.repository import Gtk
+from gi.repository import Gtk, Pango
 
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block
 from pc_ai_monitor.blocks import programas_vista as programas
-from pc_ai_monitor.blocks.pi_sesiones import PiSessionsView
 from pc_ai_monitor.blocks.recursos_vista import (
     GroupTreemap,
     top_processes,
@@ -24,6 +26,16 @@ from pc_ai_monitor.blocks.recursos_vista import (
 from pc_ai_monitor.datos import GROUP_KEYS, Snapshot
 from pc_ai_monitor.formato import gib, percent, safe, whole
 from pc_ai_monitor.widgets import chips
+
+# Ancho de contenido del treemap y de las columnas de la leyenda: normal
+# (media página) y compacto (la ficha de 250 px junto a las sesiones de Pi).
+_TREEMAP_WIDTH = {False: 560, True: 160}
+_VALUE_WIDTH = {False: 90, True: 64}
+_PCT_WIDTH = {False: 48, True: 40}
+COMPACT_NOTE = (
+    "Pi abierto a la izquierda; tocar la ficha Pi otra vez lo cierra. "
+    "Los demás grupos siguen con su top 10 de procesos."
+)
 
 GROUP_LABELS = {
     "pi": "🥧 Pi",
@@ -45,7 +57,8 @@ class GroupsBlock(Block):
         self.body.append(self._donut)
 
         legend = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self._rows: dict[str, tuple[Gtk.Box, object, object]] = {}
+        self._rows: dict[str, tuple[Gtk.Box, Gtk.Label, Gtk.Label]] = {}
+        self._names: list[Gtk.Label] = []
         for key, label in GROUP_LABELS.items():
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             line.add_css_class("legend-row")
@@ -59,15 +72,16 @@ class GroupsBlock(Block):
             name = Gtk.Label(label=label, xalign=0)
             name.set_hexpand(True)
             line.append(name)
+            self._names.append(name)
 
             value = Gtk.Label(label="—", xalign=1)
             value.add_css_class("mono")
-            value.set_size_request(90, -1)
+            value.set_size_request(_VALUE_WIDTH[False], -1)
             line.append(value)
 
             pct = Gtk.Label(label="—", xalign=1)
             pct.add_css_class("mono")
-            pct.set_size_request(48, -1)
+            pct.set_size_request(_PCT_WIDTH[False], -1)
             line.append(pct)
 
             gesture = Gtk.GestureClick()
@@ -78,6 +92,13 @@ class GroupsBlock(Block):
             self._rows[key] = (line, value, pct)
 
         self.body.append(legend)
+
+        self._compact_note = Gtk.Label(label=COMPACT_NOTE, xalign=0)
+        self._compact_note.add_css_class("muted")
+        self._compact_note.set_wrap(True)
+        self._compact_note.set_max_width_chars(24)
+        self._compact_note.set_visible(False)
+        self.body.append(self._compact_note)
 
         # RAM por programa (L23): lista aparte, fuera del treemap y del «RSS
         # total» — PSS/RSS de programas se superponen con los grupos.
@@ -93,10 +114,26 @@ class GroupsBlock(Block):
 
         self._snapshot = None
         self._selected = ""
-        # Una sola vista de sesiones, reutilizada: se actualiza en sitio en
-        # cada snapshot mientras está abierta (sin card propio: ya está dentro
-        # de la de grupos).
-        self._pi_view = PiSessionsView(framed=False)
+        # Quién muestra las sesiones de Pi: la página (una sola vista, ancha).
+        # Recibe (sesiones, RSS del grupo) al abrir y en cada snapshot, y
+        # (None, 0.0) al cerrar.
+        self.on_pi_sessions = None
+        self._pi_open = False
+
+    def set_compact(self, compact: bool) -> None:
+        """Fit a narrow column (08 tab 4: 250 px beside the Pi sessions)."""
+        self._donut.set_content_width(_TREEMAP_WIDTH[compact])
+        # Natural widths capped too: a Gtk.Box hands spare room out by
+        # natural size, so a long name or the note would widen the column.
+        for name in self._names:
+            name.set_ellipsize(
+                Pango.EllipsizeMode.END if compact else Pango.EllipsizeMode.NONE
+            )
+            name.set_max_width_chars(8 if compact else -1)
+        for _line, value, pct in self._rows.values():
+            value.set_size_request(_VALUE_WIDTH[compact], -1)
+            pct.set_size_request(_PCT_WIDTH[compact], -1)
+        self._compact_note.set_visible(compact)
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self._snapshot = snapshot
@@ -118,10 +155,9 @@ class GroupsBlock(Block):
         self._donut.set_data(slices, f"{gib(total, 2)}G", "RSS total")
 
         if self._selected and self._selected in hidden:
-            self._selected = ""
-            self._revealer.set_reveal_child(False)
-        elif self._revealer.get_reveal_child() and self._selected:
-            self._render_detail(self._selected)
+            self._close()
+        elif self._is_open():
+            self._show(self._selected)
 
         for key in GROUP_KEYS:
             line, value, pct = self._rows[key]
@@ -181,14 +217,44 @@ class GroupsBlock(Block):
     # -- detalle en la misma pantalla ---------------------------------------
 
     def _toggle(self, key: str) -> None:
-        if self._selected == key and self._revealer.get_reveal_child():
-            self._revealer.set_reveal_child(False)
-            self._selected = ""
+        if self._selected == key and self._is_open():
+            self._close()
             return
-
         self._selected = key
+        self._show(key)
+
+    def _is_open(self) -> bool:
+        return bool(self._selected) and (
+            self._pi_open or self._revealer.get_reveal_child()
+        )
+
+    def _show(self, key: str) -> None:
+        sessions = self._snapshot.pi_sessions() if self._snapshot is not None else None
+        if key == "pi" and sessions is not None and self.on_pi_sessions is not None:
+            self._revealer.set_reveal_child(False)
+            self._clear_detail()
+            self._pi_open = True
+            pi = (self._snapshot.groups().get("pi") if self._snapshot else None) or {}
+            self.on_pi_sessions(sessions, safe(pi.get("rss_gib")))
+            return
+        self._release_pi()
         self._render_detail(key)
         self._revealer.set_reveal_child(True)
+
+    def _close(self) -> None:
+        self._selected = ""
+        self._revealer.set_reveal_child(False)
+        self._release_pi()
+
+    def _release_pi(self) -> None:
+        if self._pi_open:
+            self._pi_open = False
+            if self.on_pi_sessions is not None:
+                self.on_pi_sessions(None, 0.0)
+
+    def _clear_detail(self) -> None:
+        while (child := self._detail.get_first_child()) is not None:
+            self._detail.remove(child)
 
     def _on_row_pressed(
         self, _gesture, _count: int, _x: float, _y: float, key: str
@@ -202,18 +268,7 @@ class GroupsBlock(Block):
                 return
 
     def _render_detail(self, key: str) -> None:
-        sessions = self._snapshot.pi_sessions() if self._snapshot is not None else None
-        if key == "pi" and sessions is not None:
-            if self._pi_view.get_parent() is not self._detail:
-                while (child := self._detail.get_first_child()) is not None:
-                    self._detail.remove(child)
-                self._detail.append(self._pi_view)
-            pi = (self._snapshot.groups().get("pi") if self._snapshot else None) or {}
-            self._pi_view.update(sessions, safe(pi.get("rss_gib")))
-            return
-
-        while (child := self._detail.get_first_child()) is not None:
-            self._detail.remove(child)
+        self._clear_detail()
 
         heading = Gtk.Label(label=f"PROCESOS DE {GROUP_LABELS[key].upper()}", xalign=0)
         heading.add_css_class("section-head")

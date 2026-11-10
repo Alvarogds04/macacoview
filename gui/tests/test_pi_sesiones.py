@@ -711,23 +711,45 @@ class WidgetTests(unittest.TestCase):
         view.update([], group_rss_gib=0.0)
         self.assertIn("No hay sesiones de Pi ahora mismo.", self.texts(view))
 
-    def test_pi_tile_opens_sessions_instead_of_the_process_top10(self):
+    def test_pi_tile_hands_sessions_to_the_page_instead_of_the_process_top10(self):
+        # The page owns the one sessions view (08 tab 4, wide card beside the
+        # groups); the block only reports what to show, and never draws it.
         from pc_ai_monitor.blocks.grupos import GroupsBlock
         from pc_ai_monitor.blocks.pi_sesiones import PiSessionsView
 
+        calls = []
         block = GroupsBlock()
+        block.on_pi_sessions = lambda sessions, rss: calls.append((sessions, rss))
         block.update_snapshot(self.snapshot())
         block._toggle("pi")
-        children = []
-        child = block._detail.get_first_child()
-        while child is not None:
-            children.append(child)
-            child = child.get_next_sibling()
-        self.assertTrue(any(isinstance(c, PiSessionsView) for c in children))
-        self.assertNotIn("PROCESOS DE 🥧 PI", self.texts(block._detail))
+        self.assertEqual(calls, [(self.sessions, 6.34)])
+        self.assertNotIn("PROCESOS DE 🥧 PI", self.texts(block))
+        self.assertFalse(
+            any(isinstance(c, PiSessionsView) for c in _walk(block)),
+            "the sessions list is never drawn inside the groups card",
+        )
         # A new snapshot keeps the open list fresh.
         block.update_snapshot(self.snapshot(self.sessions[:1]))
-        self.assertEqual(len(block._pi_view._rows), 1)
+        self.assertEqual(calls[-1], (self.sessions[:1], 6.34))
+        # Closing it tells the page to put the list away.
+        block._toggle("pi")
+        self.assertEqual(calls[-1], (None, 0.0))
+        count = len(calls)
+        block.update_snapshot(self.snapshot())
+        self.assertEqual(len(calls), count)
+
+    def test_opening_another_group_closes_the_pi_list(self):
+        from pc_ai_monitor.blocks.grupos import GroupsBlock
+
+        calls = []
+        block = GroupsBlock()
+        block.on_pi_sessions = lambda sessions, rss: calls.append(sessions)
+        block.update_snapshot(self.snapshot())
+        block._toggle("pi")
+        block._toggle("other")
+        self.assertEqual(calls[-1], None)
+        self.assertIn("PROCESOS DE 📦 OTROS", self.texts(block._detail))
+        self.assertTrue(block._revealer.get_reveal_child())
 
     def test_other_groups_keep_their_process_list(self):
         from pc_ai_monitor.blocks.grupos import GroupsBlock
@@ -754,6 +776,17 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(block._donut._center_value, "8.34G")
         pi_tile = next(s for s in block._donut._slices if "Pi" in s.label)
         self.assertAlmostEqual(pi_tile.value, 6.34)
+
+
+def _walk(widget):
+    stack = [widget]
+    while stack:
+        node = stack.pop()
+        yield node
+        child = node.get_first_child()
+        while child is not None:
+            stack.append(child)
+            child = child.get_next_sibling()
 
 
 if __name__ == "__main__":
