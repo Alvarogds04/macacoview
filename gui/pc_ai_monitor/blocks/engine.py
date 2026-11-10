@@ -14,7 +14,7 @@ import time
 
 from gi.repository import GLib, Gtk
 
-from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks import Block, progreso
 from pc_ai_monitor.blocks.engine_logica import (
     CONFIRMATION_TEXT,
     CliResult,
@@ -102,6 +102,10 @@ class MotorResidenteBlock(Block):
         self._notification_label.set_visible(False)
         self.body.append(self._notification_label)
 
+        # S14: progreso honesto de «Actualizar motor» (sin %: exit code).
+        self._progress = progreso.ProgressInline("engine-update")
+        self.body.append(self._progress)
+
         self._rollback_label = Gtk.Label(xalign=0)
         self._rollback_label.add_css_class("muted")
         self._rollback_label.set_wrap(True)
@@ -170,6 +174,12 @@ class MotorResidenteBlock(Block):
         dialog.present()
 
     def _begin_update(self) -> None:
+        if progreso.HUB.running("engine-update"):
+            return
+        self._activity = progreso.begin(progreso.pl.engine_update_action(
+            section="motores", anchor=self._progress,
+            retry=lambda: self._on_update_clicked(None),
+        ))
         self._updating = True
         self._spinner.start()
         self._spinner.set_visible(True)
@@ -199,6 +209,14 @@ class MotorResidenteBlock(Block):
         message = parse_update_result(_as_cli_result(result))
         self._notification_label.set_text(message)
         self._notification_label.set_visible(True)
+        activity = getattr(self, "_activity", None)
+        if activity is not None:
+            ok = result.returncode == 0
+            progreso.finish(
+                activity, ok,
+                "Motor actualizado" if ok else "No se actualizó el motor",
+                message, "" if ok else (result.stderr or result.stdout or "").strip(),
+            )
 
         self._status = parse_engine_status(_as_cli_result(status))
         self._render()

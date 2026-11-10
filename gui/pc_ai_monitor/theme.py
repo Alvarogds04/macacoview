@@ -58,7 +58,9 @@ THEMES: dict[str, Palette] = {
         subtle="#24272f",
         border="#313342",
         text="#F3F6F9",
-        muted="#5C6170",
+        # Readable secondary text (S18, L28): gentle-pi's #5C6170 is 2.85:1 on
+        # graphite; #8394A3 (series[7]) passes AA on every surface.
+        muted="#8394A3",
         accent="#E0C15A",
         blue="#7FB4CA",
         green="#B7CC85",
@@ -219,7 +221,7 @@ FIELD_SOURCES: dict[str, tuple[str, ...]] = {
 
 # Fields MacacoView owns per theme: the gentle-pi refresh never overwrites them.
 APP_OWNED_FIELDS: dict[str, frozenset[str]] = {
-    "gentle": frozenset({"background", "element", "subtle"}),
+    "gentle": frozenset({"background", "element", "subtle", "muted"}),
 }
 
 
@@ -521,6 +523,88 @@ progressbar.inv-ctx > trough > progress {
 
 .tier-crit {
   color: @theme_error;
+}
+
+/* S14 · acción larga en curso (diseño 08): bloque en la tarjeta que la
+   empezó, con etapas, barra (fracción real o pulso), tiempos y desenlace. */
+.act {
+  background-color: @theme_subtle;
+  border: 1px solid @theme_border;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.act.act-ok {
+  border-color: @theme_green;
+}
+
+.act.act-err {
+  border-color: @theme_error;
+}
+
+.act-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.act.act-ok .act-title {
+  color: @theme_green;
+}
+
+.act.act-err .act-title {
+  color: @theme_error;
+}
+
+.act-msg {
+  font-size: 12px;
+}
+
+.step-bar {
+  min-height: 3px;
+  border-radius: 2px;
+  background-color: @theme_border;
+}
+
+.step-bar.step-done {
+  background-color: @theme_green;
+}
+
+.step-bar.step-now {
+  background-color: @theme_accent;
+}
+
+.step-bar.step-fail {
+  background-color: @theme_error;
+}
+
+.step-now-label {
+  color: @theme_text;
+  font-weight: 600;
+}
+
+/* «por qué» en línea: motivo de un botón deshabilitado o nota honesta. */
+.why {
+  color: @theme_muted;
+  font-size: 11.5px;
+}
+
+/* Indicador global del header: pill compacta con barra y texto. */
+button.gpill {
+  background-color: @theme_element;
+  border: 1px solid @theme_accent;
+  border-radius: 999px;
+  padding: 2px 12px 2px 10px;
+  min-height: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+button.gpill.gpill-ok {
+  border-color: @theme_green;
+}
+
+button.gpill.gpill-err {
+  border-color: @theme_error;
 }
 """
 

@@ -17,6 +17,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
 
 from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
+from pc_ai_monitor.blocks import progreso
 from pc_ai_monitor.config import write_template
 from pc_ai_monitor.datos import Collector, Snapshot
 from pc_ai_monitor.formato import gib
@@ -213,6 +214,9 @@ class MonitorApplication(Adw.Application):
         self._badges: dict[str, Gtk.Label] = {}
         self._listbox: Gtk.ListBox | None = None
         self._key_rows: dict[str, Gtk.ListBoxRow] = {}
+        # S14: indicador de acción en curso de cada cabecera y los toasts.
+        self._indicators: dict[Adw.NavigationPage, progreso.HeaderIndicator] = {}
+        self._toasts: Adw.ToastOverlay | None = None
         # (huella, monotónico) de la última vez que cada fuente cambió de
         # contenido: la pill de edad data datos, no publicaciones.
 
@@ -248,7 +252,12 @@ class MonitorApplication(Adw.Application):
         split.set_content(navigation)
         self._split = split
 
-        window.set_content(split)
+        # Adw.Toast al terminar una acción larga, esté donde esté el usuario.
+        toasts = Adw.ToastOverlay()
+        toasts.set_child(split)
+        self._toasts = toasts
+        self._watch_activities()
+        window.set_content(toasts)
         window.set_icon_name(self._config.icon)
         self._window = window
         window.present()
@@ -385,6 +394,9 @@ class MonitorApplication(Adw.Application):
         box.set_valign(Gtk.Align.CENTER)
         box.append(title_widget)
         box.append(pill)
+        # S14: la acción larga en curso, visible desde cualquier página.
+        indicator = progreso.HeaderIndicator(self._open_activity)
+        box.append(indicator)
         header.set_title_widget(box)
         header.pack_start(self._sidebar_toggle())
 
@@ -399,6 +411,7 @@ class MonitorApplication(Adw.Application):
         page = Adw.NavigationPage(title=title)
         page.set_child(toolbar)
         self._pages[page] = content
+        self._indicators[page] = indicator
         if section is not None:
             self._chrome[page] = (section, pill, banner)
         return page
@@ -411,6 +424,34 @@ class MonitorApplication(Adw.Application):
         self, _navigation: Adw.NavigationView, page: Adw.NavigationPage
     ) -> None:
         self._pages.pop(page, None)
+        self._indicators.pop(page, None)
+
+    # -- acciones largas (S14) -----------------------------------------------
+
+    def _open_activity(self, section: str, anchor: object | None) -> None:
+        """Clic en el indicador: abrir la sección y llevar la vista a la tarjeta."""
+        if section:
+            self._select_section(section)
+        widget = anchor if isinstance(anchor, Gtk.Widget) else None
+        if widget is not None and widget.get_root() is not None:
+            widget.grab_focus()
+
+    def _watch_activities(self) -> None:
+        progreso.HUB.on_finished(self._on_activity_finished)
+
+    def _on_activity_finished(self, activity) -> None:
+        if self._toasts is None:
+            return
+        progress = activity.progress()
+        toast = Adw.Toast.new(progress.message)
+        toast.set_timeout(int(progreso.pl.LINGER_S))
+        if activity.section:
+            toast.set_button_label("Ver" if progress.state == progreso.pl.SUCCESS else "Ver detalle")
+            toast.connect(
+                "button-clicked",
+                lambda _t, a=activity: self._open_activity(a.section, a.anchor),
+            )
+        self._toasts.add_toast(toast)
 
     # -- chrome ------------------------------------------------------------
 

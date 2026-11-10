@@ -31,7 +31,7 @@ import time
 from gi.repository import Adw, GLib, Gtk
 
 from pc_ai_monitor import theme
-from pc_ai_monitor.blocks import Block, home_logica
+from pc_ai_monitor.blocks import Block, home_logica, progreso
 from pc_ai_monitor.blocks.engine_logica import (
     CONFIRMATION_TEXT,
     CliResult,
@@ -67,9 +67,6 @@ from pc_ai_monitor.blocks.residente_logica import (
     engine_view,
     headline,
     parse_resident,
-    progress_fraction,
-    progress_text,
-    switch_outcome,
 )
 from pc_ai_monitor.datos import Snapshot
 from pc_ai_monitor.widgets import instrumentos_logica as instrumentos
@@ -282,6 +279,29 @@ def _as_cli_result(result: CommandResult) -> CliResult:
     )
 
 
+def start_switch(poller, target: str, *, anchor=None, retry=None) -> None:
+    """``switch <target>`` desde Home con el progreso S14 (etapas del guard).
+
+    Los nombres ``run_manager`` / ``_run_manager`` / ``_run_gufo_flash_status``
+    se resuelven en este módulo en cada llamada: el guard de aislamiento de los
+    tests los sustituye aquí.
+    """
+    if progreso.HUB.running("switch"):
+        return
+    poller.begin_switch(target)
+    progreso.run_switch(
+        target,
+        lambda args, timeout: run_manager(args, timeout),
+        lambda *args: _run_manager(*args),
+        lambda: _run_gufo_flash_status(),
+        lambda ok, message, info: poller.end_switch(ok, message, info),
+        section="home",
+        anchor=anchor,
+        retry=retry,
+        timeout=SWITCH_TIMEOUT_S,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fila 1 · RAM + banda + cambio compacto
 # ---------------------------------------------------------------------------
@@ -335,8 +355,6 @@ class MotorRowBlock(Block):
         super().__init__()
         self._poller = poller or POLLER
         self._snapshot: Snapshot | None = None
-        self._switch_started = 0.0
-        self._tick_id = 0
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.set_hexpand(True)
@@ -410,16 +428,8 @@ class MotorRowBlock(Block):
         self._switch_reason.set_visible(False)
         right.append(self._switch_reason)
 
-        self._bar = Gtk.ProgressBar()
-        self._bar.set_visible(False)
-        right.append(self._bar)
-
-        self._switch_message = Gtk.Label(xalign=0)
-        self._switch_message.add_css_class("muted")
-        self._switch_message.add_css_class("caption")
-        self._switch_message.set_wrap(True)
-        self._switch_message.set_visible(False)
-        right.append(self._switch_message)
+        self._progress = progreso.ProgressInline("switch")
+        right.append(self._progress)
 
         row.append(right)
         self.body.append(row)
@@ -468,8 +478,9 @@ class MotorRowBlock(Block):
         self._render_switch(state, info, resident)
 
     def _render_switch(self, state, info, resident) -> None:
-        if state.switching is not None:
-            self._switch_label.set_text(f"Cambiando a {state.switching.capitalize()}…")
+        switching = state.switching or progreso.switching_target()
+        if switching is not None:
+            self._switch_label.set_text(f"Cambiando a {switching.capitalize()}…")
             self._switch_button.set_sensitive(False)
             self._switch_kbd.set_visible(False)
             self._switch_reason.set_visible(False)
@@ -490,7 +501,7 @@ class MotorRowBlock(Block):
 
     def request_switch(self) -> None:
         state = self._poller.state
-        if state.switching is not None or state.updating:
+        if state.switching is not None or state.updating or progreso.HUB.running("switch"):
             return
         info = state.resident_info
         target = home_logica.switch_target(info.get("resident") if info else None)
@@ -522,51 +533,9 @@ class MotorRowBlock(Block):
         dialog.present()
 
     def _start_switch(self, target: str) -> None:
-        self._poller.begin_switch(target)
-        self._switch_started = time.monotonic()
-        self._switch_message.remove_css_class("error")
-        self._switch_message.set_text(progress_text(0, target))
-        self._switch_message.set_visible(True)
-        self._bar.set_fraction(0.0)
-        self._bar.set_visible(True)
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-        self._tick_id = GLib.timeout_add(250, self._tick)
+        start_switch(self._poller, target, anchor=self._progress,
+                     retry=lambda: self._confirm_switch(target))
         self._render()
-
-        def _worker() -> None:
-            result = run_manager(("switch", target), SWITCH_TIMEOUT_S)
-            ok, message = switch_outcome(
-                result.returncode, result.stderr, result.stdout, target, result.failure
-            )
-            after = _run_manager("resident")
-            info = parse_resident(after.stdout) if after.returncode == 0 else None
-            GLib.idle_add(self._on_switched, ok, message, info)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _tick(self) -> bool:
-        if self._poller.state.switching is None:
-            self._tick_id = 0
-            return False
-        elapsed = time.monotonic() - self._switch_started
-        self._bar.set_fraction(progress_fraction(elapsed, self._poller.state.switching))
-        self._switch_message.set_text(progress_text(elapsed, self._poller.state.switching))
-        return True
-
-    def _on_switched(self, ok: bool, message: str, info: dict | None) -> bool:
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-            self._tick_id = 0
-        self._bar.set_fraction(1.0 if ok else self._bar.get_fraction())
-        self._switch_message.set_text(message)
-        self._switch_message.set_visible(True)
-        if ok:
-            self._switch_message.remove_css_class("error")
-        else:
-            self._switch_message.add_css_class("error")
-        self._poller.end_switch(ok, message, info)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1076,11 @@ class UpdateCardBlock(Block):
         self._message.set_visible(False)
         card.append(self._message)
 
+        # S14: el progreso de la actualización vive en esta tarjeta.
+        # Columna de 276 px: textos estrechos para no ensancharla.
+        self._progress = progreso.ProgressInline("engine-update", max_chars=28)
+        card.append(self._progress)
+
         self.body.append(card)
 
         self._poller.subscribe(self._on_state)
@@ -1149,8 +1123,12 @@ class UpdateCardBlock(Block):
         self._button.set_sensitive(card.button_enabled and not state.updating)
         self._button.set_tooltip_text(card.button_tooltip + " (Ctrl U)")
 
+        # Mientras el bloque de progreso muestra la acción, el mensaje suelto
+        # sobraría (dice lo mismo).
         self._message.set_text(state.update_message)
-        self._message.set_visible(bool(state.update_message))
+        self._message.set_visible(
+            bool(state.update_message) and not self._progress.get_visible()
+        )
 
     # -- acción: actualizar (misma ruta que Motores) -----------------------
 
@@ -1187,7 +1165,12 @@ class UpdateCardBlock(Block):
         dialog.present()
 
     def _begin_update(self) -> None:
+        if progreso.HUB.running("engine-update"):
+            return
         self._poller.begin_update()
+        activity = progreso.begin(progreso.pl.engine_update_action(
+            section="home", anchor=self._progress, retry=self.request_update,
+        ))
 
         def _worker() -> None:
             result = run_manager(("engine", "update", "--yes", "--json"), UPDATE_TIMEOUT_S)
@@ -1195,10 +1178,21 @@ class UpdateCardBlock(Block):
             status = run_manager(("engine", "status", "--json"), STATUS_TIMEOUT_S)
             message = parse_update_result(_as_cli_result(result))
             parsed = parse_engine_status(_as_cli_result(status))
-            GLib.idle_add(self._on_update_done, result.returncode, message, parsed)
+            GLib.idle_add(self._on_update_done, result.returncode, message, parsed,
+                          activity, (result.stderr or result.stdout or "").strip())
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_update_done(self, returncode: int | None, message: str, status) -> bool:
+    def _on_update_done(self, returncode: int | None, message: str, status,
+                        activity=None, log: str = "") -> bool:
+        if activity is not None:
+            progreso.finish(
+                activity, returncode == 0,
+                "Motor actualizado" if returncode == 0 else (
+                    "Actualización revertida" if returncode == 1
+                    else "No se actualizó el motor"
+                ),
+                message, log,
+            )
         self._poller.end_update(returncode, message, status)
         return False

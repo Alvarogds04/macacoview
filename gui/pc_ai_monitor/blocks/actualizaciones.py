@@ -23,7 +23,8 @@ import time
 
 from gi.repository import GLib, Gtk
 
-from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks import Block, progreso
+from pc_ai_monitor.blocks import progreso_logica as pl
 from pc_ai_monitor.blocks.actualizaciones_logica import (
     BUILD_CONFIRM_TEXT,
     BUILD_CONFIRM_TITLE,
@@ -35,7 +36,7 @@ from pc_ai_monitor.blocks.actualizaciones_logica import (
     parse_updates,
     update_args,
 )
-from pc_ai_monitor.blocks.motores import run_manager
+from pc_ai_monitor.blocks.motores import run_manager, stream_manager
 from pc_ai_monitor.datos import Snapshot
 
 REFRESH_INTERVAL_S = 60.0
@@ -97,6 +98,8 @@ class ActualizacionesBlock(Block):
 
         self._render()
         self._refresh(force=True)
+        # Un botón nunca invita a repetir una actualización que ya corre.
+        progreso.HUB.subscribe_widget(self._render)
 
     # -- ciclo -------------------------------------------------------------
 
@@ -167,11 +170,16 @@ class ActualizacionesBlock(Block):
         )
 
     def _build_row(self, row: UpdateRow) -> dict:
-        widget = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        # Fila = línea (icono, nombres, eta, píldora, botón) + el progreso de
+        # su propia actualización debajo (S14: la barra vive en la fila que la
+        # empezó).
+        widget = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        widget.append(line)
 
         icon = Gtk.Image.new_from_icon_name(_KIND_ICONS.get(row.kind, _FALLBACK_ICON))
         icon.set_valign(Gtk.Align.CENTER)
-        widget.append(icon)
+        line.append(icon)
 
         names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         name = Gtk.Label(label=row.name, xalign=0)
@@ -184,27 +192,31 @@ class ActualizacionesBlock(Block):
         installed.set_ellipsize(3)
         names.append(installed)
         names.set_hexpand(True)
-        widget.append(names)
+        line.append(names)
 
         eta = Gtk.Label(xalign=0)
         eta.add_css_class("caption")
         eta.add_css_class("muted")
         eta.set_valign(Gtk.Align.CENTER)
-        widget.append(eta)
+        line.append(eta)
 
         pill = Gtk.Label(xalign=0)
         pill.add_css_class("vpill")
         pill.set_valign(Gtk.Align.CENTER)
-        widget.append(pill)
+        line.append(pill)
 
         button = Gtk.Button(label="Actualizar")
         button.add_css_class("suggested-action")
         button.set_halign(Gtk.Align.END)
         button.connect("clicked", self._on_row_clicked, row.id)
-        widget.append(button)
+        line.append(button)
+
+        progress = progreso.ProgressInline(f"update:{row.id}")
+        widget.append(progress)
 
         return {
             "widget": widget,
+            "progress": progress,
             "name": name,
             "installed": installed,
             "eta": eta,
@@ -228,7 +240,9 @@ class ActualizacionesBlock(Block):
             pill.add_css_class(_PILL_CLASSES[row.pill_class])
 
         button = widgets["button"]
-        button.set_sensitive(row.button_enabled and not self._busy)
+        running = progreso.HUB.running(f"update:{row.id}")
+        button.set_label("Actualizando…" if running else "Actualizar")
+        button.set_sensitive(row.button_enabled and not self._busy and not running)
         button.set_tooltip_text(row.apply or row.reason or "Actualiza este componente.")
         # La frase completa (qué hace la actualización) vive en el tooltip (S12).
         widgets["widget"].set_tooltip_text(row.apply or row.reason or "")
@@ -301,17 +315,56 @@ class ActualizacionesBlock(Block):
         self._note.set_visible(True)
         self._render()
 
+        # S14: una actividad por componente; cada una entra al hub cuando le
+        # toca (el «Actualizar todo» corre uno detrás de otro).
+        activities = [
+            (row, with_build, self._activity_for(row, with_build))
+            for row, with_build in plan
+        ]
+
         def _worker() -> None:
             messages = []
-            for row, with_build in plan:
-                result = run_manager(update_args(row, with_build), UPDATE_TIMEOUT_S)
+            for row, with_build, activity in activities:
+                progreso.post(progreso.HUB.begin, activity)
+                build = pl.BuildProgress() if with_build else None
+
+                def _on_line(line: str, activity=activity, build=build) -> None:
+                    if build is not None:
+                        progreso.post(_feed_build, activity, build, line)
+
+                result = stream_manager(
+                    run_manager,
+                    update_args(row, with_build),
+                    UPDATE_TIMEOUT_S,
+                    _on_line,
+                )
                 outcome = parse_update_result(_as_cli(result))
                 messages.append(f"{row.name}: {outcome.message}")
+                progreso.post(_finish_update, activity, row, outcome, result)
             listing = run_manager(("updates", "--json"))
             view = parse_updates(_as_cli(listing))
             GLib.idle_add(self._on_done, "\n".join(messages), view)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _activity_for(self, row: UpdateRow, with_build: bool) -> pl.Activity:
+        widgets = self._rows.get(row.id)
+        return pl.update_action(
+            row.id,
+            _short_name(row.name),
+            row.eta_s,
+            with_build=with_build,
+            section="motores",
+            anchor=widgets["progress"] if widgets else None,
+            retry=lambda row_id=row.id: self._retry(row_id),
+        )
+
+    def _retry(self, row_id: str) -> None:
+        """«Reintentar»: vuelve a pedir confirmación, nunca corre a ciegas."""
+        row = next((r for r in self._view.rows if r.id == row_id), None)
+        if row is None or self._busy or not row.updatable:
+            return
+        self._confirm([(row, False)])
 
     def _on_done(self, message: str, view: UpdatesView) -> bool:
         self._busy = False
@@ -342,6 +395,35 @@ class ActualizacionesBlock(Block):
         dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
         dialog.add_button("Actualizar", Gtk.ResponseType.ACCEPT)
         return dialog
+
+
+def _short_name(name: str) -> str:
+    """«Motor Abito (llama.cpp-newmodels)» → «Motor Abito» para la barra."""
+    return name.split(" (", 1)[0]
+
+
+def _feed_build(activity: pl.Activity, build: pl.BuildProgress, line: str) -> None:
+    """Hilo de GTK: una línea de la compilación → etapa y % reales."""
+    if build.feed(line):
+        activity.set_stage(build.stage)
+        activity.set_percent(build.percent)
+
+
+def _finish_update(activity: pl.Activity, row: UpdateRow, outcome, result) -> None:
+    name = _short_name(row.name)
+    if outcome.kind in ("applied", "noop"):
+        activity.succeed(f"{name}: {outcome.message}")
+        return
+    headline = {
+        "rollback": f"No se pudo actualizar {name} · revertida",
+        "refused": f"No se actualizó {name}",
+        "build_required": f"{name}: falta confirmar la compilación",
+    }.get(outcome.kind, f"No se pudo actualizar {name}")
+    activity.fail(
+        headline,
+        outcome.message,
+        log=(result.stderr or result.stdout or "").strip(),
+    )
 
 
 def _as_cli(result) -> CliResult:

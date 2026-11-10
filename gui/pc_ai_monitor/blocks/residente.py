@@ -11,7 +11,7 @@ import time
 
 from gi.repository import Adw, GLib, Gtk
 
-from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks import Block, progreso, rendimiento
 from pc_ai_monitor.blocks.motores import _run_manager, run_manager
 from pc_ai_monitor.blocks.residente_logica import (
     ENGINES,
@@ -20,9 +20,6 @@ from pc_ai_monitor.blocks.residente_logica import (
     engine_view,
     headline,
     parse_resident,
-    progress_fraction,
-    progress_text,
-    switch_outcome,
 )
 from pc_ai_monitor.datos import Snapshot
 
@@ -102,17 +99,9 @@ class ResidenteBlock(Block):
             row.append(self._options[engine])
         self.body.append(row)
 
-        self._bar = Gtk.ProgressBar()
-        self._bar.set_visible(False)
-        self.body.append(self._bar)
-        self._message = Gtk.Label(xalign=0)
-        self._message.add_css_class("muted")
-        self._message.set_wrap(True)
-        self._message.set_max_width_chars(80)
-        self._message.set_visible(False)
-        self.body.append(self._message)
-        self._started = 0.0
-        self._tick_id = 0
+        # S14: progreso honesto (etapa del guard, nunca un % por reloj).
+        self._progress = progreso.ProgressInline("switch")
+        self.body.append(self._progress)
 
         self._render()
         self._refresh(force=True)
@@ -146,7 +135,7 @@ class ResidenteBlock(Block):
         return False
 
     def _ask_confirmation(self, target: str) -> None:
-        if self._switching is not None:
+        if self._switching is not None or progreso.HUB.running("switch"):
             return
         title, body = confirm_text(target)
         root = self.get_root()
@@ -169,51 +158,23 @@ class ResidenteBlock(Block):
         dialog.present()
 
     def _start_switch(self, target: str) -> None:
+        if progreso.HUB.running("switch"):
+            return
         self._switching = target
-        self._started = time.monotonic()
-        self._message.remove_css_class("error")
-        self._message.set_text(progress_text(0, target))
-        self._message.set_visible(True)
-        self._bar.set_fraction(0.0)
-        self._bar.set_visible(True)
-        self._tick_id = GLib.timeout_add(250, self._tick)
         self._render()
+        progreso.run_switch(
+            target,
+            lambda args, timeout: run_manager(args, timeout),
+            lambda *args: _run_manager(*args),
+            lambda: rendimiento._run_gufo_flash_status(),
+            self._on_switched,
+            section="motores",
+            anchor=self._progress,
+            retry=lambda: self._ask_confirmation(target),
+            timeout=SWITCH_TIMEOUT_S,
+        )
 
-        def _worker() -> None:
-            result = run_manager(("switch", target), SWITCH_TIMEOUT_S)
-            ok, message = switch_outcome(result.returncode, result.stderr, result.stdout, target, result.failure)
-            after = _run_manager("resident")
-            info = parse_resident(after.stdout) if after.returncode == 0 else None
-            GLib.idle_add(self._on_switched, ok, message, info)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _tick(self) -> bool:
-        if self._switching is None:
-            self._tick_id = 0
-            return False
-        elapsed = time.monotonic() - self._started
-        self._bar.set_fraction(progress_fraction(elapsed, self._switching))
-        self._message.set_text(progress_text(elapsed, self._switching))
-        return True
-
-    def _on_switched(self, ok: bool, message: str, info: dict | None) -> bool:
+    def _on_switched(self, ok: bool, message: str, info: dict | None) -> None:
+        del ok, message  # el resultado lo pinta el bloque de progreso (S14)
         self._switching = None
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-            self._tick_id = 0
-        self._bar.set_fraction(1.0 if ok else self._bar.get_fraction())
-        GLib.timeout_add(1500, self._hide_bar)
-        self._message.set_text(("✔ " if ok else "✘ ") + message)
-        self._message.set_visible(True)
-        if ok:
-            self._message.remove_css_class("error")
-        else:
-            self._message.add_css_class("error")
         self._on_resident(info)
-        return False
-
-    def _hide_bar(self) -> bool:
-        if self._switching is None:
-            self._bar.set_visible(False)
-        return False

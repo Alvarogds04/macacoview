@@ -40,9 +40,17 @@ class CommandResult:
 
 
 def run_manager(
-    args: tuple[str, ...], timeout: int = COMMAND_TIMEOUT_S
+    args: tuple[str, ...],
+    timeout: int = COMMAND_TIMEOUT_S,
+    on_line: Callable[[str], None] | None = None,
 ) -> CommandResult:
-    """Ejecuta el administrador con un plazo dado; solo se usa desde workers."""
+    """Ejecuta el administrador con un plazo dado; solo se usa desde workers.
+
+    Con ``on_line`` cada línea de stdout/stderr llega mientras el comando
+    corre (S14: el % real de cmake al compilar); el resultado es el mismo.
+    """
+    if on_line is not None:
+        return _stream_process([MANAGER, *args], timeout, on_line)
     try:
         completed = subprocess.run(
             [MANAGER, *args],
@@ -65,6 +73,88 @@ def run_manager(
     )
 
 
+# ``stream_manager`` sólo pide líneas en vivo a los runners que lo declaran.
+run_manager.streams_lines = True  # type: ignore[attr-defined]
+
+
+def _stream_process(
+    argv: list[str], timeout: float, on_line: Callable[[str], None]
+) -> CommandResult:
+    """Corre ``argv`` leyendo stdout y stderr línea a línea (worker only).
+
+    ``on_line`` se llama desde hilos lectores: quien la pase debe llevar el
+    dato al hilo de GTK (``GLib.idle_add``).
+    """
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        return CommandResult(None, failure="missing")
+    except OSError as exc:
+        return CommandResult(None, stderr=str(exc), failure="oserror")
+
+    captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
+
+    def _read(stream, sink: list[str]) -> None:
+        for raw in stream:
+            for line in raw.replace("\r", "\n").splitlines():
+                sink.append(line)
+                on_line(line)
+        stream.close()
+
+    readers = [
+        threading.Thread(
+            target=_read, args=(process.stdout, captured["stdout"]), daemon=True
+        ),
+        threading.Thread(
+            target=_read, args=(process.stderr, captured["stderr"]), daemon=True
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        for reader in readers:
+            reader.join(1.0)
+        return CommandResult(None, failure="timeout")
+    for reader in readers:
+        reader.join(5.0)
+    return CommandResult(
+        returncode,
+        "\n".join(captured["stdout"]).strip(),
+        "\n".join(captured["stderr"]).strip(),
+    )
+
+
+def stream_manager(
+    runner: Callable[..., CommandResult],
+    args: tuple[str, ...],
+    timeout: float,
+    on_line: Callable[[str], None],
+) -> CommandResult:
+    """Corre ``runner`` (el ``run_manager`` del módulo que llama) con líneas.
+
+    Cada bloque pasa SU nombre ``run_manager``: así el guard de aislamiento
+    de los tests, que lo sustituye, sigue siendo la única ruta. Un runner que
+    no declara ``streams_lines`` corre normal y sus líneas llegan al final.
+    """
+    if getattr(runner, "streams_lines", False):
+        return runner(args, timeout, on_line=on_line)
+    result = runner(args, timeout)
+    for text in (result.stderr, result.stdout):
+        for line in (text or "").splitlines():
+            on_line(line)
+    return result
+
+
 def _run_manager(*args: str) -> CommandResult:
     """Ejecuta el administrador con el plazo común de las acciones."""
     return run_manager(args)
@@ -73,7 +163,9 @@ def _run_manager(*args: str) -> CommandResult:
 def _command_failure(result: CommandResult, action: str, model: str) -> str:
     """Traduce cada salida contractual a un mensaje accionable."""
     if result.failure == "missing":
-        return "No se encontró local-ai-models. Revisá la instalación del administrador."
+        return (
+            "No se encontró local-ai-models. Revisá la instalación del administrador."
+        )
     if result.failure == "timeout":
         return f"{model}: la operación agotó el tiempo de espera; se volvió a leer el estado."
     if result.failure:
@@ -95,10 +187,7 @@ def _command_failure(result: CommandResult, action: str, model: str) -> str:
         )
 
     detail = result.stderr or result.stdout or "sin detalle"
-    return (
-        f"{model}: local-ai-models terminó con código {result.returncode}: "
-        f"{detail}"
-    )
+    return f"{model}: local-ai-models terminó con código {result.returncode}: {detail}"
 
 
 def _parse_capacity(stdout: str) -> dict[str, str]:
@@ -122,7 +211,9 @@ def _load_inventory() -> tuple[list[dict] | None, str | None]:
     except (TypeError, ValueError):
         return None, "local-ai-models devolvió un estado JSON inválido."
 
-    if not isinstance(models, list) or not all(isinstance(item, dict) for item in models):
+    if not isinstance(models, list) or not all(
+        isinstance(item, dict) for item in models
+    ):
         return None, "local-ai-models devolvió un inventario inválido."
 
     inventory: list[dict] = []
@@ -143,17 +234,13 @@ def _load_inventory() -> tuple[list[dict] | None, str | None]:
             if route in {"local", "cloud"}:
                 model["capacity_route"] = route
                 if route == "cloud":
-                    model["capacity_reason"] = (
-                        "no hay margen para conservar 20 GiB"
-                    )
+                    model["capacity_reason"] = "no hay margen para conservar 20 GiB"
             elif capacity.returncode != 0:
                 model["capacity_reason"] = _command_failure(
                     capacity, "ensure", model_name
                 )
             else:
-                model["capacity_reason"] = (
-                    "no se pudo confirmar el margen de memoria"
-                )
+                model["capacity_reason"] = "no se pudo confirmar el margen de memoria"
         inventory.append(model)
 
     return inventory, None
@@ -211,7 +298,17 @@ class EngineControlBlock(Gtk.Box):
         self._notification.set_visible(False)
         self.append(self._notification)
 
+        # S14: el progreso de Encender/Apagar vive en esta tarjeta.
+        from pc_ai_monitor.blocks.progreso import ProgressInline
+
+        model_name = str(model.get("model", ""))
+        self._progress = ProgressInline(f"engine:{model_name}")
+        self.append(self._progress)
+
         self.update_model(model)
+        from pc_ai_monitor.blocks.progreso import HUB
+
+        HUB.subscribe_widget(self._render)
 
     @property
     def model_name(self) -> str:
@@ -276,12 +373,13 @@ class EngineControlBlock(Gtk.Box):
         self._reason_label.set_text(reason)
         self._reason_label.set_visible(bool(reason))
 
-        action_running = self._running_action is not None
+        from pc_ai_monitor.blocks.progreso import HUB
+
+        action_running = self._running_action is not None or HUB.running(
+            f"engine:{model_name}"
+        )
         can_start = (
-            not action_running
-            and not healthy
-            and not problem
-            and not capacity_reason
+            not action_running and not healthy and not problem and not capacity_reason
         )
         self._start_button.set_sensitive(can_start)
         self._stop_button.set_sensitive(not action_running and healthy)
@@ -395,10 +493,23 @@ class ModelsInventoryBlock(Block):
         return False
 
     def _request_action(self, model: str, action: str) -> None:
+        from pc_ai_monitor.blocks import progreso
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
         card = self._cards.get(model)
         if card is None:
             return
         card.begin_action(action)
+        retry = card._on_start if action == "ensure" else card._on_stop
+        self._activity = progreso.begin(
+            pl.engine_action(
+                model,
+                action,
+                section="motores",
+                anchor=card._progress,
+                retry=lambda: retry(None),
+            )
+        )
 
         def _worker() -> None:
             result = _run_manager(action, model)
@@ -427,6 +538,20 @@ class ModelsInventoryBlock(Block):
         elif inventory_error:
             self._manager_message.set_text(inventory_error)
             self._manager_message.set_visible(True)
+
+        from pc_ai_monitor.blocks import progreso
+
+        activity = progreso.HUB.get(f"engine:{model}")
+        if activity is not None and activity.running:
+            ok, headline, detail = progreso.engine_outcome(
+                model,
+                action,
+                result,
+                inventory,
+                _command_failure(result, action, model),
+            )
+            log = (result.stderr or result.stdout or "").strip() if not ok else ""
+            progreso.finish(activity, ok, headline, detail, log)
 
         card = self._cards.get(model)
         if card is None:

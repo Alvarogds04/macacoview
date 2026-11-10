@@ -31,7 +31,7 @@ from collections import deque
 
 from gi.repository import Adw, GLib, Gtk
 
-from pc_ai_monitor.blocks import Block
+from pc_ai_monitor.blocks import Block, progreso, rendimiento
 from pc_ai_monitor.blocks.home import _headroom_value_text, _HeadroomBar
 from pc_ai_monitor.blocks.home_logica import (
     ABITO_PORT,
@@ -76,9 +76,6 @@ from pc_ai_monitor.blocks.residente_logica import (
     engine_view,
     headline,
     parse_resident,
-    progress_fraction,
-    progress_text,
-    switch_outcome,
 )
 from pc_ai_monitor.datos import Snapshot
 from pc_ai_monitor.widgets.graficos import Sparkline
@@ -105,9 +102,7 @@ def resident_figures(
     """
     reservation = RESERVATION_GIB[engine]
     reserved = f"≈ {reservation:.0f} GiB reservados"
-    model = engine_model(
-        models or [], GUFO_PORT if engine == "gufo" else ABITO_PORT
-    )
+    model = engine_model(models or [], GUFO_PORT if engine == "gufo" else ABITO_PORT)
     used = measured_gib(model) if model else None
     if used and _is_active(resident, engine):
         return reserved, f"{used:.1f} GiB en uso"
@@ -116,9 +111,7 @@ def resident_figures(
     return reserved, "—"
 
 
-def figures_text(
-    engine: str, models: list[dict] | None, resident: str | None
-) -> str:
+def figures_text(engine: str, models: list[dict] | None, resident: str | None) -> str:
     reserved, used = resident_figures(engine, models, resident)
     return f"{reserved} · {used}"
 
@@ -149,8 +142,6 @@ class ResidenteVistaBlock(Block):
         self._snapshot: Snapshot | None = None
         self._refreshing = False
         self._last_refresh = 0.0
-        self._started = 0.0
-        self._tick_id = 0
 
         self._headline = Gtk.Label(xalign=0)
         self._headline.add_css_class("heading")
@@ -163,15 +154,10 @@ class ResidenteVistaBlock(Block):
             row.append(self._cards[engine]["widget"])
         self.body.append(row)
 
-        self._bar = Gtk.ProgressBar()
-        self._bar.set_visible(False)
-        self.body.append(self._bar)
-        self._message = Gtk.Label(xalign=0)
-        self._message.add_css_class("muted")
-        self._message.set_wrap(True)
-        self._message.set_max_width_chars(60)
-        self._message.set_visible(False)
-        self.body.append(self._message)
+        # S14: el cambio de motor muestra su progreso honesto acá (etapa de
+        # gufo-flash status al cargar Gufo; nunca un % calculado por reloj).
+        self._progress = progreso.ProgressInline("switch")
+        self.body.append(self._progress)
 
         self._render()
         self._refresh(force=True)
@@ -225,9 +211,15 @@ class ResidenteVistaBlock(Block):
         box.append(button)
 
         return {
-            "widget": box, "lamp": lamp, "name": name, "status": status,
-            "meta": meta, "figures": figures, "hint": hint,
-            "reason": reason, "button": button,
+            "widget": box,
+            "lamp": lamp,
+            "name": name,
+            "status": status,
+            "meta": meta,
+            "figures": figures,
+            "hint": hint,
+            "reason": reason,
+            "button": button,
         }
 
     # -- ciclo -------------------------------------------------------------
@@ -268,11 +260,13 @@ class ResidenteVistaBlock(Block):
     # -- pintado -----------------------------------------------------------
 
     def _render(self) -> None:
-        self._headline.set_text(headline(self._info, self._switching))
+        # Un cambio empezado en Home también bloquea estos botones.
+        switching = self._switching or progreso.switching_target()
+        self._headline.set_text(headline(self._info, switching))
         models = self._snapshot.models() if self._snapshot else None
         resident = self._info.get("resident") if self._info else None
         for engine in ENGINES:
-            view = engine_view(self._info, engine, self._switching)
+            view = engine_view(self._info, engine, switching)
             self._render_card(self._cards[engine], view, models, resident)
 
     def _render_card(self, card: dict, view: dict, models, resident) -> None:
@@ -288,7 +282,8 @@ class ResidenteVistaBlock(Block):
         card["figures"].set_text(
             figures_text(
                 "gufo" if card is self._cards["gufo"] else "abito",
-                models, resident,
+                models,
+                resident,
             )
         )
         card["hint"].set_text(
@@ -304,7 +299,7 @@ class ResidenteVistaBlock(Block):
     # -- acción: cambiar de motor (misma confirmación y comando) -----------
 
     def _ask_confirmation(self, target: str) -> None:
-        if self._switching is not None:
+        if self._switching is not None or progreso.HUB.running("switch"):
             return
         view = engine_view(self._info, target, None)
         if not view["enabled"]:
@@ -330,57 +325,26 @@ class ResidenteVistaBlock(Block):
         dialog.present()
 
     def _start_switch(self, target: str) -> None:
+        if progreso.HUB.running("switch"):
+            return  # otro cambio (Home) ya está en curso
         self._switching = target
-        self._started = time.monotonic()
-        self._message.remove_css_class("error")
-        self._message.set_text(progress_text(0, target))
-        self._message.set_visible(True)
-        self._bar.set_fraction(0.0)
-        self._bar.set_visible(True)
-        self._tick_id = GLib.timeout_add(250, self._tick)
         self._render()
+        progreso.run_switch(
+            target,
+            lambda args, timeout: run_manager(args, timeout),
+            lambda *args: _run_manager(*args),
+            lambda: rendimiento._run_gufo_flash_status(),
+            self._on_switched,
+            section="motores",
+            anchor=self._progress,
+            retry=lambda: self._ask_confirmation(target),
+            timeout=SWITCH_TIMEOUT_S,
+        )
 
-        def _worker() -> None:
-            result = run_manager(("switch", target), SWITCH_TIMEOUT_S)
-            ok, message = switch_outcome(
-                result.returncode, result.stderr, result.stdout,
-                target, result.failure,
-            )
-            after = _run_manager("resident")
-            info = parse_resident(after.stdout) if after.returncode == 0 else None
-            GLib.idle_add(self._on_switched, ok, message, info)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _tick(self) -> bool:
-        if self._switching is None:
-            self._tick_id = 0
-            return False
-        elapsed = time.monotonic() - self._started
-        self._bar.set_fraction(progress_fraction(elapsed, self._switching))
-        self._message.set_text(progress_text(elapsed, self._switching))
-        return True
-
-    def _on_switched(self, ok: bool, message: str, info: dict | None) -> bool:
+    def _on_switched(self, ok: bool, message: str, info: dict | None) -> None:
+        del ok, message  # el resultado lo pinta el bloque de progreso
         self._switching = None
-        if self._tick_id:
-            GLib.source_remove(self._tick_id)
-            self._tick_id = 0
-        self._bar.set_fraction(1.0 if ok else self._bar.get_fraction())
-        GLib.timeout_add(1500, self._hide_bar)
-        self._message.set_text(("✔ " if ok else "✘ ") + message)
-        self._message.set_visible(True)
-        if ok:
-            self._message.remove_css_class("error")
-        else:
-            self._message.add_css_class("error")
         self._on_resident(info)
-        return False
-
-    def _hide_bar(self) -> bool:
-        if self._switching is None:
-            self._bar.set_visible(False)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -439,11 +403,23 @@ class RendimientoVistaBlock(Block):
 
         self._decode_spark = Sparkline(width=190, height=34, color="accent")
         self._decode_value = Gtk.Label(xalign=0)
-        grid.attach(self._tile(self._decode_spark, "Decode · tok/s", self._decode_value), 0, 1, 1, 1)
+        grid.attach(
+            self._tile(self._decode_spark, "Decode · tok/s", self._decode_value),
+            0,
+            1,
+            1,
+            1,
+        )
 
         self._prefill_spark = Sparkline(width=190, height=34, color="blue")
         self._prefill_value = Gtk.Label(xalign=0)
-        grid.attach(self._tile(self._prefill_spark, "Prefill · tok/s", self._prefill_value), 1, 1, 1, 1)
+        grid.attach(
+            self._tile(self._prefill_spark, "Prefill · tok/s", self._prefill_value),
+            1,
+            1,
+            1,
+            1,
+        )
 
         self._mtp_dial = Dial(size=54)
         grid.attach(self._tile(self._mtp_dial, "MTP"), 2, 1, 1, 1)
@@ -508,7 +484,9 @@ class RendimientoVistaBlock(Block):
         self._refresh(force=True)
 
     def _tile(
-        self, widget: Gtk.Widget | None, label: str,
+        self,
+        widget: Gtk.Widget | None,
+        label: str,
         extra: Gtk.Widget | None = None,
     ) -> Gtk.Box:
         """Una celda del grid: caption arriba, instrumento y valor debajo."""
@@ -583,7 +561,9 @@ class RendimientoVistaBlock(Block):
 
         GLib.idle_add(self._on_read_done, metrics, served, slots, guard)
 
-    def _on_read_done(self, metrics: Metrics, served: int | None, slots, guard: Guard) -> bool:
+    def _on_read_done(
+        self, metrics: Metrics, served: int | None, slots, guard: Guard
+    ) -> bool:
         self._refreshing = False
         if served is None and slots and slots[0].n_ctx is not None:
             served = slots[0].n_ctx
@@ -660,9 +640,7 @@ class RendimientoVistaBlock(Block):
             "configurada en ningún registro)."
         )
 
-        processing = (
-            metrics.requests_processing if metrics is not None else None
-        )
+        processing = metrics.requests_processing if metrics is not None else None
         self._reqs_value.set_text(
             f"{processing:.0f}" if processing is not None else "—"
         )
@@ -700,14 +678,10 @@ class RendimientoVistaBlock(Block):
         )
 
         kv = (
-            kv_percentage(metrics.kv_cache_usage_ratio)
-            if metrics is not None
-            else None
+            kv_percentage(metrics.kv_cache_usage_ratio) if metrics is not None else None
         )
         self._kv_bar.set_fraction((kv or 0.0) / 100.0)
-        self._kv_value.set_text(
-            f"{kv:.0f} %" if kv is not None else "sin datos"
-        )
+        self._kv_value.set_text(f"{kv:.0f} %" if kv is not None else "sin datos")
         self._kv_bar.set_tooltip_text(
             "Ventana KV en uso (llamacpp:kv_cache_usage_ratio)."
         )
@@ -715,20 +689,26 @@ class RendimientoVistaBlock(Block):
         device_lost = metrics.device_lost_total if metrics is not None else None
         gpu_state = gpu_lamp_state(device_lost)
         self._gpu_lamp.set_data(gpu_state)
-        self._gpu_label.set_text({
-            "ok": "GPU sana",
-            "down": "GPU con pérdidas",
-            "off": "GPU sin dato",
-        }.get(gpu_state, "GPU sin dato"))
+        self._gpu_label.set_text(
+            {
+                "ok": "GPU sana",
+                "down": "GPU con pérdidas",
+                "off": "GPU sin dato",
+            }.get(gpu_state, "GPU sin dato")
+        )
         self._gpu_label.set_tooltip_text(
             "Pérdidas de contexto GPU desde el arranque "
             "(gufo_device_lost_total): 0 es la buena noticia."
         )
 
         memory = self._snapshot.memory() if self._snapshot else {}
-        rows = headroom_rows(memory, guard) if guard is not None else (
-            HeadroomRow("disponible", None, None, 122.0),
-            HeadroomRow("conservadora", None, None, 122.0),
+        rows = (
+            headroom_rows(memory, guard)
+            if guard is not None
+            else (
+                HeadroomRow("disponible", None, None, 122.0),
+                HeadroomRow("conservadora", None, None, 122.0),
+            )
         )
         for bar, row in zip(self._headroom_bars, rows, strict=True):
             bar.set_data(row)
