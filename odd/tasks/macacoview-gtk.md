@@ -26,6 +26,8 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 - S17 «en recursos en pi es posible que me diga el nombre de cada sesion y lo que ocupa en memoria?»: Recursos → Pi lists one row per Pi session: name (`session_info.name` from the session JSONL, else cwd basename + short session id), PIDs, PSS as the main figure, RSS secondary, children; subagent sessions nested under their parent session; PSS never added to the group RSS («no sumar»), per 08 tab 4.
 - S18 Secondary text contrast: muted text uses `#8394A3` (≥4.5:1 on graphite) instead of `#5C6170`, as in 08 (L28).
 
+- S19 «pero sigue estando la lista super larga» / «es que calro no tengo ni idea que son todos estos podemos definorlo de una menera diferente y mas comoda para el CX?»: Configuración's «RAM por programa» no longer lists every discovered program. It shows the «Mostrar programas seleccionados» switch, the pinned programs (name, live memory, «Quitar») with an empty state, and «Agregar programa…» opening a dialog with a search box and the 15 largest by RAM, system/unreadable and < 50 MiB hidden behind «Incluir procesos del sistema y los chicos», per `design/macacoview-app/10-ram-por-programa-propuesta.html` section B/C (L34).
+
 ## Tasks
 
 | ID | Task | Specs | Route | Commit |
@@ -50,6 +52,7 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T13 | Motores (and Home): inline disabled reasons (S16) | S16 | worker A | 45bf986 |
 | T14 | Recursos Pi sessions (S17): collector per-session PSS/RSS/children + view | S17 | worker B | 9404b5c |
 | T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | deployed 2026-11-10 (L32) |
+| T16 | Short «RAM por programa» in Configuración + «Agregar programa…» dialog (S19); pinning from Recursos/Procesos, node/python names and per-session pins deferred (L34) | S19 | worker | — |
 
 ## Log
 
@@ -93,3 +96,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 - L31 (user, T12 decision, 2026-11-10): Gufo has no stop route in local-ai-models and `gufo-flash stop` restores Abito by default; asked what turning the Gufo switch off does; chose «Apagar Gufo deja todo apagado» (A): Gufo off and master off with Gufo running = `gufo-flash stop --no-restore`, with a confirmation like «¿Apagar abito?»; tests/_aislamiento.py gains a guard for that route.
 - L32 (deploy, 2026-11-10 13:34): T14b layout in aaa753d. T15: full suite 670 OK, config sha256 unchanged. Backup at ~/.local/state/macacoview-deploy/20261110-133347/. Replaced ~/.local/lib/pc-ai-monitor/pc_ai_monitor from `git archive aaa753d`, ~/.local/bin/pc-ai-stats, macacoview_programs.py and the new macacoview_pi_sessions.py; collector emits pi_sessions live (7); pc-ai-bar unchanged; service restarted, active, no errors in the journal. Not exercised live: the streamed update, ensure/stop/switch from the Home switches and `gufo-flash stop --no-restore` (tests stub them).
 - L33 (user, 2026-11-10): «borra los anteriores» → asked which; chose «Los diseños viejos: dejar solo la réplica»: removed design/macacoview/ (01–07, NOTES, INVENTARIO-APP, plus the untracked comments.json, handoffs.json and _descartados/) and design/macacoview-hoy-vs-08/ (today captures + 08). Tracked files stay recoverable from git at 9007d76; the canvas keeps only design/macacoview-app/ (replica 01–09 + proposal 10, not committed yet).
+- L34 (user, 2026-11-10): «pero sigue estando la lista super larga» → explained the installed app still has it (proposal 10 is only a design); chose «Arreglar ya la lista y lo demás después»: implement only proposal 10 sections B (short Configuración) and C (Agregar programa… dialog) now with the names the collector already allows (browsers by path, known apps, fallback name + short id); pinning from Recursos/Procesos, node/python script names, per-Pi-session pins and the 4 open questions stay for later.
