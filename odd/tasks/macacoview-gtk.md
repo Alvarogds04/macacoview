@@ -28,6 +28,8 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 
 - S19 «pero sigue estando la lista super larga» / «es que calro no tengo ni idea que son todos estos podemos definorlo de una menera diferente y mas comoda para el CX?»: Configuración's «RAM por programa» no longer lists every discovered program. It shows the «Mostrar programas seleccionados» switch, the pinned programs (name, live memory, «Quitar») with an empty state, and «Agregar programa…» opening a dialog with a search box and the 15 largest by RAM, system/unreadable and < 50 MiB hidden behind «Incluir procesos del sistema y los chicos», per `design/macacoview-app/10-ram-por-programa-propuesta.html` section B/C (L34).
 
+- S20 «arreglalo, dale, dale» (accepting the recommendation after L39): fix the non-blocking native-review findings of the Pi sessions collector (PI_SESSION_FILE taken from a child environ is not trusted as a path; pi roots filtered to the current user; the environ high-confidence mapping and datos.py:316-321 covered) and of the long-command runner (e4681c4: motores.py streaming runner, actualizaciones.py:331-367, motores.py:304-305, app.py:446, home.py:282-302), each with a test that fails first. Readability findings of 72e616f/aaa753d/8d3eccf and the fe23680 findings stay for later (L40).
+
 ## Tasks
 
 | ID | Task | Specs | Route | Commit |
@@ -53,6 +55,8 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T14 | Recursos Pi sessions (S17): collector per-session PSS/RSS/children + view | S17 | worker B | 9404b5c |
 | T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | deployed 2026-11-10 (L32) |
 | T16 | Short «RAM por programa» in Configuración + «Agregar programa…» dialog (S19); pinning from Recursos/Procesos, node/python names and per-session pins deferred (L34) | S19 | worker | 72e616f |
+| T17 | Pi sessions collector hardening from review findings (S20) | S20 S17 | worker | — |
+| T18 | Long-command runner fixes and tests from review findings (S20) | S20 S14 | worker | — |
 
 ## Log
 
@@ -108,3 +112,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
   - 8d3eccf GTK4 dialogs (medium, reliability, review-8ed9284bc8fb4c77): test gaps in test_confirmaciones.py:176-202.
   - 72e616f short RAM list (medium, readability+reliability, review-2eb82d3ae4329d13): programas_dialogo.py:107-114 and :131-133; programas_vista.py:248-260; settings.py:372-376 and :423.
   Approximate model cost of the round: ≈ USD 6.
+- L40 (user, 2026-11-10): «arreglalo, dale, dale» after the recommendation «arreglar solo las del colector de sesiones de Pi (ruta y usuario) y los tests de los comandos largos, y dejar las de legibilidad para después» → S20, T17, T18. Deploy in place after both.
