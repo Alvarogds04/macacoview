@@ -599,6 +599,47 @@ class DisabledReasonWidgetTests(unittest.TestCase):
         self.assertEqual(silent_disabled_buttons(page), [])
 
 
+
+class EngineCardProgressKeyTests(unittest.TestCase):
+    """R3-004 (T18, S20): a card's inline progress is ITS engine's only.
+
+    The card matched by prefix (``engine:abito``), so the card of «abito»
+    also showed (and pulsed for) the action of «abito-vl».
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from gi.repository import Gtk
+
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        self.progreso = progreso
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def test_a_card_ignores_an_engine_whose_name_extends_its_own(self):
+        from pc_ai_monitor.blocks import progreso_logica as pl
+        from pc_ai_monitor.blocks.motores import EngineControlBlock
+
+        model = {"model": "abito", "alias": "abito", "port": 11002, "ctx": 131072,
+                 "healthy": False, "problem": None, "capacity_reason": None}
+        card = EngineControlBlock(model, lambda *_a: None)
+        other = pl.engine_action("abito-vl", "ensure")
+        self.progreso.HUB.begin(other)
+        self.progreso.HUB.changed()
+        self.assertFalse(card._progress.get_visible())
+
+        own = pl.engine_action("abito", "ensure")
+        self.progreso.HUB.begin(own)
+        self.progreso.HUB.changed()
+        self.assertTrue(card._progress.get_visible())
+        self.assertIs(card._progress._activity, own)
+
+
 def GLib_pump_until(condition, timeout: float = 5.0) -> None:
     context = GLib.MainContext.default()
     deadline = time.monotonic() + timeout

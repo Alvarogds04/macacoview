@@ -1074,6 +1074,62 @@ class ShortcutTests(unittest.TestCase):
             self.assertTrue(poller.update_begun)
 
 
+
+class StartSwitchResilienceTests(unittest.TestCase):
+    """R3-006 (T18, S20): ``start_switch`` from Home must always end.
+
+    If the worker raised (the runner, the resident reread), the switch
+    activity stayed running and ``poller.state.switching`` stayed set: every
+    later switch was refused in silence (``HUB.running("switch")``).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        self.progreso = progreso
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _pump_until(self, condition, timeout=5.0):
+        from gi.repository import GLib
+
+        context = GLib.MainContext.default()
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() >= deadline:
+                return False
+            context.iteration(False)
+            time.sleep(0.01)
+        return True
+
+    def test_a_raising_runner_fails_the_switch_and_releases_the_poller(self):
+        from pc_ai_monitor.blocks import home
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        def broken(args, timeout=None):
+            raise RuntimeError("runner roto")
+
+        poller = FakePoller()
+        with mock.patch.object(home, "run_manager", broken):
+            home.start_switch(poller, "abito")
+            self.assertEqual(poller.state.switching, "abito")
+            finished = self._pump_until(
+                lambda: not self.progreso.HUB.running("switch")
+                and poller.state.switching is None
+            )
+        self.assertTrue(finished, "el cambio quedó colgado")
+        activity = self.progreso.HUB.get("switch")
+        assert activity is not None
+        progress = activity.progress()
+        self.assertEqual(progress.state, pl.ERROR)
+        self.assertIn("runner roto", progress.detail)
+
+
 if __name__ == "__main__":
     unittest.main()
 

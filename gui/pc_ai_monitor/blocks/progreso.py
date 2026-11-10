@@ -424,30 +424,37 @@ def run_switch(
     def _poll() -> None:
         stages = pl.SwitchStages()
         while not done.wait(interval):
-            guard = parse_guard(*status_reader())
-            if not guard.error and stages.feed(guard.phase):
+            try:
+                guard = parse_guard(*status_reader())
+            except Exception:  # noqa: BLE001 - a stage is a hint, never fatal
+                guard = None
+            if guard is not None and not guard.error and stages.feed(guard.phase):
                 post(activity.set_stage, stages.stage)
 
     def _worker() -> None:
         if activity.stages:
             threading.Thread(target=_poll, daemon=True).start()
-        result = runner(("switch", target), timeout)
-        done.set()
-        ok, message = switch_outcome(
-            result.returncode, result.stderr, result.stdout, target, result.failure
-        )
-        after = reader("resident")
-        info = parse_resident(after.stdout) if after.returncode == 0 else None
+        try:
+            result = runner(("switch", target), timeout)
+            ok, message = switch_outcome(
+                result.returncode, result.stderr, result.stdout, target, result.failure
+            )
+            log = (result.stderr or result.stdout or "").strip()
+        except Exception as exc:  # noqa: BLE001 - R3-006: the switch must end
+            ok, message, log = False, str(exc) or type(exc).__name__, ""
+        finally:
+            done.set()
+        try:
+            after = reader("resident")
+            info = parse_resident(after.stdout) if after.returncode == 0 else None
+        except Exception:  # noqa: BLE001 - without a reread the outcome stands
+            info = None
 
         def _finish() -> None:
             if ok:
                 activity.succeed(f"Residente: {NAMES[target]}", message)
             else:
-                activity.fail(
-                    f"No se cambió a {NAMES[target]}",
-                    message,
-                    log=(result.stderr or result.stdout or "").strip(),
-                )
+                activity.fail(f"No se cambió a {NAMES[target]}", message, log=log)
             on_done(ok, message, info)
 
         post(_finish)

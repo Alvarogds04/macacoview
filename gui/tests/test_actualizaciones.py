@@ -21,6 +21,11 @@ try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
 except ModuleNotFoundError:
     from tests import _sandbox  # noqa: F401
 
+try:  # discover puts tests/ on sys.path; `-m unittest tests.x` does not
+    import _aislamiento
+except ModuleNotFoundError:
+    from tests import _aislamiento
+
 from gi.repository import GLib, Gtk
 
 from pc_ai_monitor.blocks.actualizaciones_logica import (
@@ -38,6 +43,8 @@ UPDATES_FIXTURE = (FIXTURES / "updates_real_2026-11-04.json").read_text()
 RESULTS_FIXTURE = json.loads(
     (FIXTURES / "update_results_real_2026-11-04.json").read_text()
 )
+
+_aislamiento.isolate()
 
 
 def fixture_result(stdout: str = UPDATES_FIXTURE) -> CliResult:
@@ -664,6 +671,143 @@ class ActualizacionesWidgetTests(unittest.TestCase):
         block = self._block(missing)
         self.assertIn("sin actualizador", block._error_label.get_text())
         self.assertFalse(block._all_button.get_sensitive())
+
+
+
+def _tool(component_id, name, apply=None):
+    return {
+        "id": component_id, "kind": "tool", "name": name, "installed": "1",
+        "available": "2", "updatable": True, "reason": None,
+        "restarts_engine": False, "eta_s": 5, "apply": apply,
+    }
+
+
+def _listing(*components):
+    return json.dumps({"checked_at": "t", "components": list(components)})
+
+
+class UpdateFlowResilienceTests(unittest.TestCase):
+    """T18 (S20): review findings R3-001/R4-003 and R3-003/R4-001 on the
+    update flow. Every update ends, one failure never blocks the next, and
+    «Reintentar» does what the CLI asked for."""
+
+    setUpClass = ActualizacionesWidgetTests.setUpClass
+    _block = ActualizacionesWidgetTests._block
+
+    def setUp(self):
+        ActualizacionesWidgetTests.setUp(self)  # type: ignore[arg-type]
+        from pc_ai_monitor.blocks import progreso
+
+        self.progreso = progreso
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _pump_until(self, condition, timeout=5.0):
+        context = GLib.MainContext.default()
+        deadline = time.monotonic() + timeout
+        while not condition():
+            if time.monotonic() >= deadline:
+                return False
+            context.iteration(False)
+            time.sleep(0.01)
+        return True
+
+    def test_a_raising_update_fails_its_row_and_the_next_one_still_runs(self):
+        listing = _listing(_tool("a-uno", "Uno"), _tool("c-tres", "Tres"))
+        calls = []
+
+        def manager(args, timeout=None):
+            del timeout
+            calls.append(tuple(args))
+            if tuple(args)[:1] == ("updates",):
+                return CliResult(0, stdout=listing)
+            if "a-uno" in args:
+                raise RuntimeError("runner roto")
+            return CliResult(0, stdout=json.dumps({"verified": True}))
+
+        block = self._block(manager)
+        plan = [(row, False) for row in block._view.updatable_rows]
+        block._begin(plan)
+        self.assertTrue(self._pump_until(lambda: not block._busy), "quedó ocupado")
+
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        first = self.progreso.HUB.get("update:a-uno").progress()
+        second = self.progreso.HUB.get("update:c-tres").progress()
+        self.assertEqual(first.state, pl.ERROR)
+        self.assertIn("runner roto", first.detail)
+        self.assertEqual(second.state, pl.SUCCESS)
+        self.assertIn(("update", "c-tres", "--yes", "--json"), calls)
+        self.assertIn("Uno", block._note.get_text())
+        self.assertTrue(block._rows["c-tres"]["button"].get_sensitive())
+
+    def test_a_raising_listing_still_releases_the_block(self):
+        state = {"after": False}
+        listing = _listing(_tool("a-uno", "Uno"))
+
+        def manager(args, timeout=None):
+            del timeout
+            if tuple(args)[:1] == ("updates",):
+                if state["after"]:
+                    raise RuntimeError("listado roto")
+                return CliResult(0, stdout=listing)
+            state["after"] = True
+            return CliResult(0, stdout=json.dumps({"verified": True}))
+
+        block = self._block(manager)
+        block._begin([(block._view.updatable_rows[0], False)])
+        self.assertTrue(self._pump_until(lambda: not block._busy), "quedó ocupado")
+        self.assertIn("listado roto", block._error_label.get_text())
+
+    def test_a_raising_refresh_never_leaves_the_list_refreshing(self):
+        def manager(args, timeout=None):
+            raise RuntimeError("listado roto")
+
+        block = self._block(manager)
+        self.assertTrue(self._pump_until(lambda: not block._refreshing))
+        self.assertIn("listado roto", block._error_label.get_text())
+
+    def test_retry_after_build_required_asks_to_compile(self):
+        """A component outside ``needs_build`` that answers build_required:
+        «Reintentar» ran it again without --build, forever."""
+        listing = _listing(_tool("x-motor", "Motor X"))
+        calls = []
+        needs_build = RESULTS_FIXTURE["needs_confirmation_build"]
+
+        def manager(args, timeout=None):
+            del timeout
+            calls.append(tuple(args))
+            if tuple(args)[:1] == ("updates",):
+                return CliResult(0, stdout=listing)
+            if "--build" in args:
+                return CliResult(0, stdout=json.dumps({"verified": True}))
+            return CliResult(10, stdout=json.dumps(needs_build["stdout"]))
+
+        block = self._block(manager)
+        block._begin([(block._view.updatable_rows[0], False)])
+        self.assertTrue(self._pump_until(lambda: not block._busy))
+        activity = self.progreso.HUB.get("update:x-motor")
+        self.assertIn("falta confirmar la compilación", activity.progress().message)
+
+        with mock.patch.object(self.mod.Gtk, "MessageDialog", FakeDialog):
+            activity.retry()
+            self.assertEqual(len(FakeDialog.instances), 1)
+            FakeDialog.instances[0].respond(Gtk.ResponseType.ACCEPT)
+            self.assertEqual(len(FakeDialog.instances), 2, "no pidió compilar")
+            self.assertIn("Compilar", FakeDialog.instances[1].text)
+            FakeDialog.instances[1].respond(Gtk.ResponseType.ACCEPT)
+        self.assertTrue(self._pump_until(lambda: not block._busy))
+        self.assertIn(("update", "x-motor", "--build", "--yes", "--json"), calls)
+
+    def test_retry_while_another_update_runs_says_why(self):
+        listing = _listing(_tool("a-uno", "Uno"))
+        block = self._block(lambda args, timeout=None: CliResult(0, stdout=listing))
+        block._busy = True
+        with mock.patch.object(self.mod.Gtk, "MessageDialog", FakeDialog):
+            block._retry("a-uno")
+        self.assertEqual(FakeDialog.instances, [])
+        self.assertTrue(block._note.get_visible())
+        self.assertIn("esperá", block._note.get_text())
 
 
 if __name__ == "__main__":

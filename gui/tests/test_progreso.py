@@ -422,6 +422,91 @@ class StreamProcessTests(unittest.TestCase):
     def test_real_run_manager_declares_streaming(self):
         self.assertTrue(getattr(_original_run_manager(), "streams_lines", False))
 
+    # -- T18 (S20): review findings R3-002 / R4-002 on the streaming runner --
+
+    def test_a_raising_on_line_never_stops_draining_the_child(self):
+        """A broken callback must not kill the reader: the child would block
+        on a full pipe (64 KiB) and the update would end as a timeout."""
+        from pc_ai_monitor.blocks import motores
+
+        script = (
+            "import sys\n"
+            "for i in range(4000):\n"
+            "    sys.stdout.write('x' * 80 + '\\n')\n"
+            "print('{\"verified\": true}', flush=True)\n"
+        )
+
+        def broken(_line):
+            raise RuntimeError("callback roto")
+
+        result = motores._stream_process([sys.executable, "-c", script], 5, broken)
+        self.assertIsNone(result.failure)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(result.stdout.endswith('{"verified": true}'), result.stdout[-80:])
+
+    def test_non_utf8_output_is_replaced_not_lost(self):
+        """cmake/git may print bytes that are not UTF-8: the line keeps
+        flowing (with U+FFFD) instead of killing the reader."""
+        from pc_ai_monitor.blocks import motores
+
+        script = (
+            "import sys\n"
+            "sys.stderr.buffer.write(b'caf\\xe9\\n[ 50%] b\\n')\n"
+            "sys.stderr.flush()\n"
+            "print('ok', flush=True)\n"
+        )
+        lines = []
+        result = motores._stream_process([sys.executable, "-c", script], 10, lines.append)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("[ 50%] b", lines)
+        self.assertIn("caf\ufffd", result.stderr)
+        self.assertEqual(result.stdout, "ok")
+
+    def test_a_final_line_without_newline_survives_a_held_pipe(self):
+        """A grandchild that inherits the pipe keeps it open after the child
+        exits; the last JSON line (no newline) must not be dropped."""
+        from pc_ai_monitor.blocks import motores
+
+        script = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)'])\n"
+            "sys.stdout.write('{\"verified\": true}')\n"
+            "sys.stdout.flush()\n"
+        )
+        lines = []
+        with mock.patch.object(motores, "READER_GRACE_S", 0.5, create=True):
+            result = motores._stream_process(
+                [sys.executable, "-c", script], 10, lines.append
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '{"verified": true}')
+        self.assertIn('{"verified": true}', lines)
+
+    def test_timeout_keeps_the_output_read_so_far(self):
+        """«Ver detalle» of a timed-out update shows what it printed."""
+        from pc_ai_monitor.blocks import motores
+
+        script = (
+            "import sys, time\n"
+            "print('[ 40%] a', flush=True)\n"
+            "time.sleep(5)\n"
+        )
+        result = motores._stream_process([sys.executable, "-c", script], 0.5, lambda _l: None)
+        self.assertEqual(result.failure, "timeout")
+        self.assertIsNone(result.returncode)
+        self.assertEqual(result.stdout, "[ 40%] a")
+
+    def test_run_manager_tolerates_non_utf8_output(self):
+        """The plain runner raised UnicodeDecodeError into its worker, which
+        then never finished its activity."""
+        from pc_ai_monitor.blocks import motores
+
+        script = "import sys; sys.stdout.buffer.write(b'v\\xff1')"
+        with mock.patch.object(motores, "MANAGER", sys.executable):
+            result = _original_run_manager()(("-c", script), 10)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "v\ufffd1")
+
 
 def _original_run_manager():
     """La función real (el guard de aislamiento la sustituye en el módulo)."""
@@ -643,6 +728,23 @@ class ShellIndicatorTests(_GtkCase):
         self.progreso.HUB.changed()
         self.assertEqual(len(shown), 1)
         self.assertEqual(shown[0].get_title(), "Abito encendido")
+
+    def test_toast_title_is_plain_text(self):
+        """R3-005: Adw.Toast parses its title as Pango markup by default; a
+        name from the CLI with «&» or «<» would render an empty toast."""
+        application = self._app()
+        application._toasts = Adw.ToastOverlay()
+        application._watch_activities()
+        shown = []
+        application._toasts.add_toast = shown.append  # type: ignore[method-assign]
+
+        activity = pl.update_action("router-pi", "Router & <Pi>", None, section="motores")
+        self.progreso.HUB.begin(activity)
+        activity.fail("No se pudo actualizar Router & <Pi>", "x")
+        self.progreso.HUB.changed()
+        self.assertEqual(len(shown), 1)
+        self.assertFalse(shown[0].get_use_markup())
+        self.assertEqual(shown[0].get_title(), "No se pudo actualizar Router & <Pi>")
 
 
 class ActualizacionesProgressTests(_GtkCase):

@@ -37,7 +37,7 @@ from pc_ai_monitor.blocks.actualizaciones_logica import (
     parse_updates,
     update_args,
 )
-from pc_ai_monitor.blocks.motores import run_manager, stream_manager
+from pc_ai_monitor.blocks.motores import CommandResult, run_manager, stream_manager
 from pc_ai_monitor.datos import Snapshot
 
 REFRESH_INTERVAL_S = 60.0
@@ -69,6 +69,9 @@ class ActualizacionesBlock(Block):
         self._refreshing = False
         self._last_refresh = 0.0
         self._rows: dict[str, dict] = {}
+        # Ids whose last ``update`` answered build_required: their next run
+        # asks to compile instead of repeating the same refusal (R4-003).
+        self._build_required: set[str] = set()
 
         self._error_label = Gtk.Label(xalign=0)
         self._error_label.add_css_class("error")
@@ -123,7 +126,8 @@ class ActualizacionesBlock(Block):
         self._last_refresh = now
 
         def _worker() -> None:
-            result = run_manager(("updates", "--json"))
+            # Whatever happens, the list stops «refreshing» (R3-003).
+            result = _guarded(run_manager, ("updates", "--json"))
             GLib.idle_add(self._on_list_loaded, _as_cli(result))
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -282,13 +286,17 @@ class ActualizacionesBlock(Block):
         row = next((r for r in self._view.rows if r.id == row_id), None)
         if row is None or self._busy or not row.updatable:
             return
-        self._confirm([(row, False)])
+        self._confirm([self._step(row)])
 
     def _on_update_all_clicked(self, _button: Gtk.Button) -> None:
         rows = self._view.updatable_rows
         if not rows or self._busy:
             return
-        self._confirm([(row, False) for row in rows])
+        self._confirm([self._step(row) for row in rows])
+
+    def _step(self, row: UpdateRow) -> tuple[UpdateRow, bool]:
+        """(row, with_build): compile when the CLI already asked for it."""
+        return row, row.id in self._build_required
 
     def _confirm(self, plan: list[tuple[UpdateRow, bool]]) -> None:
         """Primera confirmación: eta y si el motor se reinicia (como engine.py)."""
@@ -313,7 +321,7 @@ class ActualizacionesBlock(Block):
         dialog.close()
         if response != Gtk.ResponseType.ACCEPT:
             return
-        build_rows = [row for row, with_build in plan if row.needs_build]
+        build_rows = [row for row, with_build in plan if row.needs_build or with_build]
         if build_rows:
             self._confirm_build(plan)
         else:
@@ -352,6 +360,8 @@ class ActualizacionesBlock(Block):
         ]
 
         def _worker() -> None:
+            # R3-003/R4-001: a runner that raises fails ITS row only; the
+            # next component still runs and the block is always released.
             messages = []
             for row, with_build, activity in activities:
                 progreso.post(progreso.HUB.begin, activity)
@@ -361,7 +371,8 @@ class ActualizacionesBlock(Block):
                     if build is not None:
                         progreso.post(_feed_build, activity, build, line)
 
-                result = stream_manager(
+                result = _guarded(
+                    stream_manager,
                     run_manager,
                     update_args(row, with_build),
                     UPDATE_TIMEOUT_S,
@@ -369,8 +380,9 @@ class ActualizacionesBlock(Block):
                 )
                 outcome = parse_update_result(_as_cli(result))
                 messages.append(f"{row.name}: {outcome.message}")
+                progreso.post(self._mark_build_required, row.id, outcome.kind)
                 progreso.post(_finish_update, activity, row, outcome, result)
-            listing = run_manager(("updates", "--json"))
+            listing = _guarded(run_manager, ("updates", "--json"))
             view = parse_updates(_as_cli(listing))
             GLib.idle_add(self._on_done, "\n".join(messages), view)
 
@@ -388,12 +400,29 @@ class ActualizacionesBlock(Block):
             retry=lambda row_id=row.id: self._retry(row_id),
         )
 
+    def _mark_build_required(self, row_id: str, kind: str) -> None:
+        if kind == "build_required":
+            self._build_required.add(row_id)
+        else:
+            self._build_required.discard(row_id)
+
     def _retry(self, row_id: str) -> None:
-        """«Reintentar»: vuelve a pedir confirmación, nunca corre a ciegas."""
+        """«Reintentar»: vuelve a pedir confirmación, nunca corre a ciegas.
+
+        Never a silent no-op (R3-001): when it cannot run, the note says why.
+        """
         row = next((r for r in self._view.rows if r.id == row_id), None)
-        if row is None or self._busy or not row.updatable:
+        if self._busy:
+            self._say("Hay otra actualización en curso; esperá a que termine.")
             return
-        self._confirm([(row, False)])
+        if row is None or not row.updatable:
+            self._say("Ya no hay versión nueva para reintentar: la lista se volvió a leer.")
+            return
+        self._confirm([self._step(row)])
+
+    def _say(self, text: str) -> None:
+        self._note.set_text(text)
+        self._note.set_visible(True)
 
     def _on_done(self, message: str, view: UpdatesView) -> bool:
         self._busy = False
@@ -467,6 +496,15 @@ def _finish_update(activity: pl.Activity, row: UpdateRow, outcome, result) -> No
         outcome.message,
         log=(result.stderr or result.stdout or "").strip(),
     )
+
+
+def _guarded(runner, *args) -> CommandResult:
+    """Worker: run ``runner(*args)``; an exception becomes a failed result
+    (never an unwinding worker that leaves the block busy)."""
+    try:
+        return runner(*args)
+    except Exception as exc:  # noqa: BLE001 - reported as the row's error
+        return CommandResult(None, stderr=str(exc) or type(exc).__name__, failure="oserror")
 
 
 def _as_cli(result) -> CliResult:

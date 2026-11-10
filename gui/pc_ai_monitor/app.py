@@ -444,6 +444,9 @@ class MonitorApplication(Adw.Application):
             return
         progress = activity.progress()
         toast = Adw.Toast.new(progress.message)
+        # The message carries CLI names and reasons: plain text, never markup
+        # («&» or «<» would leave an empty toast, R3-005).
+        toast.set_use_markup(False)
         toast.set_timeout(int(progreso.pl.LINGER_S))
         if activity.section:
             toast.set_button_label("Ver" if progress.state == progreso.pl.SUCCESS else "Ver detalle")

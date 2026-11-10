@@ -6,7 +6,9 @@ subproceso se ejecuta en el hilo principal de GTK.
 
 # pyright: reportAttributeAccessIssue=false
 
+import codecs
 import json
+import os
 import subprocess
 import threading
 import time
@@ -21,6 +23,9 @@ from pc_ai_monitor.datos import Snapshot
 MANAGER = "local-ai-models"
 COMMAND_TIMEOUT_S = 300
 REFRESH_INTERVAL_S = 5.0
+# After the child exits, how long the readers may keep draining its pipes. A
+# grandchild that inherited them can hold them open for good.
+READER_GRACE_S = 5.0
 
 PROBLEM_MESSAGES = {
     "missing_model_file": "falta el archivo del modelo",
@@ -55,9 +60,11 @@ def run_manager(
         completed = subprocess.run(
             [MANAGER, *args],
             capture_output=True,
-            text=True,
             timeout=timeout,
             check=False,
+            # cmake, git and npm output is not always UTF-8.
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return CommandResult(None, failure="missing")
@@ -83,55 +90,118 @@ def _stream_process(
     """Corre ``argv`` leyendo stdout y stderr línea a línea (worker only).
 
     ``on_line`` se llama desde hilos lectores: quien la pase debe llevar el
-    dato al hilo de GTK (``GLib.idle_add``).
+    dato al hilo de GTK (``GLib.idle_add``). Los lectores nunca dejan de
+    vaciar las tuberías (si no, el hijo se bloquea con la tubería llena): una
+    ``on_line`` que lanza deja de llamarse, los bytes que no son UTF-8 llegan
+    como U+FFFD y la última línea sin salto no se pierde aunque un nieto
+    herede la tubería. Al agotar el plazo se devuelve lo leído hasta ahí.
     """
     try:
         process = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
         )
     except FileNotFoundError:
         return CommandResult(None, failure="missing")
     except OSError as exc:
         return CommandResult(None, stderr=str(exc), failure="oserror")
 
-    captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
-
-    def _read(stream, sink: list[str]) -> None:
-        for raw in stream:
-            for line in raw.replace("\r", "\n").splitlines():
-                sink.append(line)
-                on_line(line)
-        stream.close()
-
-    readers = [
-        threading.Thread(
-            target=_read, args=(process.stdout, captured["stdout"]), daemon=True
-        ),
-        threading.Thread(
-            target=_read, args=(process.stderr, captured["stderr"]), daemon=True
-        ),
-    ]
-    for reader in readers:
+    out = _PipeReader(process.stdout, on_line)
+    err = _PipeReader(process.stderr, on_line)
+    for reader in (out, err):
         reader.start()
     try:
         returncode = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-        for reader in readers:
-            reader.join(1.0)
-        return CommandResult(None, failure="timeout")
+        _join_all((out, err), min(READER_GRACE_S, 1.0))
+        return CommandResult(None, out.collect(), err.collect(), failure="timeout")
+    _join_all((out, err), READER_GRACE_S)
+    return CommandResult(returncode, out.collect(), err.collect())
+
+
+def _join_all(readers, grace: float) -> None:
+    """Join every reader within ONE shared deadline (not ``grace`` each)."""
+    deadline = time.monotonic() + grace
     for reader in readers:
-        reader.join(5.0)
-    return CommandResult(
-        returncode,
-        "\n".join(captured["stdout"]).strip(),
-        "\n".join(captured["stderr"]).strip(),
-    )
+        reader.join(max(0.0, deadline - time.monotonic()))
+
+
+class _PipeReader:
+    """Drains one pipe into lines (worker only); see ``_stream_process``."""
+
+    def __init__(self, stream, on_line: Callable[[str], None]) -> None:
+        self._stream = stream
+        self._on_line: Callable[[str], None] | None = on_line
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._lock = threading.Lock()
+        self._lines: list[str] = []
+        self._pending = ""
+        self._carry_cr = False
+        self._collected = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout: float) -> None:
+        self._thread.join(timeout)
+
+    def _run(self) -> None:
+        fd = self._stream.fileno()
+        try:
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                self._take(self._decoder.decode(chunk))
+            self._take(self._decoder.decode(b"", final=True))
+        except (OSError, ValueError):
+            pass  # the pipe went away: what was read stays collected
+        finally:
+            try:
+                self._stream.close()
+            except OSError:
+                pass
+
+    def _take(self, text: str) -> None:
+        if not text:
+            return
+        with self._lock:
+            if self._collected:
+                return  # the result is out: keep draining, stop reporting
+            if self._carry_cr and text.startswith("\n"):
+                text = text[1:]  # "\r\n" split across two reads
+            self._carry_cr = text.endswith("\r")
+            text = self._pending + text.replace("\r\n", "\n").replace("\r", "\n")
+            *complete, self._pending = text.split("\n")
+            self._lines.extend(complete)
+        for line in complete:
+            self._emit(line)
+
+    def _emit(self, line: str) -> None:
+        callback = self._on_line
+        if callback is None:
+            return
+        try:
+            callback(line)
+        except Exception:  # noqa: BLE001 - a broken view must not stop the drain
+            self._on_line = None
+
+    def collect(self) -> str:
+        """Everything read so far, the unterminated last line included."""
+        with self._lock:
+            self._collected = True
+            tail = self._pending
+            self._pending = ""
+            if tail:
+                self._lines.append(tail)
+            lines = list(self._lines)
+        if tail:
+            self._emit(tail)
+        return "\n".join(lines).strip()
 
 
 def stream_manager(
@@ -165,9 +235,11 @@ def run_gufo_flash(args: tuple[str, ...], timeout: float = COMMAND_TIMEOUT_S) ->
         completed = subprocess.run(
             [GUFO_FLASH, *args],
             capture_output=True,
-            text=True,
             timeout=timeout,
             check=False,
+            # cmake, git and npm output is not always UTF-8.
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return CommandResult(None, failure="missing")
@@ -370,8 +442,9 @@ class EngineControlBlock(Gtk.Box):
         # S14: el progreso de Encender/Apagar vive en esta tarjeta.
         from pc_ai_monitor.blocks.progreso import ProgressInline
 
-        model_name = str(model.get("model", ""))
-        self._progress = ProgressInline(f"engine:{model_name}")
+        # Exact key: a prefix would also match «engine:abito-vl» (R3-004).
+        key = f"engine:{model.get('model', '')}"
+        self._progress = ProgressInline(lambda activity: activity.key == key)
         self.append(self._progress)
 
         self.update_model(model)
