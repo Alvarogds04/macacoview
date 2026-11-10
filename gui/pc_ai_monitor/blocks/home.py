@@ -245,7 +245,10 @@ class _HomePoller:
         self.state.switching = None
         if info is not None:
             self.state.resident_info = info
-        self.state.update_message = ("✔ " if ok else "✘ ") + message
+        if message == progreso.pl.STOPPED_MESSAGE:
+            self.state.update_message = message  # «Detener»: neutral, not ✘
+        else:
+            self.state.update_message = ("✔ " if ok else "✘ ") + message
         self.notify()
 
     def begin_update(self) -> None:
@@ -323,7 +326,7 @@ def start_switch(poller, target: str, *, anchor=None, retry=None) -> None:
     poller.begin_switch(target)
     progreso.run_switch(
         target,
-        lambda args, timeout: run_manager(args, timeout),
+        lambda args, timeout, **kw: run_manager(args, timeout, **kw),
         lambda *args: _run_manager(*args),
         lambda: _run_gufo_flash_status(),
         lambda ok, message, info: poller.end_switch(ok, message, info),
@@ -770,18 +773,37 @@ class MotorRowBlock(Block):
                 "Sin porcentaje: gufo-flash stop solo avisa al terminar. "
                 "Abito no vuelve solo."
             )
+        # S21: «Encender» Abito is a load: «Detener» ends it (stop abito).
+        stop = progreso.attach_stop(activity, engine) if action == "ensure" else None
         self._render()
 
         def _worker() -> None:
             if engine == "gufo":
                 result = motores.run_gufo_flash(("stop", "--no-restore"), 300)
+            elif stop is not None:
+                result = _run_manager(action, engine, stop=stop)
             else:
                 result = _run_manager(action, engine)
+            stop_result = None
+            if result.failure == "stopped":
+                stop_result = progreso.run_stop_route(engine, _run_manager)
             after = _run_manager("resident")
             info = parse_resident(after.stdout) if after.returncode == 0 else None
-            GLib.idle_add(self._on_engine_done, activity, engine, action, result, info)
+            if stop_result is not None:
+                GLib.idle_add(self._on_engine_stopped, activity, engine, stop_result, info)
+            else:
+                GLib.idle_add(self._on_engine_done, activity, engine, action, result, info)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_engine_stopped(self, activity, engine: str, stop_result: CommandResult,
+                           info: dict | None) -> bool:
+        """«Detener» ended the load: the switches follow the reread state."""
+        progreso.finish_stopped_load(activity, engine, stop_result, info)
+        if info is not None:
+            self._poller.state.resident_info = info
+        self._render()
+        return False
 
     def _on_engine_done(self, activity, engine: str, action: str,
                         result: CommandResult, info: dict | None) -> bool:

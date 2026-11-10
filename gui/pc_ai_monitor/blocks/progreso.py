@@ -6,6 +6,9 @@
   the card that started the action, under its button.
 * ``HeaderIndicator`` — the compact pill every section header carries;
   clicking it opens the section and focuses the card that started it.
+* «Detener» (S21) — while a model loads (``ensure abito``, ``switch gufo``)
+  the inline block offers it with a confirmation; ``attach_stop`` /
+  ``finish_stopped_load`` are the shared worker side.
 
 Workers never touch these objects: they hand changes to the main thread with
 ``post`` (``GLib.idle_add``), which also re-announces the hub.
@@ -32,7 +35,7 @@ class GtkActivityHub(pl.ActivityHub):
 
     def changed(self) -> None:
         super().changed()
-        if self.current() is not None and not self._tick_id:
+        if (self.current() is not None or self.lingering()) and not self._tick_id:
             self._tick_id = GLib.timeout_add(TICK_MS, self._tick)
 
     def reset(self) -> None:
@@ -42,7 +45,8 @@ class GtkActivityHub(pl.ActivityHub):
         super().reset()
 
     def _tick(self) -> bool:
-        if self.current() is None:
+        # A stopped load leaves the header at once but lingers in its card.
+        if self.current() is None and not self.lingering():
             self._tick_id = 0
             pl.ActivityHub.changed(self)  # last repaint: hide what expired
             return False
@@ -132,6 +136,16 @@ class ProgressInline(Gtk.Box):
         self._title.set_max_width_chars(max_chars)
         self._title.set_hexpand(True)
         head.append(self._title)
+        # S21: only while a model loads (the activity carries a stopper).
+        self._stop_button = Gtk.Button(label="Detener")
+        self._stop_button.add_css_class("act-stop-button")
+        self._stop_button.set_valign(Gtk.Align.CENTER)
+        self._stop_button.set_tooltip_text(
+            "Termina la carga y apaga el motor: ningún motor queda cargado."
+        )
+        self._stop_button.connect("clicked", self._on_stop)
+        self._stop_button.set_visible(False)
+        head.append(self._stop_button)
         self.append(head)
 
         self._steps_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -200,6 +214,35 @@ class ProgressInline(Gtk.Box):
         if self._activity is not None:
             self._activity.retry()
 
+    def _on_stop(self, _button) -> None:
+        """«Detener»: confirm first (same style as «¿Apagar abito?»)."""
+        activity = self._activity
+        if activity is None or not activity.progress().stoppable:
+            return
+        title, body = pl.stop_confirm_text(activity.target)
+        root = self.get_root()
+        dialog = Gtk.MessageDialog(
+            transient_for=root if isinstance(root, Gtk.Window) else None,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=title,
+            # GTK 4: propiedad «secondary-text» (no format_secondary_text).
+            secondary_text=body,
+        )
+        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Detener", Gtk.ResponseType.ACCEPT)
+
+        def _on_response(current: Gtk.MessageDialog, response: int) -> None:
+            current.close()
+            # The load may have ended on its own meanwhile: then nothing is
+            # sent (``request_stop`` refuses a finished activity).
+            if response == Gtk.ResponseType.ACCEPT and activity.request_stop():
+                HUB.changed()
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
     def _on_detail(self, _button) -> None:
         self._detail.set_visible(not self._detail.get_visible())
         self._detail_button.set_label(
@@ -214,7 +257,7 @@ class ProgressInline(Gtk.Box):
             return None
         if activity.running or activity.outcome == pl.ERROR:
             return activity
-        # Success: shown while it lingers in the header, then the card is clean.
+        # Success / stopped: shown while it lingers, then the card is clean.
         ago = activity.finished_ago()
         if ago is not None and ago < pl.LINGER_S:
             return activity
@@ -233,12 +276,14 @@ class ProgressInline(Gtk.Box):
         progress = activity.progress()
         self.set_visible(True)
 
-        for css in ("act-ok", "act-err"):
+        for css in ("act-ok", "act-err", "act-stop"):
             self.remove_css_class(css)
         if progress.state == pl.SUCCESS:
             self.add_css_class("act-ok")
         elif progress.state == pl.ERROR:
             self.add_css_class("act-err")
+        elif progress.state == pl.STOPPED:
+            self.add_css_class("act-stop")
 
         if progress.running:
             self._spinner.start()
@@ -247,6 +292,9 @@ class ProgressInline(Gtk.Box):
             self._spinner.stop()
             self._spinner.set_visible(False)
         self._title.set_text(pl.headline(progress))
+        # Visible for the whole load; disabled once confirmed (one per load).
+        self._stop_button.set_visible(progress.stoppable or progress.stopping)
+        self._stop_button.set_sensitive(progress.stoppable)
 
         self._render_steps(progress)
         self._render_bar(progress)
@@ -261,8 +309,9 @@ class ProgressInline(Gtk.Box):
         self._note.set_visible(bool(note))
 
         failed = progress.state == pl.ERROR
-        self._msg.set_text(progress.detail if failed else "")
-        self._msg.set_visible(failed and bool(progress.detail))
+        explained = failed or progress.state == pl.STOPPED
+        self._msg.set_text(progress.detail if explained else "")
+        self._msg.set_visible(explained and bool(progress.detail))
         self._buttons.set_visible(failed and (progress.retry or bool(progress.log)))
         self._retry_button.set_visible(failed and progress.retry)
         self._detail_button.set_visible(failed and bool(progress.log))
@@ -388,6 +437,57 @@ class HeaderIndicator(Gtk.Button):
 STAGE_POLL_S = 2.0
 
 
+def attach_stop(activity: pl.Activity, target: str):
+    """Make a model load stoppable: returns the runner's ``StopRequest``.
+
+    Main thread, right after ``begin``. «Detener» (confirmed) calls
+    ``request()``; the runner then ends its own child and answers
+    ``failure="stopped"``.
+    """
+    from pc_ai_monitor.blocks.motores import StopRequest
+
+    stop = StopRequest()
+    activity.target = target
+    activity.stopper = stop.request
+    HUB.changed()  # the inline block shows «Detener» at once
+    return stop
+
+
+def run_stop_route(target: str, manager: Callable) -> object:
+    """Worker: the route that leaves nothing loaded after «Detener».
+
+    ``manager`` is the caller module's ``_run_manager`` (``stop abito``);
+    Gufo resolves ``motores.run_gufo_flash`` at call time
+    (``gufo-flash stop --no-restore``): the test isolation guard replaces
+    exactly those names.
+    """
+    from pc_ai_monitor.blocks import motores
+
+    if target == "gufo":
+        return motores.run_gufo_flash(("stop", "--no-restore"), motores.COMMAND_TIMEOUT_S)
+    return manager("stop", target)
+
+
+def finish_stopped_load(
+    activity: pl.Activity, target: str, stop_result, info: dict | None
+) -> bool:
+    """Main thread: close a stopped load from the confirmed state.
+
+    «Detenido» only when the stop route worked and ``resident`` confirms the
+    engine is not loaded; otherwise an error with its reason. Returns True
+    when it ended as stopped.
+    """
+    resident = info.get("resident") if info else None
+    state, message, detail = pl.stop_outcome(target, stop_result, resident)
+    if state == pl.STOPPED:
+        activity.halt(message, detail)
+    else:
+        log = (getattr(stop_result, "stderr", "") or getattr(stop_result, "stdout", "") or "")
+        activity.fail(message, detail, log=log.strip())
+    HUB.changed()
+    return state == pl.STOPPED
+
+
 def run_switch(
     target: str,
     runner: Callable,
@@ -418,6 +518,8 @@ def run_switch(
     )
 
     activity = begin(pl.switch_action(target, section=section, anchor=anchor, retry=retry))
+    # S21: switching to Gufo is a load: «Detener» ends it, nothing stays.
+    stop = attach_stop(activity, target) if target == "gufo" else None
     done = threading.Event()
     interval = STAGE_POLL_S if poll_s is None else poll_s
 
@@ -435,7 +537,13 @@ def run_switch(
         if activity.stages:
             threading.Thread(target=_poll, daemon=True).start()
         try:
-            result = runner(("switch", target), timeout)
+            if stop is not None:
+                result = runner(("switch", target), timeout, stop=stop)
+            else:
+                result = runner(("switch", target), timeout)
+            if result.failure == "stopped":
+                _stopped_worker(result)
+                return
             ok, message = switch_outcome(
                 result.returncode, result.stderr, result.stdout, target, result.failure
             )
@@ -456,6 +564,25 @@ def run_switch(
             else:
                 activity.fail(f"No se cambió a {NAMES[target]}", message, log=log)
             on_done(ok, message, info)
+
+        post(_finish)
+
+    def _stopped_worker(_result) -> None:
+        try:
+            stop_result = run_stop_route(target, reader)
+        except Exception as exc:  # noqa: BLE001 - the activity must end
+            from pc_ai_monitor.blocks.motores import CommandResult
+
+            stop_result = CommandResult(None, stderr=str(exc), failure="oserror")
+        try:
+            after = reader("resident")
+            info = parse_resident(after.stdout) if after.returncode == 0 else None
+        except Exception:  # noqa: BLE001 - unverified: never «Detenido»
+            info = None
+
+        def _finish() -> None:
+            stopped = finish_stopped_load(activity, target, stop_result, info)
+            on_done(False, activity.message if not stopped else pl.STOPPED_MESSAGE, info)
 
         post(_finish)
 

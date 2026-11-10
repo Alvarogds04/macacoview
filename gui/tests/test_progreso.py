@@ -839,7 +839,7 @@ class MotoresEngineProgressTests(_GtkCase):
         stopped = dict(_ABITO, healthy=False)
         healthy = json.dumps([dict(_ABITO, healthy=True)])
 
-        def fake(*args):
+        def fake(*args, **_kw):
             if args[:1] == ("ensure",):
                 hold.wait(5.0)
                 return _cli(0, "abito listo")
@@ -877,7 +877,7 @@ class SwitchProgressTests(_GtkCase):
             phase = next(phases, "postload")
             return json.dumps({"status": {"phase": phase}, "engine_ready": False}), 0, None
 
-        def runner(args, timeout=None):
+        def runner(args, timeout=None, **_kw):
             del timeout
             if tuple(args)[:1] == ("switch",):
                 hold.wait(5.0)
@@ -929,6 +929,431 @@ class HomeUpdateProgressTests(_GtkCase):
             hold.set()
             self.assertTrue(dialogos.pump_until(lambda: activity.progress().finished))
         self.assertEqual(activity.progress().state, pl.SUCCESS)
+
+
+# ---------------------------------------------------------------------------
+# T19 (S21): «Detener» mientras un modelo carga
+# ---------------------------------------------------------------------------
+
+
+class StopLogicTests(unittest.TestCase):
+    """Lógica pura de Detener: estado neutro, una sola orden, sin linger."""
+
+    def setUp(self):
+        self.clock = Clock()
+
+    def _ensure(self, stopper=None):
+        activity = pl.engine_action("abito", "ensure", clock=self.clock)
+        activity.stopper = stopper
+        return activity
+
+    def test_only_a_load_with_a_stopper_can_be_stopped(self):
+        self.assertFalse(self._ensure().progress().stoppable)
+        calls = []
+        activity = self._ensure(lambda: calls.append(1))
+        self.assertTrue(activity.progress().stoppable)
+
+    def test_request_stop_runs_the_stopper_once_and_disables_it(self):
+        calls = []
+        activity = self._ensure(lambda: calls.append(1))
+        self.assertTrue(activity.request_stop())
+        self.assertFalse(activity.request_stop())
+        self.assertEqual(calls, [1])
+        progress = activity.progress()
+        self.assertTrue(progress.running)
+        self.assertTrue(progress.stopping)
+        self.assertFalse(progress.stoppable)
+        self.assertEqual(pl.headline(progress), "Deteniendo la carga…")
+
+    def test_a_finished_load_ignores_a_late_stop(self):
+        calls = []
+        activity = self._ensure(lambda: calls.append(1))
+        activity.succeed("Abito encendido")
+        self.assertFalse(activity.request_stop())
+        self.assertEqual(calls, [])
+        self.assertFalse(activity.progress().stoppable)
+
+    def test_halt_is_a_neutral_end_distinct_from_success_and_error(self):
+        activity = self._ensure(lambda: None)
+        activity.request_stop()
+        self.clock.now += 4
+        activity.halt(pl.STOPPED_MESSAGE, "Ningún motor quedó cargado.")
+        progress = activity.progress()
+        self.assertEqual(progress.state, pl.STOPPED)
+        self.assertNotIn(progress.state, (pl.SUCCESS, pl.ERROR))
+        self.assertTrue(progress.finished)
+        self.assertFalse(progress.running)
+        self.assertFalse(progress.retry)
+        self.assertEqual(progress.message, "Carga detenida")
+        self.assertEqual(pl.headline(progress), "Detenido")
+        self.assertEqual(pl.meta_texts(progress), ("Tras 0:04", ""))
+
+    def test_a_stopped_load_clears_the_header_at_once(self):
+        hub = pl.ActivityHub(clock=self.clock)
+        activity = hub.begin(self._ensure(lambda: None))
+        self.assertIs(hub.current(), activity)
+        activity.halt(pl.STOPPED_MESSAGE)
+        hub.changed()
+        self.assertIsNone(hub.current())
+        # ...but the card still shows «Detenido» for a while.
+        self.assertTrue(hub.lingering())
+        self.clock.now += pl.LINGER_S + 1
+        self.assertFalse(hub.lingering())
+
+    def test_stopped_is_announced_once_like_any_outcome(self):
+        hub = pl.ActivityHub(clock=self.clock)
+        seen = []
+        hub.on_finished(seen.append)
+        activity = hub.begin(self._ensure(lambda: None))
+        activity.halt(pl.STOPPED_MESSAGE)
+        hub.changed()
+        hub.changed()
+        self.assertEqual(seen, [activity])
+
+    def test_confirmation_texts(self):
+        for target in ("abito", "gufo"):
+            title, body = pl.stop_confirm_text(target)
+            self.assertEqual(title, f"¿Detener la carga de {pl.display_name(target)}?")
+            self.assertIn("deja de cargarse", body)
+            self.assertIn("ningún motor queda cargado", body)
+
+    def test_stop_outcome(self):
+        ok = _cli(0)
+        self.assertEqual(
+            pl.stop_outcome("abito", ok, "none")[0], pl.STOPPED
+        )
+        state, message, detail = pl.stop_outcome("abito", _cli(1, "", "unit busy"), "none")
+        self.assertEqual(state, pl.ERROR)
+        self.assertEqual(message, "No se pudo detener Abito")
+        self.assertIn("unit busy", detail)
+        state, _m, detail = pl.stop_outcome("gufo", _cli(None, failure="missing"), None)
+        self.assertEqual(state, pl.ERROR)
+        self.assertIn("gufo-flash", detail)
+        # El backend dice que sigue cargado: nunca «Detenido».
+        state, _m, _d = pl.stop_outcome("abito", ok, "abito")
+        self.assertEqual(state, pl.ERROR)
+        # Sin relectura: nunca un estado que el backend no confirmó.
+        state, _m, detail = pl.stop_outcome("abito", ok, None)
+        self.assertEqual(state, pl.ERROR)
+        self.assertIn("no se pudo leer", detail)
+        # Gufo todavía cargando: tampoco.
+        self.assertEqual(pl.stop_outcome("gufo", ok, "gufo-loading")[0], pl.ERROR)
+
+
+class StopChildProcessTests(unittest.TestCase):
+    """Detener termina el hijo propio del runner: SIGTERM, luego SIGKILL."""
+
+    def _run_in_thread(self, call):
+        box = {}
+
+        def _target():
+            box["result"] = call()
+
+        thread = threading.Thread(target=_target, daemon=True)
+        thread.start()
+        return thread, box
+
+    def test_stop_terminates_a_real_sleep_and_returns_promptly(self):
+        import time
+
+        from pc_ai_monitor.blocks import motores
+
+        stop = motores.StopRequest()
+        started = time.monotonic()
+        thread, box = self._run_in_thread(
+            lambda: motores._stream_process(["sleep", "30"], 60, None, stop=stop)
+        )
+        time.sleep(0.3)
+        self.assertTrue(thread.is_alive())
+        stop.request()
+        thread.join(5.0)
+        self.assertFalse(thread.is_alive(), "el runner no volvió tras Detener")
+        self.assertLess(time.monotonic() - started, 5.0)
+        result = box["result"]
+        self.assertEqual(result.failure, "stopped")
+        self.assertIsNone(result.returncode)
+
+    def test_a_child_that_ignores_sigterm_is_killed_after_the_grace(self):
+        from pc_ai_monitor.blocks import motores
+
+        script = (
+            "import signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        ready = threading.Event()
+        stop = motores.StopRequest()
+        with mock.patch.object(motores, "STOP_GRACE_S", 0.3):
+            thread, box = self._run_in_thread(
+                lambda: motores._stream_process(
+                    [sys.executable, "-c", script], 60,
+                    lambda line: ready.set() if line == "ready" else None, stop=stop,
+                )
+            )
+            self.assertTrue(ready.wait(5.0))
+            stop.request()
+            thread.join(5.0)
+        self.assertFalse(thread.is_alive(), "SIGKILL no llegó")
+        self.assertEqual(box["result"].failure, "stopped")
+
+    def test_a_child_that_already_finished_is_its_own_outcome(self):
+        """Regla 4: si la carga terminó antes del pedido, no hay «stopped»."""
+        from pc_ai_monitor.blocks import motores
+
+        stop = motores.StopRequest()
+        result = motores._stream_process(["true"], 10, None, stop=stop)
+        stop.request()
+        self.assertEqual(result.returncode, 0)
+        self.assertIsNone(result.failure)
+
+    def test_the_real_run_manager_stops_its_own_child(self):
+        import time
+
+        from pc_ai_monitor.blocks import motores
+
+        stop = motores.StopRequest()
+        with mock.patch.object(motores, "MANAGER", "sleep"):
+            thread, box = self._run_in_thread(
+                lambda: _original_run_manager()(("30",), 60, stop=stop)
+            )
+            time.sleep(0.3)
+            stop.request()
+            thread.join(5.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(box["result"].failure, "stopped")
+
+
+class InlineStopButtonTests(_GtkCase):
+    """El bloque en línea: «Detener» sólo en cargas que lo ofrecen."""
+
+    def _open(self, inline):
+        dialogs = dialogos.presented_dialogs(lambda: inline._stop_button.emit("clicked"))
+        for dialog in dialogs:
+            self.addCleanup(dialogos.close, dialog)
+        self.assertEqual(len(dialogs), 1, "Detener no abrió su confirmación")
+        return dialogs[0]
+
+    def _load(self, stopper):
+        inline = self.progreso.ProgressInline("engine:abito")
+        activity = pl.engine_action("abito", "ensure")
+        activity.stopper = stopper
+        self.progreso.HUB.begin(activity)
+        return inline, activity
+
+    def test_no_detener_without_a_stopper(self):
+        inline = self.progreso.ProgressInline("engine:abito")
+        self.progreso.HUB.begin(pl.engine_action("abito", "ensure"))
+        self.assertNotIn("Detener", _labels(inline))
+
+    def test_detener_asks_like_apagar_and_cancel_does_nothing(self):
+        calls = []
+        inline, activity = self._load(lambda: calls.append(1))
+        self.assertIn("Detener", _labels(inline))
+        dialog = self._open(inline)
+        title, body = pl.stop_confirm_text("abito")
+        self.assertIsInstance(dialog, Gtk.MessageDialog)
+        self.assertEqual(dialog.get_property("text"), title)
+        self.assertEqual(dialog.get_property("secondary-text"), body)
+        self.assertEqual(dialogos.button_label(dialog, Gtk.ResponseType.CANCEL), "Cancelar")
+        self.assertEqual(dialogos.button_label(dialog, Gtk.ResponseType.ACCEPT), "Detener")
+        dialog.response(Gtk.ResponseType.CANCEL)
+        dialogos.pump(0.1)
+        self.assertEqual(calls, [])
+        self.assertTrue(activity.running)
+        self.assertTrue(inline._stop_button.get_sensitive())
+
+    def test_confirm_stops_once_and_disables_the_button(self):
+        calls = []
+        inline = self._load(lambda: calls.append(1))[0]
+        dialog = self._open(inline)
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        dialogos.pump(0.1)
+        self.assertEqual(calls, [1])
+        self.assertFalse(inline._stop_button.get_sensitive())
+        self.assertIn("Deteniendo la carga…", _labels(inline))
+        inline._stop_button.emit("clicked")  # desactivado: nada nuevo
+        dialogos.pump(0.1)
+        self.assertEqual(calls, [1])
+
+    def test_completion_while_the_dialog_is_open_sends_nothing(self):
+        calls = []
+        inline, activity = self._load(lambda: calls.append(1))
+        dialog = self._open(inline)
+        activity.succeed("Abito encendido")
+        self.progreso.HUB.changed()
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        dialogos.pump(0.1)
+        self.assertEqual(calls, [])
+        self.assertEqual(activity.progress().state, pl.SUCCESS)
+
+    def test_stopped_reads_detenido_and_has_no_retry(self):
+        inline, activity = self._load(lambda: None)
+        activity.request_stop()
+        activity.halt(pl.STOPPED_MESSAGE, "Ningún motor quedó cargado.")
+        self.progreso.HUB.changed()
+        texts = _labels(inline)
+        self.assertTrue(inline.get_visible())
+        self.assertTrue(inline.has_css_class("act-stop"))
+        self.assertIn("Detenido", texts)
+        self.assertIn("Ningún motor quedó cargado.", texts)
+        self.assertNotIn("Reintentar", texts)
+        self.assertNotIn("Detener", texts)
+
+    def test_header_indicator_clears_when_stopped(self):
+        indicator = self.progreso.HeaderIndicator(lambda *_a: None)
+        _inline, activity = self._load(lambda: None)
+        self.progreso.HUB.changed()
+        self.assertTrue(indicator.get_visible())
+        activity.halt(pl.STOPPED_MESSAGE)
+        self.progreso.HUB.changed()
+        self.assertFalse(indicator.get_visible())
+
+    def test_stopped_toast_says_carga_detenida(self):
+        application = ShellIndicatorTests._app(self)
+        application._toasts = Adw.ToastOverlay()
+        application._watch_activities()
+        shown = []
+        application._toasts.add_toast = shown.append  # type: ignore[method-assign]
+        _inline, activity = self._load(lambda: None)
+        activity.halt(pl.STOPPED_MESSAGE)
+        self.progreso.HUB.changed()
+        self.assertEqual([toast.get_title() for toast in shown], ["Carga detenida"])
+
+
+class DetenerOnlyForLoadsTests(_GtkCase):
+    """Regla 1: nunca en actualizaciones ni en apagados."""
+
+    def test_motores_ensure_abito_offers_detener_and_stop_does_not(self):
+        from pc_ai_monitor.blocks import motores
+
+        held = _aislamiento.HeldLoad(("ensure", "abito"), inventory=[_ABITO])
+        self.addCleanup(held.finish)
+        with mock.patch.object(motores, "_run_manager", held.manager_args):
+            block = motores.ModelsInventoryBlock()
+            dialogos.pump_until(lambda: not block._refreshing)
+            block._on_inventory_loaded([dict(_ABITO)], None)
+            card = block._cards["abito"]
+            card._start_button.emit("clicked")
+            self.assertTrue(held.started.wait(5.0))
+            dialogos.pump(0.1)
+            self.assertIn("Detener", _labels(card._progress))
+            held.finish()
+            self.assertTrue(dialogos.pump_until(
+                lambda: not _activity("engine:abito").running
+            ))
+        # «Apagar» (un apagado): sin Detener.
+        self.progreso.HUB.reset()
+        inline = self.progreso.ProgressInline("engine:abito")
+        block._request_action("abito", "stop")
+        dialogos.pump(0.05)
+        self.assertNotIn("Detener", _labels(inline))
+
+    def test_updates_never_offer_detener(self):
+        hold = threading.Event()
+        self.addCleanup(hold.set)
+        results = json.loads((_FIXTURES / "update_results_real_2026-11-04.json").read_text())
+        runner = StreamingRunner(
+            {("update", "engine-abito"): ["[ 12%] Building C object ggml.c.o"], ("updates",): []},
+            {
+                ("update", "engine-abito"): _cli(0, json.dumps(results["success_applied"]["stdout"])),
+                ("updates",): _cli(0, (_FIXTURES / "updates_real_2026-11-04.json").read_text()),
+            },
+            hold=hold,
+        )
+        block = ActualizacionesProgressTests._block(self, runner)
+        row = next(r for r in block._view.rows if r.id == "engine-abito")
+        block._begin([(row, True)])
+        self.assertTrue(runner.emitted.wait(5.0))
+        dialogos.pump(0.1)
+        inline = block._rows["engine-abito"]["progress"]
+        self.assertTrue(inline.get_visible())
+        self.assertNotIn("Detener", _labels(inline))
+        hold.set()
+        dialogos.pump_until(lambda: not block._busy)
+
+    def test_engine_update_never_offers_detener(self):
+        from pc_ai_monitor.blocks import home
+
+        hold = threading.Event()
+        self.addCleanup(hold.set)
+
+        def runner(args, timeout=None, **_kw):
+            if tuple(args)[:2] == ("engine", "update"):
+                hold.wait(5.0)
+                return _cli(0, '{"verified": true}')
+            return _cli(1, "", "x")
+
+        with mock.patch.object(home, "run_manager", runner):
+            card = home.UpdateCardBlock(poller=_FakePoller())
+            card._begin_update()
+            dialogos.pump(0.1)
+            self.assertTrue(card._progress.get_visible())
+            self.assertNotIn("Detener", _labels(card._progress))
+            hold.set()
+            dialogos.pump_until(lambda: not _activity("engine-update").running)
+
+
+class MotoresDetenerTests(_GtkCase):
+    """Motores «Encender» Abito → Detener → ``stop abito`` → «Detenido»."""
+
+    def _start(self, held):
+        from pc_ai_monitor.blocks import motores
+
+        patcher = mock.patch.object(motores, "_run_manager", held.manager_args)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(held.finish)
+        block = motores.ModelsInventoryBlock()
+        dialogos.pump_until(lambda: not block._refreshing)
+        block._on_inventory_loaded([dict(_ABITO)], None)
+        card = block._cards["abito"]
+        card._start_button.emit("clicked")
+        self.assertTrue(held.started.wait(5.0))
+        dialogos.pump(0.05)
+        return block, card
+
+    def _confirm(self, card):
+        dialogs = dialogos.presented_dialogs(
+            lambda: card._progress._stop_button.emit("clicked")
+        )
+        for dialog in dialogs:
+            self.addCleanup(dialogos.close, dialog)
+        self.assertEqual(len(dialogs), 1)
+        start = len(_aislamiento.ATTEMPTS)
+        dialogs[0].response(Gtk.ResponseType.ACCEPT)
+        return start
+
+    def test_confirm_terminates_the_load_and_stops_abito(self):
+        held = _aislamiento.HeldLoad(
+            ("ensure", "abito"), inventory=[_ABITO], resident=_RESIDENT_NONE
+        )
+        block, card = self._start(held)
+        start = self._confirm(card)
+        activity = _activity("engine:abito")
+        self.assertTrue(dialogos.pump_until(lambda: not activity.running))
+        self.assertIsNotNone(held.stop_seen[0])
+        self.assertTrue(held.stop_seen[0].requested)
+        sent = [a for a in _aislamiento.ATTEMPTS[start:] if a[1][:1] == ("stop",)]
+        self.assertEqual(sent, [("local-ai-models", ("stop", "abito"))])
+        self.assertEqual(activity.progress().state, pl.STOPPED)
+        self.assertIn("Detenido", _labels(card._progress))
+        self.assertEqual(card._state_label.get_text(), "detenido")
+        self.assertTrue(card._start_button.get_sensitive())
+        del block
+
+    def test_a_failed_stop_route_ends_as_an_error_with_its_reason(self):
+        held = _aislamiento.HeldLoad(
+            ("ensure", "abito"), inventory=[_ABITO], resident=_RESIDENT_NONE, stop_rc=4
+        )
+        _block, card = self._start(held)
+        self._confirm(card)
+        activity = _activity("engine:abito")
+        self.assertTrue(dialogos.pump_until(lambda: not activity.running))
+        progress = activity.progress()
+        self.assertEqual(progress.state, pl.ERROR)
+        self.assertEqual(progress.message, "No se pudo detener Abito")
+        self.assertIn("stop rechazado", progress.detail)
 
 
 def _activity(key: str) -> pl.Activity:
@@ -992,6 +1417,8 @@ _ABITO = {
     "model": "abito", "alias": "abito", "port": 11002, "ctx": 131072,
     "healthy": False, "problem": None, "capacity_reason": None,
 }
+
+_RESIDENT_NONE = {"resident": "none", "abito": {"healthy": False}, "gufo": {}}
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -14,7 +14,10 @@ evidence. The honesty rule of design 08:
 
 Actions end in success or error (reason, detail, «Reintentar»). There is no
 «Cancelar» (L28): cutting a command midway leaves the engine off without
-rolling back.
+rolling back. The one exception is a model *load* (S21): ``ensure abito`` and
+``switch gufo`` offer «Detener», which ends the command and stops the engine
+on purpose, so nothing stays loaded; that outcome is ``STOPPED``, a neutral
+end that is neither success nor error and leaves the header at once.
 
 ``ActivityHub`` keeps the activities of the whole app so the header
 indicator can show the current one from any page; the GTK side
@@ -32,6 +35,9 @@ STAGE = "stage"
 INDETERMINATE = "indeterminate"
 SUCCESS = "success"
 ERROR = "error"
+STOPPED = "stopped"  # S21: «Detener» on a load; neutral, not an error
+
+STOPPED_MESSAGE = "Carga detenida"
 
 # A finished action stays in the header (and its toast is shown) this long.
 LINGER_S = 10.0
@@ -67,6 +73,8 @@ class Progress:
     log: str = ""
     note: str = ""
     retry: bool = False
+    stoppable: bool = False  # «Detener» is offered (a load, not asked yet)
+    stopping: bool = False  # «Detener» was confirmed; the load is ending
 
     @property
     def running(self) -> bool:
@@ -74,7 +82,7 @@ class Progress:
 
     @property
     def finished(self) -> bool:
-        return self.state in (SUCCESS, ERROR)
+        return self.state in (SUCCESS, ERROR, STOPPED)
 
 
 class Activity:
@@ -114,6 +122,10 @@ class Activity:
         self.log = ""
         self.target = ""  # engine a switch/ensure acts on, when there is one
         self.announced = False
+        # S21: only a model load gets a stopper (it ends the command); it is
+        # called at most once, on the GTK thread.
+        self.stopper: Callable[[], None] | None = None
+        self.stop_requested = False
 
     # -- mutation (always on the GTK main thread) --------------------------
 
@@ -141,6 +153,22 @@ class Activity:
         """``message`` is the headline, ``detail`` the visible explanation and
         ``log`` the raw output behind «Ver detalle»."""
         self._finish(ERROR, message, detail, log)
+
+    def halt(self, message: str = STOPPED_MESSAGE, detail: str = "") -> None:
+        """The load was stopped on purpose («Detener»): neutral end."""
+        self._finish(STOPPED, message, detail, "")
+
+    def request_stop(self) -> bool:
+        """«Detener» confirmed: True only the first time, while it runs.
+
+        A load that already ended on its own (success or failure) ignores a
+        late request: no stop is ever sent after it finished (S21 rule 4).
+        """
+        if self.finished_at is not None or self.stopper is None or self.stop_requested:
+            return False
+        self.stop_requested = True
+        self.stopper()
+        return True
 
     def _finish(self, outcome: str, message: str, detail: str, log: str) -> None:
         if self.finished_at is not None:
@@ -193,6 +221,12 @@ class Activity:
             log=self.log,
             note=self.note,
             retry=self.outcome == ERROR and self._retry is not None,
+            stoppable=(
+                self.outcome is None
+                and self.stopper is not None
+                and not self.stop_requested
+            ),
+            stopping=self.outcome is None and self.stop_requested,
         )
 
 
@@ -260,7 +294,11 @@ class ActivityHub:
         return max(running or found, key=lambda a: a.started)
 
     def current(self, now: float | None = None) -> Activity | None:
-        """The running action started last; else one that finished < LINGER_S ago."""
+        """The running action started last; else one that finished < LINGER_S ago.
+
+        A stopped load is not shown: «Detener» clears the header at once
+        (S21); its card keeps «Detenido» while it lingers.
+        """
         now = self._clock() if now is None else now
         running = [a for a in self._activities.values() if a.running]
         if running:
@@ -268,9 +306,19 @@ class ActivityHub:
         recent = [
             a
             for a in self._activities.values()
-            if a.finished_at is not None and now - a.finished_at < LINGER_S
+            if a.finished_at is not None
+            and a.outcome != STOPPED
+            and now - a.finished_at < LINGER_S
         ]
         return max(recent, key=lambda a: a.finished_at or 0.0) if recent else None
+
+    def lingering(self, now: float | None = None) -> bool:
+        """Some outcome is still on screen (card or header): keep ticking."""
+        now = self._clock() if now is None else now
+        return any(
+            a.finished_at is not None and now - a.finished_at < LINGER_S
+            for a in self._activities.values()
+        )
 
     def changed(self) -> None:
         """Announce newly finished activities once, then notify every view."""
@@ -371,7 +419,7 @@ def engine_action(model: str, action: str, **kw) -> Activity:
     """``ensure`` / ``stop`` of a model: exit code only, no stage, no %."""
     name = display_name(model)
     if action == "ensure":
-        return Activity(
+        activity = Activity(
             f"engine:{model}",
             f"Encendiendo {name}",
             typical_s=USUAL_LOAD_S.get(model),
@@ -379,13 +427,16 @@ def engine_action(model: str, action: str, **kw) -> Activity:
             note="Sin porcentaje: local-ai-models ensure solo avisa al terminar.",
             **kw,
         )
-    return Activity(
-        f"engine:{model}",
-        f"Apagando {name}",
-        limit_s=STOP_LIMIT_S,
-        note="Sin porcentaje: local-ai-models stop solo avisa al terminar.",
-        **kw,
-    )
+    else:
+        activity = Activity(
+            f"engine:{model}",
+            f"Apagando {name}",
+            limit_s=STOP_LIMIT_S,
+            note="Sin porcentaje: local-ai-models stop solo avisa al terminar.",
+            **kw,
+        )
+    activity.target = model
+    return activity
 
 
 def switch_action(target: str, **kw) -> Activity:
@@ -445,6 +496,70 @@ def engine_update_action(**kw) -> Activity:
 
 
 # ---------------------------------------------------------------------------
+# «Detener» a model load (S21)
+# ---------------------------------------------------------------------------
+
+# The route that leaves nothing loaded once the load command is ended:
+# ``stop abito`` cancels a unit still starting; ``--no-restore`` records an
+# explicit stop, so Gufo's post-stop does not bring Abito back (L31, L42).
+STOP_ROUTES = {
+    "abito": ("local-ai-models", ("stop", "abito")),
+    "gufo": ("gufo-flash", ("stop", "--no-restore")),
+}
+# What ``resident`` reports while the engine is still (being) loaded.
+_STILL_LOADED = {"abito": ("abito", "conflict"), "gufo": ("gufo", "gufo-loading", "conflict")}
+
+
+def stop_confirm_text(target: str) -> tuple[str, str]:
+    """Title and body of the «Detener» confirmation (style of «¿Apagar abito?»)."""
+    name = display_name(target)
+    return (
+        f"¿Detener la carga de {name}?",
+        (
+            f"{name} deja de cargarse y ningún motor queda cargado. "
+            "Para usarlo hay que volver a encenderlo."
+        ),
+    )
+
+
+def stop_outcome(target: str, result, resident: str | None) -> tuple[str, str, str]:
+    """(state, message, detail) once the stop route ran and ``resident`` was reread.
+
+    ``result`` is the stop route's ``CommandResult``; ``resident`` the value
+    of ``local-ai-models resident`` afterwards (None when it could not be
+    read). «Detenido» only when the backend confirms the engine is not
+    loaded; a failed route is an error with its reason.
+    """
+    name = display_name(target)
+    tool, args = STOP_ROUTES[target]
+    command = " ".join((tool, *args))
+    if result.failure == "missing":
+        return ERROR, f"No se pudo detener {name}", f"No se encontró {tool}."
+    if result.failure == "timeout":
+        return ERROR, f"No se pudo detener {name}", f"{command} agotó el tiempo de espera."
+    if result.failure:
+        return ERROR, f"No se pudo detener {name}", (
+            f"No se pudo ejecutar {command}: {result.stderr or result.failure}"
+        )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "sin detalle").strip()
+        return ERROR, f"No se pudo detener {name}", (
+            f"{command} terminó con código {result.returncode}: {detail}"
+        )
+    if resident is None:
+        return ERROR, f"{name}: detención sin verificar", (
+            "La orden de detener terminó, pero no se pudo leer el estado real."
+        )
+    if resident in _STILL_LOADED.get(target, (target,)):
+        return ERROR, f"No se pudo detener {name}", (
+            "La orden de detener terminó, pero el administrador informa que sigue cargado."
+        )
+    if resident == "none":
+        return STOPPED, STOPPED_MESSAGE, "Ningún motor quedó cargado."
+    return STOPPED, STOPPED_MESSAGE, f"Ahora figura como residente: {resident}."
+
+
+# ---------------------------------------------------------------------------
 # Texts
 # ---------------------------------------------------------------------------
 
@@ -473,6 +588,10 @@ def headline(progress: Progress) -> str:
         return f"✓ {progress.message}"
     if progress.state == ERROR:
         return progress.message
+    if progress.state == STOPPED:
+        return "Detenido"
+    if progress.stopping:
+        return "Deteniendo la carga…"
     if progress.state in (DETERMINATE, STAGE) and progress.stages:
         return (
             f"{progress.title} · etapa {progress.stage} de {len(progress.stages)}"
@@ -486,7 +605,7 @@ def meta_texts(progress: Progress) -> tuple[str, str]:
     elapsed = clock_text(progress.elapsed_s)
     if progress.state == SUCCESS:
         return f"Tardó {elapsed}", ""
-    if progress.state == ERROR:
+    if progress.state in (ERROR, STOPPED):
         return f"Tras {elapsed}", ""
     limit = f"límite {duration_text(progress.limit_s)}" if progress.limit_s else ""
     if progress.state == DETERMINATE and progress.percent is not None:

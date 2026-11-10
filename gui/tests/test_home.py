@@ -1525,6 +1525,196 @@ class LocalModelsCardTests(unittest.TestCase):
         self.assertEqual(dialogs[0].get_heading(), confirm_text("abito")[0])
 
 
+class HomeDetenerTests(unittest.TestCase):
+    """T19 (S21): «Detener» mientras un modelo carga desde los interruptores."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+        from gi.repository import Adw
+
+        Adw.init()
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        try:
+            import _dialogos as dialogos
+        except ModuleNotFoundError:
+            from tests import _dialogos as dialogos
+        self.dialogos = dialogos
+        self.progreso = progreso
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _motor(self, held, info=None):
+        from pc_ai_monitor.blocks import home, motores
+        from pc_ai_monitor.blocks.home import MotorRowBlock
+
+        for module, name, value in (
+            (home, "run_manager", held.manager),
+            (home, "_run_manager", held.manager_args),
+            (motores, "run_gufo_flash", held.gufo_flash),
+        ):
+            patcher = mock.patch.object(module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(held.finish)
+        poller = FakePoller()
+        poller.state.resident_info = dict(info or RESIDENT_NONE)
+        block = MotorRowBlock(poller=poller)
+        block.update_snapshot(home_snapshot(models=[], memory=dict(MEMORY_LIVE)))
+        block._render()
+        return block, poller
+
+    def _labels(self, widget):
+        out = []
+        child = widget.get_first_child()
+        while child is not None:
+            if child.get_visible():
+                if isinstance(child, Gtk.Label):
+                    out.append(child.get_text())
+                elif isinstance(child, Gtk.Button) and child.get_label():
+                    out.append(child.get_label())
+                out.extend(self._labels(child))
+            child = child.get_next_sibling()
+        return out
+
+    def _turn_on(self, block, held, engine):
+        block._models._rows[engine]["switch"].set_active(True)
+        self.assertTrue(held.started.wait(5.0), "la carga no empezó")
+        self.dialogos.pump(0.05)
+        return block._models._rows[engine]["progress"]
+
+    def _detener(self, inline):
+        dialogs = self.dialogos.presented_dialogs(
+            lambda: inline._stop_button.emit("clicked")
+        )
+        for dialog in dialogs:
+            self.addCleanup(self.dialogos.close, dialog)
+        self.assertEqual(len(dialogs), 1, "Detener no abrió su confirmación")
+        return dialogs[0]
+
+    def _stop_routes(self, start):
+        return [
+            attempt
+            for attempt in _aislamiento.ATTEMPTS[start:]
+            if attempt[1][:1] == ("stop",)
+        ]
+
+    def test_abito_load_offers_detener_and_confirm_stops_abito(self):
+        from pc_ai_monitor.blocks import progreso_logica as pl
+        from pc_ai_monitor.blocks.progreso import HeaderIndicator
+
+        held = _aislamiento.HeldLoad(("ensure", "abito"), resident=RESIDENT_NONE)
+        indicator = HeaderIndicator(lambda *_a: None)
+        block, poller = self._motor(held)
+        inline = self._turn_on(block, held, "abito")
+        self.assertIn("Detener", self._labels(inline))
+        self.assertTrue(indicator.get_visible())
+
+        dialog = self._detener(inline)
+        title, body = pl.stop_confirm_text("abito")
+        self.assertIsInstance(dialog, Gtk.MessageDialog)
+        self.assertEqual(dialog.get_property("text"), title)
+        self.assertEqual(dialog.get_property("secondary-text"), body)
+        start = len(_aislamiento.ATTEMPTS)
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        activity = self.progreso.HUB.get("engine:abito")
+        self.assertTrue(self.dialogos.pump_until(lambda: not activity.running))
+
+        self.assertTrue(held.stop_seen[0].requested, "no se terminó la carga")
+        self.assertEqual(self._stop_routes(start), [("local-ai-models", ("stop", "abito"))])
+        self.assertEqual(activity.progress().state, pl.STOPPED)
+        self.assertIn("Detenido", self._labels(inline))
+        self.assertFalse(indicator.get_visible())
+        self.assertEqual(poller.state.resident_info["resident"], "none")
+        self.assertFalse(block._models._rows["abito"]["switch"].get_active())
+        self.assertTrue(block._models._master.get_sensitive())
+
+    def test_gufo_load_offers_detener_and_confirm_stops_without_restore(self):
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        held = _aislamiento.HeldLoad(("switch", "gufo"), resident=RESIDENT_NONE)
+        block, poller = self._motor(held)
+        inline = self._turn_on(block, held, "gufo")
+        self.assertIn("Detener", self._labels(inline))
+
+        dialog = self._detener(inline)
+        self.assertEqual(dialog.get_property("text"), pl.stop_confirm_text("gufo")[0])
+        start = len(_aislamiento.ATTEMPTS)
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        activity = self.progreso.HUB.get("switch")
+        self.assertTrue(self.dialogos.pump_until(lambda: not activity.running))
+        self.assertTrue(held.stop_seen[0].requested)
+        self.assertEqual(
+            self._stop_routes(start), [("gufo-flash", ("stop", "--no-restore"))]
+        )
+        self.assertEqual(activity.progress().state, pl.STOPPED)
+        self.assertIsNone(poller.state.switching)
+        self.assertFalse(block._models._rows["gufo"]["switch"].get_active())
+        self.assertFalse(block._models._master.get_active())
+
+    def test_cancel_sends_nothing_and_the_load_goes_on(self):
+        held = _aislamiento.HeldLoad(("ensure", "abito"), resident=RESIDENT_ABITO)
+        block, _poller = self._motor(held)
+        inline = self._turn_on(block, held, "abito")
+        dialog = self._detener(inline)
+        start = len(_aislamiento.ATTEMPTS)
+        dialog.response(Gtk.ResponseType.CANCEL)
+        self.dialogos.pump(0.3)
+        self.assertEqual(_aislamiento.ATTEMPTS[start:], [])
+        self.assertFalse(held.stop_seen[0].requested)
+        activity = self.progreso.HUB.get("engine:abito")
+        self.assertTrue(activity.running)
+        held.finish()
+        self.assertTrue(self.dialogos.pump_until(lambda: not activity.running))
+        self.assertEqual(activity.outcome, "success")
+
+    def test_a_load_that_ends_while_the_dialog_is_open_sends_no_stop(self):
+        held = _aislamiento.HeldLoad(("ensure", "abito"), resident=RESIDENT_ABITO)
+        block, _poller = self._motor(held)
+        inline = self._turn_on(block, held, "abito")
+        dialog = self._detener(inline)
+        start = len(_aislamiento.ATTEMPTS)
+        held.finish()
+        activity = self.progreso.HUB.get("engine:abito")
+        self.assertTrue(self.dialogos.pump_until(lambda: not activity.running))
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        self.dialogos.pump(0.3)
+        self.assertEqual(self._stop_routes(start), [])
+        self.assertEqual(activity.outcome, "success")
+        self.assertTrue(block._models._rows["abito"]["switch"].get_active())
+
+    def test_a_failed_stop_route_ends_as_an_error_with_its_reason(self):
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        held = _aislamiento.HeldLoad(
+            ("switch", "gufo"), resident=RESIDENT_NONE, stop_rc=1
+        )
+        block, _poller = self._motor(held)
+        inline = self._turn_on(block, held, "gufo")
+        self._detener(inline).response(Gtk.ResponseType.ACCEPT)
+        activity = self.progreso.HUB.get("switch")
+        self.assertTrue(self.dialogos.pump_until(lambda: not activity.running))
+        progress = activity.progress()
+        self.assertEqual(progress.state, pl.ERROR)
+        self.assertEqual(progress.message, "No se pudo detener Gufo")
+        self.assertIn("gufo-flash stop --no-restore", progress.detail)
+        self.assertIn("gufo-flash stop falló", progress.detail)
+
+    def test_turning_a_model_off_never_offers_detener(self):
+        held = _aislamiento.HeldLoad(("stop", "abito"), resident=RESIDENT_NONE)
+        block, _poller = self._motor(held, RESIDENT_ABITO)
+        block._run_engine("abito", "stop")
+        self.assertTrue(held.started.wait(5.0))
+        self.dialogos.pump(0.05)
+        inline = block._models._rows["abito"]["progress"]
+        self.assertTrue(inline.get_visible())
+        self.assertNotIn("Detener", self._labels(inline))
+
+
 class HomeDisabledReasonTests(unittest.TestCase):
     """S16 también en Home: un botón apagado dice por qué, visible."""
 

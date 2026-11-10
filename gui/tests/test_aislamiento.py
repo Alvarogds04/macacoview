@@ -94,6 +94,53 @@ class GufoFlashStopIsolationTests(unittest.TestCase):
         )
 
 
+class DetenerRoutesIsolationTests(unittest.TestCase):
+    """S21: the «Detener» routes (a stoppable load, ``stop abito``,
+    ``gufo-flash stop --no-restore``) are recorded and refused, never spawned."""
+
+    @classmethod
+    def setUpClass(cls):
+        _aislamiento.isolate()
+
+    def test_stoppable_load_and_stop_routes_never_spawn(self):
+        import subprocess
+        from unittest import mock
+
+        from pc_ai_monitor.blocks import (
+            home,
+            motores,
+            motores_vista,
+            progreso,
+            residente,
+        )
+
+        def watch(argv, *args, **kwargs):
+            raise AssertionError(f"spawned {argv}")
+
+        start = len(_aislamiento.ATTEMPTS)
+        stop = motores.StopRequest()
+        with (
+            mock.patch.object(subprocess, "run", watch),
+            mock.patch.object(subprocess, "Popen", watch),
+        ):
+            results = [
+                motores._run_manager("ensure", "abito", stop=stop),
+                motores.run_manager(("switch", "gufo"), 900, stop=stop),
+                home._run_manager("ensure", "abito", stop=stop),
+                home.run_manager(("switch", "gufo"), 900, stop=stop),
+                residente.run_manager(("switch", "gufo"), 900, stop=stop),
+                motores_vista.run_manager(("switch", "gufo"), 900, stop=stop),
+                progreso.run_stop_route("abito", home._run_manager),
+                progreso.run_stop_route("gufo", home._run_manager),
+            ]
+
+        self.assertTrue(all(result.returncode is None for result in results))
+        recorded = _aislamiento.ATTEMPTS[start:]
+        self.assertIn(("local-ai-models", ("stop", "abito")), recorded)
+        self.assertIn(("gufo-flash", ("stop", "--no-restore")), recorded)
+        self.assertEqual(recorded.count(("local-ai-models", ("switch", "gufo"))), 4)
+
+
 class ConfigIsolationTests(unittest.TestCase):
     """Tests must never write the user's real ~/.config/macacoview/config.toml.
 

@@ -542,6 +542,22 @@ progressbar.inv-ctx > trough > progress {
   border-color: @theme_error;
 }
 
+/* S21 · «Detener» una carga: desenlace neutro (ni éxito ni error). */
+.act.act-stop {
+  border-color: @theme_muted;
+}
+
+.act.act-stop .act-title {
+  color: @theme_muted;
+}
+
+button.act-stop-button {
+  min-height: 0;
+  padding: 1px 10px;
+  font-size: 12px;
+  color: @theme_error;
+}
+
 .act-title {
   font-size: 12.5px;
   font-weight: 600;

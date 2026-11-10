@@ -20,6 +20,7 @@ lanza nada. Necesita display (aunque sea virtual):
 
 import json
 import unittest
+from unittest import mock
 
 try:  # importing it points HOME at a sandbox before pc_ai_monitor loads
     import _sandbox
@@ -497,6 +498,99 @@ class MotoresVistaSwitchTests(_DialogCase):
         dialog.response("cancel")
         self.assert_nothing_ran(start, ("switch", "abito"))
         self.assertIsNone(block._switching)
+
+
+# ---------------------------------------------------------------------------
+# T19 (S21): «Detener» la carga de Gufo desde Motores (motores_vista, residente)
+# ---------------------------------------------------------------------------
+
+RESIDENT_NONE = {"resident": "none", "abito": {"healthy": False}, "gufo": {}}
+
+
+class _DetenerGufoCase(_DialogCase):
+    """«Cambiar a Gufo» → «Detener» → gufo-flash stop --no-restore."""
+
+    module_name = ""
+    block_name = ""
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        self.progreso = progreso
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _block(self, held):
+        import importlib
+
+        from pc_ai_monitor.blocks import motores
+
+        module = importlib.import_module(self.module_name)
+        for target, name, value in (
+            (module, "run_manager", held.manager),
+            (module, "_run_manager", held.manager_args),
+            (motores, "run_gufo_flash", held.gufo_flash),
+        ):
+            patcher = mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(held.finish)
+        block = getattr(module, self.block_name)()
+        dialogos.pump_until(lambda: not block._refreshing)
+        block._info = dict(RESIDENT_NONE)
+        block._render()
+        block._start_switch("gufo")
+        self.assertTrue(held.started.wait(5.0))
+        dialogos.pump(0.05)
+        return block
+
+    def _stop_routes(self, start):
+        return [a for a in _aislamiento.ATTEMPTS[start:] if a[1][:1] == ("stop",)]
+
+    def test_detener_asks_then_stops_gufo_without_restoring_abito(self):
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        held = _aislamiento.HeldLoad(("switch", "gufo"), resident=RESIDENT_NONE)
+        block = self._block(held)
+        title, body = pl.stop_confirm_text("gufo")
+        dialog = self.open_one(lambda: block._progress._stop_button.emit("clicked"))
+        self.assert_gtk_dialog(dialog, title, body, "Detener")
+
+        start = dialogos.mark()
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        activity = self.progreso.HUB.get("switch")
+        self.assertTrue(dialogos.pump_until(lambda: not activity.running))
+        self.assertTrue(held.stop_seen[0].requested)
+        self.assertEqual(
+            self._stop_routes(start), [("gufo-flash", ("stop", "--no-restore"))]
+        )
+        self.assertEqual(activity.progress().state, pl.STOPPED)
+        self.assertIsNone(block._switching)
+        self.assertEqual(block._info["resident"], "none")
+        self.assertFalse(block._progress._stop_button.get_visible())
+
+    def test_cancel_sends_nothing(self):
+        held = _aislamiento.HeldLoad(("switch", "gufo"), resident=RESIDENT_NONE)
+        block = self._block(held)
+        dialog = self.open_one(lambda: block._progress._stop_button.emit("clicked"))
+        start = dialogos.mark()
+        dialog.response(Gtk.ResponseType.CANCEL)
+        dialogos.pump(0.3)
+        self.assertEqual(_aislamiento.ATTEMPTS[start:], [])
+        self.assertTrue(self.progreso.HUB.running("switch"))
+
+
+class MotoresVistaDetenerTests(_DetenerGufoCase):
+    module_name = "pc_ai_monitor.blocks.motores_vista"
+    block_name = "ResidenteVistaBlock"
+
+
+class ResidenteDetenerTests(_DetenerGufoCase):
+    module_name = "pc_ai_monitor.blocks.residente"
+    block_name = "ResidenteBlock"
+
+
+del _DetenerGufoCase  # base: sólo corren sus subclases
 
 
 if __name__ == "__main__":

@@ -332,7 +332,7 @@ class ResidenteVistaBlock(Block):
         self._render()
         progreso.run_switch(
             target,
-            lambda args, timeout: run_manager(args, timeout),
+            lambda args, timeout, **kw: run_manager(args, timeout, **kw),
             lambda *args: _run_manager(*args),
             lambda: rendimiento._run_gufo_flash_status(),
             self._on_switched,

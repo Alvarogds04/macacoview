@@ -26,6 +26,10 @@ REFRESH_INTERVAL_S = 5.0
 # After the child exits, how long the readers may keep draining its pipes. A
 # grandchild that inherited them can hold them open for good.
 READER_GRACE_S = 5.0
+# «Detener» (S21): SIGTERM to the runner's own child, SIGKILL after this.
+STOP_GRACE_S = 3.0
+# How often a running child is checked for a «Detener» request.
+STOP_POLL_S = 0.1
 
 PROBLEM_MESSAGES = {
     "missing_model_file": "falta el archivo del modelo",
@@ -44,18 +48,40 @@ class CommandResult:
     failure: str | None = None
 
 
+class StopRequest:
+    """«Detener» de una carga (S21): pedido único, seguro entre hilos.
+
+    El hilo de GTK llama ``request()``; el runner que recibió este objeto
+    termina SU propio hijo (SIGTERM y, tras ``STOP_GRACE_S``, SIGKILL) y
+    devuelve ``failure="stopped"``. Nunca se señala otro proceso. Si el hijo
+    ya había terminado solo, su resultado se mantiene: no hubo detención.
+    """
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def request(self) -> None:
+        self._event.set()
+
+    @property
+    def requested(self) -> bool:
+        return self._event.is_set()
+
+
 def run_manager(
     args: tuple[str, ...],
     timeout: int = COMMAND_TIMEOUT_S,
     on_line: Callable[[str], None] | None = None,
+    stop: StopRequest | None = None,
 ) -> CommandResult:
     """Ejecuta el administrador con un plazo dado; solo se usa desde workers.
 
     Con ``on_line`` cada línea de stdout/stderr llega mientras el comando
     corre (S14: el % real de cmake al compilar); el resultado es el mismo.
+    Con ``stop`` el comando se puede detener (S21: «Detener» de una carga).
     """
-    if on_line is not None:
-        return _stream_process([MANAGER, *args], timeout, on_line)
+    if on_line is not None or stop is not None:
+        return _stream_process([MANAGER, *args], timeout, on_line, stop=stop)
     try:
         completed = subprocess.run(
             [MANAGER, *args],
@@ -85,7 +111,10 @@ run_manager.streams_lines = True  # type: ignore[attr-defined]
 
 
 def _stream_process(
-    argv: list[str], timeout: float, on_line: Callable[[str], None]
+    argv: list[str],
+    timeout: float,
+    on_line: Callable[[str], None] | None,
+    stop: StopRequest | None = None,
 ) -> CommandResult:
     """Corre ``argv`` leyendo stdout y stderr línea a línea (worker only).
 
@@ -95,6 +124,8 @@ def _stream_process(
     ``on_line`` que lanza deja de llamarse, los bytes que no son UTF-8 llegan
     como U+FFFD y la última línea sin salto no se pierde aunque un nieto
     herede la tubería. Al agotar el plazo se devuelve lo leído hasta ahí.
+    Con ``stop`` pedido, el hijo propio recibe SIGTERM (SIGKILL tras
+    ``STOP_GRACE_S``) y el resultado es ``failure="stopped"``.
     """
     try:
         process = subprocess.Popen(
@@ -112,14 +143,49 @@ def _stream_process(
     for reader in (out, err):
         reader.start()
     try:
-        returncode = process.wait(timeout=timeout)
+        returncode = _wait_or_stop(process, timeout, stop)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
         _join_all((out, err), min(READER_GRACE_S, 1.0))
         return CommandResult(None, out.collect(), err.collect(), failure="timeout")
+    if returncode is None:  # «Detener»: the child was ended on purpose
+        _join_all((out, err), min(READER_GRACE_S, 1.0))
+        return CommandResult(None, out.collect(), err.collect(), failure="stopped")
     _join_all((out, err), READER_GRACE_S)
     return CommandResult(returncode, out.collect(), err.collect())
+
+
+def _wait_or_stop(
+    process: subprocess.Popen, timeout: float, stop: StopRequest | None
+) -> int | None:
+    """The child's exit code, or None when «Detener» ended it.
+
+    Only ``process`` (this runner's own child) is ever signalled. A child
+    that exited before the request keeps its own outcome.
+    """
+    if stop is None:
+        return process.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            return process.wait(timeout=min(STOP_POLL_S, remaining))
+        except subprocess.TimeoutExpired:
+            if not stop.requested:
+                continue
+        finished = process.poll()
+        if finished is not None:
+            return finished  # it ended on its own first: its outcome stands
+        process.terminate()
+        try:
+            process.wait(timeout=STOP_GRACE_S)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        return None
 
 
 def _join_all(readers, grace: float) -> None:
@@ -132,7 +198,7 @@ def _join_all(readers, grace: float) -> None:
 class _PipeReader:
     """Drains one pipe into lines (worker only); see ``_stream_process``."""
 
-    def __init__(self, stream, on_line: Callable[[str], None]) -> None:
+    def __init__(self, stream, on_line: Callable[[str], None] | None) -> None:
         self._stream = stream
         self._on_line: Callable[[str], None] | None = on_line
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -252,9 +318,11 @@ def run_gufo_flash(args: tuple[str, ...], timeout: float = COMMAND_TIMEOUT_S) ->
     )
 
 
-def _run_manager(*args: str) -> CommandResult:
+def _run_manager(*args: str, stop: StopRequest | None = None) -> CommandResult:
     """Ejecuta el administrador con el plazo común de las acciones."""
-    return run_manager(args)
+    if stop is None:
+        return run_manager(args)
+    return run_manager(args, stop=stop)
 
 
 def _command_failure(result: CommandResult, action: str, model: str) -> str:
@@ -659,7 +727,7 @@ class ModelsInventoryBlock(Block):
             return
         card.begin_action(action)
         retry = card._on_start if action == "ensure" else card._on_stop
-        self._activity = progreso.begin(
+        self._activity = activity = progreso.begin(
             pl.engine_action(
                 model,
                 action,
@@ -668,9 +736,21 @@ class ModelsInventoryBlock(Block):
                 retry=lambda: retry(None),
             )
         )
+        # S21: «Encender» Abito is a load: «Detener» ends it (stop abito).
+        stop = (
+            progreso.attach_stop(activity, model)
+            if action == "ensure" and model in pl.STOP_ROUTES
+            else None
+        )
 
         def _worker() -> None:
-            result = _run_manager(action, model)
+            if stop is None:
+                result = _run_manager(action, model)
+            else:
+                result = _run_manager(action, model, stop=stop)
+            if result.failure == "stopped":
+                _stopped_worker()
+                return
             inventory, inventory_error = _load_inventory()
             GLib.idle_add(
                 self._on_action_done,
@@ -681,7 +761,49 @@ class ModelsInventoryBlock(Block):
                 inventory_error,
             )
 
+        def _stopped_worker() -> None:
+            from pc_ai_monitor.blocks.residente_logica import parse_resident
+
+            stop_result = progreso.run_stop_route(model, _run_manager)
+            after = _run_manager("resident")
+            info = parse_resident(after.stdout) if after.returncode == 0 else None
+            inventory, inventory_error = _load_inventory()
+            GLib.idle_add(
+                self._on_load_stopped,
+                activity,
+                model,
+                stop_result,
+                info,
+                inventory,
+                inventory_error,
+            )
+
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_load_stopped(
+        self,
+        activity,
+        model: str,
+        stop_result: CommandResult,
+        info: dict | None,
+        inventory: list[dict] | None,
+        inventory_error: str | None,
+    ) -> bool:
+        """«Detener» ended the load: repaint from the reread state (S21)."""
+        from pc_ai_monitor.blocks import progreso
+
+        if inventory is not None:
+            self._on_inventory_loaded(inventory, None)
+        elif inventory_error:
+            self._manager_message.set_text(inventory_error)
+            self._manager_message.set_visible(True)
+        stopped = progreso.finish_stopped_load(activity, model, stop_result, info)
+        card = self._cards.get(model)
+        if card is not None:
+            card.finish_action(
+                f"{model}: carga detenida." if stopped else activity.detail
+            )
+        return False
 
     def _on_action_done(
         self,
