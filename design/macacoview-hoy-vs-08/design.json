@@ -1,0 +1,35 @@
+{
+  "title": "MacacoView · hoy vs 08",
+  "brief": "Comparison: live captures of the installed MacacoView as it runs today (Home, Motores, Recursos; real data captured 2026-11-10 12:13 CET, no engine resident) next to proposal 08 (actions with honest progress, engine switches, inline disabled reasons, Pi sessions by PSS). Each «hoy» artboard numbers what 08 changes on that page. The historical directions 01–07 stay in design/macacoview.",
+  "feature": "odd/tasks/macacoview-gtk.md",
+  "artboards": [
+    {
+      "file": "01-hoy-home.html",
+      "title": "01 · Home hoy",
+      "tradeoff": "Live today: ▶ only turns the row into «cargando…» and «Cambiar» fills a clock-estimated bar (not real progress), nothing visible from other pages; a «Cambiar a Gufo» button with no engine resident; no RAM projection per engine; the update card read «Todo al día» while Motores listed 2 updates",
+      "width": 1400,
+      "height": 950
+    },
+    {
+      "file": "02-hoy-motores.html",
+      "title": "02 · Motores hoy",
+      "tradeoff": "Live today: four disabled «Actualizar» and «Apagar» whose reason lives only in a hover tooltip, a spinner and «Actualizando…» but no stages or % while Abito compiles (result only at the end), engine start/stop split between «Cambiar a …» and a list that only shows abito",
+      "width": 1400,
+      "height": 970
+    },
+    {
+      "file": "03-hoy-recursos.html",
+      "title": "03 · Recursos hoy",
+      "tradeoff": "Live today: Pi is one RSS group (7.7G) with no per-session names, PIDs or PSS, so it double-counts shared pages and cannot say which session holds the memory",
+      "width": 1400,
+      "height": 780
+    },
+    {
+      "file": "08-acciones-con-progreso.html",
+      "title": "08 · Acciones con progreso (propuesta)",
+      "tradeoff": "Honest progress: a % only where a real number exists (llama.cpp compile), otherwise stage N/M + pulsing bar + elapsed vs typical/limit; inline bar in the starting card plus a header pill and sidebar badge visible from every page; Home switches for Abito/Gufo with switch confirmation; inline disabled reasons; Pi sessions by PSS. Needs the update and switch commands to stream stage events, which they do not today (only exit codes)",
+      "width": 1400,
+      "height": 1000
+    }
+  ]
+}
