@@ -30,6 +30,8 @@ Missing updaters for models, router and tools are a separate backend task in `pc
 
 - S20 «arreglalo, dale, dale» (accepting the recommendation after L39): fix the non-blocking native-review findings of the Pi sessions collector (PI_SESSION_FILE taken from a child environ is not trusted as a path; pi roots filtered to the current user; the environ high-confidence mapping and datos.py:316-321 covered) and of the long-command runner (e4681c4: motores.py streaming runner, actualizaciones.py:331-367, motores.py:304-305, app.py:446, home.py:282-302), each with a test that fails first. Readability findings of 72e616f/aaa753d/8d3eccf and the fe23680 findings stay for later (L40).
 
+- S21 «veo que no existe un boton de parar cuando estan cargando un modelo, esposible añadirlo?»: while a model is loading (Encender Abito = `ensure abito`; Encender/Cambiar a Gufo = `switch gufo`), the inline progress shows a «Detener» button with a confirmation. Detener ends the running command and leaves no engine loaded: Abito → `local-ai-models stop abito`; Gufo → `gufo-flash stop --no-restore`. The activity ends as «Detenido» (not an error), the switches reflect the real state afterwards, and the header indicator clears. Updates (compile) never offer Detener (L42).
+
 ## Tasks
 
 | ID | Task | Specs | Route | Commit |
@@ -57,6 +59,7 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T16 | Short «RAM por programa» in Configuración + «Agregar programa…» dialog (S19); pinning from Recursos/Procesos, node/python names and per-session pins deferred (L34) | S19 | worker | 72e616f |
 | T17 | Pi sessions collector hardening from review findings (S20) | S20 S17 | worker | dd6f3a9 |
 | T18 | Long-command runner fixes and tests from review findings (S20) | S20 S14 | worker | f7e62b0 |
+| T19 | «Detener» while a model loads (S21) | S21 S14 S15 | worker | — |
 
 ## Log
 
@@ -114,3 +117,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
   Approximate model cost of the round: ≈ USD 6.
 - L40 (user, 2026-11-10): «arreglalo, dale, dale» after the recommendation «arreglar solo las del colector de sesiones de Pi (ruta y usuario) y los tests de los comandos largos, y dejar las de legibilidad para después» → S20, T17, T18. Deploy in place after both.
 - L41 (deploy, 2026-11-10 20:12): T17 dd6f3a9 (PI_SESSION_FILE accepted only as an owned .jsonl inside the Pi session roots, pi roots filtered to the current uid, environ mapping tested, carried session list expires after 15 s) and T18 f7e62b0 (streaming runner never stalls or drops output, update flow never stays busy, build_required retry asks to compile, exact card progress key, plain-text toasts, switch always ends). Suite 721 OK on the committed tree, config unchanged. Backup ~/.local/state/macacoview-deploy/20261110-201227/; lib + pc-ai-stats + macacoview_programs.py + macacoview_pi_sessions.py replaced; collector emits pi_sessions live (6); bar unchanged; service restarted, active, no errors. Not exercised live: real updates and engine switches.
+- L42 (user, 2026-11-10): «veo que no existe un boton de parar cuando estan cargando un modelo, esposible añadirlo?» → checked read-only: `ensure` is `systemctl --user start` + wait_health, so `stop abito` cancels a starting unit; gufo_ctl records `--no-restore` as an explicit stop so post-stop does not bring Abito back. Proposed «Detener» next to the loading bar, with confirmation, only while a model loads (not during updates). Asked what Detener leaves; chose «Parar = queda todo apagado».
