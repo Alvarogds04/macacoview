@@ -45,9 +45,9 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T8 | Live-data fixes (L21): Home rail token, Home RAM blocks with no engine, «instalada None», Procesos column width | S5 S6 S9 S10 S12 | worker B | — |
 | T9 | Integrate the RAM program selector (L22) from the uncommitted `worktrees/ram-program-selector` diff, plus the collector comm/args split fix | S10 S13 | worker (after T7+T8 commits) | 796551c |
 | T10 | Deploy in place (L22): back up and replace the installed package and collector, keep unit/extension/config, restart the service, verify live, keep the rollback path | S13 | inline | deployed 2026-11-09 (L24) |
-| T11 | Long-action progress (S14): shared progress model + inline bar + header indicator, wired to Actualizaciones/engine update (stream cmake %), Encender/Apagar, Cambiar (poll `gufo-flash status` phase) | S14 S18 | worker A | — |
-| T12 | Home local-model switches (S15) using T11 progress | S15 S14 | worker A | — |
-| T13 | Motores: inline disabled reasons (S16) | S16 | worker A | — |
+| T11 | Long-action progress (S14): shared progress model + inline bar + header indicator, wired to Actualizaciones/engine update (stream cmake %), Encender/Apagar, Cambiar (poll `gufo-flash status` phase) | S14 S18 | worker A | e4681c4 |
+| T12 | Home local-model switches (S15) using T11 progress | S15 S14 | worker A | fe23680 |
+| T13 | Motores (and Home): inline disabled reasons (S16) | S16 | worker A | 45bf986 |
 | T14 | Recursos Pi sessions (S17): collector per-session PSS/RSS/children + view | S17 | worker B | — |
 | T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | — |
 
