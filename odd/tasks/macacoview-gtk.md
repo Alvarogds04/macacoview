@@ -49,7 +49,7 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T12 | Home local-model switches (S15) using T11 progress | S15 S14 | worker A | fe23680 |
 | T13 | Motores (and Home): inline disabled reasons (S16) | S16 | worker A | 45bf986 |
 | T14 | Recursos Pi sessions (S17): collector per-session PSS/RSS/children + view | S17 | worker B | 9404b5c |
-| T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | — |
+| T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | deployed 2026-11-10 (L32) |
 
 ## Log
 
@@ -91,3 +91,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 - L29 (user, T14 decision, 2026-11-10): asked how much memory each Pi session shows (tree vs pi process only, 2–3x difference live); chose «Todo lo que la sesión usa» (A): row PSS/RSS = pi root + all descendants through shells, stopping at nested pi (subagents get their own nested row, never counted twice); PIDs = tree size; Hijos = direct children; pi-only figures kept as additive collector fields. Supersedes 08 tab 4's footnote «PSS y RSS son del proceso pi».
 - L30 (user, T12 decision, 2026-11-10): asked where the Home local-model switches go (08 tab 2 says nothing about 07 fila 1); chose «Reemplazar solo las tarjetitas» (B): the switches card replaces the mini Abito/Gufo cards and the «Cambiar a … Ctrl E» pill; RAM blocks and the motor band stay; Ctrl E keeps switching engines through the switches' flow.
 - L31 (user, T12 decision, 2026-11-10): Gufo has no stop route in local-ai-models and `gufo-flash stop` restores Abito by default; asked what turning the Gufo switch off does; chose «Apagar Gufo deja todo apagado» (A): Gufo off and master off with Gufo running = `gufo-flash stop --no-restore`, with a confirmation like «¿Apagar abito?»; tests/_aislamiento.py gains a guard for that route.
+- L32 (deploy, 2026-11-10 13:34): T14b layout in aaa753d. T15: full suite 670 OK, config sha256 unchanged. Backup at ~/.local/state/macacoview-deploy/20261110-133347/. Replaced ~/.local/lib/pc-ai-monitor/pc_ai_monitor from `git archive aaa753d`, ~/.local/bin/pc-ai-stats, macacoview_programs.py and the new macacoview_pi_sessions.py; collector emits pi_sessions live (7); pc-ai-bar unchanged; service restarted, active, no errors in the journal. Not exercised live: the streamed update, ensure/stop/switch from the Home switches and `gufo-flash stop --no-restore` (tests stub them).
