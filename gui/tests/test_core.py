@@ -615,7 +615,10 @@ class ProgramPickerTests(SettingsTests):
     """RAM por programa (T9, ported from feat/ram-program-selector).
 
     The picker lives in Configuración, fed by the usual snapshots; the switch
-    [bar] programs_enabled gates the bar and Recursos together (L23).
+    [bar] programs_enabled gates the bar and Recursos together (L23). Since
+    S19 (T16) the group lists only the pinned programs: these tests pin the
+    program they inspect; the short list and the dialog live in
+    test_programas_dialogo.py.
     """
 
     def _cleanup_pending(self, page):
@@ -633,7 +636,7 @@ class ProgramPickerTests(SettingsTests):
         from pc_ai_monitor.settings import SettingsSection
 
         key = "program:v1:" + "a" * 64
-        page = SettingsSection(cfg.Config(), lambda updated: None)
+        page = SettingsSection(cfg.Config(bar_program_ids=(key,)), lambda updated: None)
         for status, label in (
             ("not_sampled", "PSS no muestreada"),
             ("partial", "PSS parcial"),
@@ -666,10 +669,12 @@ class ProgramPickerTests(SettingsTests):
                         }
                     )
                 )
-                subtitle = page._program_rows[key].get_subtitle()
-                self.assertIn(f"RSS ({label})", subtitle)
-                self.assertNotIn("RSS parcial", subtitle)
-                global_detail = page._program_status.get_subtitle()
+                # The value says RSS; why PSS is missing goes in the tooltip.
+                self.assertEqual(page._program_values[key].get_text(), "1 MiB RSS")
+                tooltip = page._program_rows[key].get_tooltip_text()
+                self.assertIn(f"RSS ({label})", tooltip)
+                self.assertNotIn("RSS parcial", tooltip)
+                global_detail = page._program_status.get_text()
                 for text in (
                     "PSS legible: 1/4",
                     "no muestreada: 1",
@@ -677,7 +682,7 @@ class ProgramPickerTests(SettingsTests):
                     "cambiado: 1",
                 ):
                     self.assertIn(text, global_detail)
-        self.assertEqual(page._collect().bar_program_ids, ())
+        self.assertEqual(page._collect().bar_program_ids, (key,))
 
     def test_program_config_and_snapshot(self):
         import tempfile
@@ -758,32 +763,32 @@ class ProgramPickerTests(SettingsTests):
         with patch.object(cfg, "save") as save:
             page.update_snapshot(snap())
             row = page._program_rows[a]
-            self.assertTrue(row.get_active())
+            self.assertNotIn(b, page._program_rows)  # only pinned rows (S19)
             self.assertFalse(row.get_use_markup())
             self.assertFalse(page._collect().bar_programs_enabled)
             self.assertEqual(page._collect().bar_program_ids, (a,))
-            self.assertNotEqual(row.get_title(), page._program_rows[b].get_title())
-            self.assertIn("RSS", row.get_subtitle())
-            self.assertIn("parcial", row.get_subtitle())
-            self.assertIn("/usr/bin/python3", row.get_subtitle())
-            self.assertNotIn("SECRET", row.get_subtitle() + row.get_title())
-            row.set_active(False)
-            page._program_rows[b].set_active(True)
+            self.assertEqual(row.get_title(), f"python3 · {a[-64:-56]}")
+            self.assertIn("RSS", page._program_values[a].get_text())
+            tooltip = row.get_tooltip_text()
+            self.assertIn("parcial", tooltip)
+            self.assertIn("/usr/bin/python3", tooltip)
+            self.assertNotIn("SECRET", row.get_subtitle() + row.get_title() + tooltip)
+            row._remove_button.emit("clicked")  # «Quitar»
+            page._set_pinned(b, True)  # «Fijar» in the dialog
             pending = page._pending
             page.update_snapshot(snap(99, "unreadable"))
-            self.assertIs(page._program_rows[a], row)
+            self.assertNotIn(a, page._program_rows)
             self.assertEqual(page._pending, pending)
             page.update_snapshot(Snapshot())
-            self.assertIn("No activo", page._program_rows[b].get_subtitle())
-            self.assertTrue(page._program_rows[b].get_active())
+            self.assertEqual(page._program_values[b].get_text(), "ausente")
             self.assertEqual(page._collect().bar_program_ids, (b,))
-            page._program_rows[b].set_active(False)
+            page._program_rows[b]._remove_button.emit("clicked")
             self.assertEqual(page._collect().bar_program_ids, ())
             page.update_snapshot(snap())
-            self.assertFalse(page._program_rows[a].get_active())
-            self.assertFalse(page._program_rows[b].get_active())
+            self.assertEqual(page._program_rows, {})
+            page._set_pinned(a, True)
             page.update_snapshot(snap(status="full"))
-            self.assertIn("PSS", page._program_rows[a].get_subtitle())
+            self.assertIn("PSS", page._program_values[a].get_text())
             save.assert_not_called()
 
     def test_opt_in_apply_persists_absence_and_disable_retains_selection(self):
@@ -799,7 +804,7 @@ class ProgramPickerTests(SettingsTests):
         applied = []
         page = SettingsSection(cfg.Config(bar_program_ids=(key,)), applied.append)
         self._cleanup_pending(page)
-        self.assertTrue(page._program_rows[key].get_active())
+        self.assertIn(key, page._program_rows)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
             save = cfg.save
@@ -847,7 +852,7 @@ class ProgramPickerTests(SettingsTests):
             }
         )
         with (
-            patch.object(cfg, "load", return_value=cfg.Config()),
+            patch.object(cfg, "load", return_value=cfg.Config(bar_program_ids=(key,))),
             patch("pc_ai_monitor.app.Collector") as collector,
         ):
             app = MonitorApplication()
@@ -857,7 +862,10 @@ class ProgramPickerTests(SettingsTests):
             ):
                 page = app._build_section("config")
             self.assertIs(page._snapshot, snapshot)
-            self.assertIn(key, page._program_rows)
+            # The pinned row is painted from the last snapshot right away.
+            self.assertEqual(
+                page._program_rows[key].get_title(), f"editor · {key[-64:-56]}"
+            )
             collector.assert_not_called()
 
     def test_pill_preview_shows_programs_only_with_the_switch(self):

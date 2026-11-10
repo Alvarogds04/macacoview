@@ -62,8 +62,8 @@ un banner lo anuncia arriba.
 
 ## RAM por programa
 
-En **Configuración → RAM por programa** puede elegir programas observables y
-activar **Mostrar programas seleccionados**. Ese interruptor controla dos sitios:
+En **Configuración → RAM por programa** puede fijar programas y
+activar **Mostrar programas seleccionados** (en el grupo «Pill del panel»). Ese interruptor controla dos sitios:
 la barra superior y la lista «Programas seleccionados · no sumar» de **Recursos**,
 bajo la leyenda de grupos. Apagado, no aparecen en ninguno de los dos. Viene
 apagado, con la selección vacía; los grupos y modelos existentes no cambian. Se
@@ -71,11 +71,23 @@ guarda en `[bar]` de `~/.config/macacoview/config.toml`, como
 `programs_enabled = true` y `program_ids = ["program:v1:…"]`. Un config que no
 tiene esas claves carga igual, con la opción apagada.
 
-La lista usa los snapshots habituales: abrirla no inicia otro escaneo. Cada fila
-muestra el ejecutable y un ID opaco corto que distingue intérpretes con el mismo
-nombre; nunca los argumentos. El ID no depende del PID. Una selección ausente
-queda como «No activo o no observable», se puede desmarcar y vuelve a aparecer
-cuando el programa reaparece. Apagar el interruptor no borra la selección.
+El grupo muestra solo lo fijado: una fila por programa con su nombre, su RAM
+(PSS si se midió, si no RSS, o «ausente» si no corre) y **Quitar**; sin nada
+fijado, un aviso con **Agregar programa…**. Ese botón abre un diálogo con un
+buscador (nombre, ejecutable o ruta; sin distinguir mayúsculas ni tildes) y la
+lista ordenada por RSS: sin búsqueda, los 15 más grandes; con búsqueda, todas
+las coincidencias hasta 50. **Fijar** / **Fijado ✓** cambia la selección. Los
+programas sin ejecutable legible (root u otro usuario) y los de menos de 50 MiB
+quedan ocultos hasta encender «Incluir procesos del sistema y los chicos».
+
+Los nombres salen de lo que ya da el colector: navegadores por ruta (Firefox,
+Chromium, Chromium (Playwright), Chrome), una tabla corta de apps conocidas
+(RustDesk, GNOME Shell, VS Code…) y, si no, el ejecutable con un ID opaco corto
+que distingue intérpretes con el mismo nombre; nunca los argumentos. El ID
+completo queda en el tooltip y no depende del PID. Los datos salen de los
+snapshots habituales: abrir la sección o el diálogo no inicia otro escaneo. Un
+programa fijado que no corre sigue fijado y se puede quitar. Apagar el
+interruptor no borra la selección.
 
 Primero se descubren y agrupan todos los procesos observables con su RSS.
 **PSS** se lee solo para los IDs guardados, incluidos los miembros de la misma

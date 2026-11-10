@@ -17,6 +17,7 @@ from gi.repository import Adw, GLib, Gtk
 from pc_ai_monitor import config as config_module
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import programas_vista as programas
+from pc_ai_monitor.blocks.programas_dialogo import AddProgramDialog
 from pc_ai_monitor.blocks.tablas_vista import pill_chips
 from pc_ai_monitor.datos import Snapshot
 
@@ -278,16 +279,23 @@ class SettingsSection(Gtk.ScrolledWindow):
         panel.add(self._programs_enabled)
 
         # -- RAM por programa ----------------------------------------------------
-        # Las filas salen del snapshot habitual: abrir la lista no escanea nada.
+        # S19: solo lo fijado, un estado vacío y «Agregar programa…». Las
+        # filas salen del snapshot habitual: abrir la sección no escanea nada.
         self._program_group = Adw.PreferencesGroup(
-            title="RAM por programa (selección opcional)",
-            description=programas.PICKER_DESCRIPTION,
+            title=programas.GROUP_TITLE,
+            description=programas.GROUP_DESCRIPTION,
         )
         page.add(self._program_group)
-        self._program_rows: dict[str, Adw.SwitchRow] = {}
+        self._program_group.set_header_suffix(self._program_help())
+        self._program_rows: dict[str, Adw.ActionRow] = {}
+        self._program_values: dict[str, Gtk.Label] = {}
         self._program_selection = set(current.bar_program_ids)
-        self._program_status = Adw.ActionRow(title="Sin datos de programas")
-        self._program_group.add(self._program_status)
+        self._program_order = list(dict.fromkeys(current.bar_program_ids))
+        self._add_dialog: AddProgramDialog | None = None
+        self._program_empty = self._program_empty_row()
+        self._program_group.add(self._program_empty)
+        self._program_add = self._program_add_row()
+        self._program_group.add(self._program_add)
         self._refresh_programs()
 
         # -- monitoreo ---------------------------------------------------------
@@ -351,39 +359,143 @@ class SettingsSection(Gtk.ScrolledWindow):
 
     # -- RAM por programa ------------------------------------------------------
 
+    def _program_help(self) -> Gtk.Widget:
+        """«¿Qué es PSS?»: the long explanation and the coverage, off the list."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+        explanation = Gtk.Label(label=programas.PICKER_DESCRIPTION, xalign=0)
+        explanation.set_wrap(True)
+        explanation.set_max_width_chars(52)
+        box.append(explanation)
+        self._program_status = Gtk.Label(xalign=0)
+        self._program_status.add_css_class("dim-label")
+        self._program_status.set_wrap(True)
+        self._program_status.set_max_width_chars(52)
+        box.append(self._program_status)
+        popover = Gtk.Popover()
+        popover.set_child(box)
+        button = Gtk.MenuButton(icon_name="help-about-symbolic")
+        button.add_css_class("flat")
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_tooltip_text("¿Qué es PSS y por qué no se suma?")
+        button.set_popover(popover)
+        return button
+
+    def _program_empty_row(self) -> Adw.ActionRow:
+        row = Adw.ActionRow(title=programas.EMPTY_TITLE)
+        row.set_subtitle(programas.EMPTY_SUBTITLE)
+        row.add_prefix(Gtk.Image.new_from_icon_name("view-pin-symbolic"))
+        button = Gtk.Button(label=programas.ADD_LABEL)
+        button.add_css_class("suggested-action")
+        button.set_valign(Gtk.Align.CENTER)
+        button.connect("clicked", lambda *_args: self._open_add_dialog())
+        row.add_suffix(button)
+        return row
+
+    def _program_add_row(self) -> Adw.PreferencesRow:
+        row = Adw.PreferencesRow(title=programas.ADD_LABEL)
+        row.set_activatable(False)
+        button = Gtk.Button(label=programas.ADD_LABEL)
+        button.add_css_class("flat")
+        button.add_css_class("accent")
+        button.set_halign(Gtk.Align.START)
+        button.set_margin_start(6)
+        button.set_margin_top(4)
+        button.set_margin_bottom(4)
+        button.connect("clicked", lambda *_args: self._open_add_dialog())
+        row.set_child(button)
+        return row
+
+    def _pinned_row(self, key: str) -> Adw.ActionRow:
+        row = Adw.ActionRow(title=f"Programa · {programas.short_id(key)}")
+        row.set_use_markup(False)
+        value = Gtk.Label()
+        value.add_css_class("numeric")
+        value.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(value)
+        remove = Gtk.Button(label=programas.REMOVE_LABEL)
+        remove.set_valign(Gtk.Align.CENTER)
+        remove.connect("clicked", lambda *_args: self._set_pinned(key, False))
+        row.add_suffix(remove)
+        self._program_values[key] = value
+        row._remove_button = remove
+        return row
+
+    def _paint_pinned(self, key: str, program: dict | None) -> None:
+        row = self._program_rows[key]
+        value = self._program_values[key]
+        if program:
+            name = programas.human_name(program)
+            row.set_title(name)
+            row.set_subtitle(programas.program_kind(program))
+            value.set_text(programas.memory_text(program) or "")
+            value.remove_css_class("dim-label")
+        else:
+            name = row.get_title()
+            row.set_subtitle(programas.ABSENT_KIND)
+            value.set_text(programas.ABSENT_VALUE)
+            value.add_css_class("dim-label")
+        row.set_tooltip_text(programas.program_tooltip(program, key))
+        row._remove_button.update_property(
+            [Gtk.AccessibleProperty.LABEL], [f"Quitar {name} de la barra"]
+        )
+
     def _refresh_programs(self) -> None:
-        """Diff of rows: polling never applies nor overwrites pending toggles."""
+        """Only the pinned rows; polling never applies nor overwrites toggles."""
         snapshot = self._snapshot or Snapshot()
         live = programas.live_programs(snapshot.programs())
-        wanted = set(live) | self._program_selection
         for key in list(self._program_rows):
-            if key not in wanted:
+            if key not in self._program_selection:
                 self._program_group.remove(self._program_rows.pop(key))
-        for key in sorted(wanted, key=lambda k: (live.get(k, {}).get("name", ""), k)):
-            row = self._program_rows.get(key)
-            if row is None:
-                row = Adw.SwitchRow(title=f"Programa · {programas.short_id(key)}")
-                row.set_use_markup(False)
-                row.set_active(key in self._program_selection)
-                row.connect("notify::active", self._on_program_change, key)
-                self._program_rows[key] = row
-                self._program_group.add(row)
-            program = live.get(key)
-            if program:
-                row.set_title(programas.program_title(program, key))
-                row.set_subtitle(programas.program_subtitle(program))
-            else:
-                row.set_subtitle(programas.ABSENT_SUBTITLE)
+                self._program_values.pop(key, None)
+        added = False
+        for key in self._program_order:
+            if key not in self._program_selection:
+                continue
+            if key not in self._program_rows:
+                self._program_rows[key] = self._pinned_row(key)
+                self._program_group.add(self._program_rows[key])
+                added = True
+            self._paint_pinned(key, live.get(key))
+        if added:  # «Agregar programa…» stays the last row
+            self._program_group.remove(self._program_add)
+            self._program_group.add(self._program_add)
+        pinned = bool(self._program_rows)
+        self._program_empty.set_visible(not pinned)
+        self._program_add.set_visible(pinned)
         title, subtitle = programas.coverage_summary(snapshot.stats)
-        self._program_status.set_title(title)
-        self._program_status.set_subtitle(subtitle)
+        self._program_status.set_text(f"{title}\n{subtitle}")
 
-    def _on_program_change(self, row: Adw.SwitchRow, _param, key: str) -> None:
-        if row.get_active():
+    def _is_pinned(self, key: str) -> bool:
+        return key in self._program_selection
+
+    def _set_pinned(self, key: str, pinned: bool) -> None:
+        if pinned:
             self._program_selection.add(key)
+            if key not in self._program_order:
+                self._program_order.append(key)
         else:
             self._program_selection.discard(key)
+            if key in self._program_order:
+                self._program_order.remove(key)
+        self._refresh_programs()
         self._on_change()
+
+    def _open_add_dialog(self) -> None:
+        snapshot = self._snapshot or Snapshot()
+        dialog = AddProgramDialog(
+            snapshot.programs(), self._is_pinned, self._set_pinned
+        )
+        self._add_dialog = dialog
+        dialog.connect("closed", self._on_add_dialog_closed)
+        dialog.present(self)
+
+    def _on_add_dialog_closed(self, dialog) -> None:
+        if self._add_dialog is dialog:
+            self._add_dialog = None
 
     def _refresh_preview(self) -> None:
         while (child := self._pill_preview.get_first_child()) is not None:
