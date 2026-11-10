@@ -110,12 +110,27 @@ class RecursosPiLayoutTests(unittest.TestCase):
         self.models = next(b for b in blocks if isinstance(b, ModelsBlock))
 
     def settle(self):
-        # A re-parented widget is only allocated on the next frame: run the
-        # loop for a few frames, not just the pending events.
+        # A re-parented widget is only allocated on a later frame, and under a
+        # loaded machine that can take well over a fixed 300 ms (L39
+        # R3-settle-wallclock). Run frames until every block has a non-zero
+        # allocation that stayed the same for 150 ms, with a 5 s ceiling.
         context = GLib.MainContext.default()
-        deadline = GLib.get_monotonic_time() + 300_000
-        while GLib.get_monotonic_time() < deadline:
+        start = GLib.get_monotonic_time()
+        last, stable_since = None, start
+        while True:
             context.iteration(False)
+            now = GLib.get_monotonic_time()
+            shape = tuple(
+                (block.get_width(), block.get_height(), block.get_parent() is not None)
+                for block in self.page._blocks
+            )
+            if shape != last:
+                last, stable_since = shape, now
+            settled = all(w > 0 and h > 0 for w, h, _ in shape)
+            if settled and now - stable_since >= 150_000 and now - start >= 100_000:
+                return
+            if now - start >= 5_000_000:
+                return
 
     def shown_session_views(self):
         from pc_ai_monitor.blocks.pi_sesiones import PiSessionsView
