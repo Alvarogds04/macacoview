@@ -32,6 +32,14 @@ def _gufo_flash():
     return "", None, "missing"
 
 
+def _gufo_flash_command(args=(), timeout=None):
+    """``gufo-flash stop --no-restore`` (Home: apagar Gufo, L31): refused."""
+    from pc_ai_monitor.blocks.motores import CommandResult
+
+    ATTEMPTS.append(("gufo-flash", tuple(args)))
+    return CommandResult(None, failure="missing")
+
+
 def isolate() -> None:
     """Patch every route to the live machine once per process."""
     if _PATCHES:
@@ -41,6 +49,8 @@ def isolate() -> None:
     targets = [
         (motores, "run_manager", _manager),
         (motores, "_run_manager", lambda *args: _manager(args)),
+        # Callers resolve it as ``motores.run_gufo_flash`` at call time.
+        (motores, "run_gufo_flash", _gufo_flash_command),
         (rendimiento, "_http_text", _http),
         (rendimiento, "_run_gufo_flash_status", _gufo_flash),
     ]

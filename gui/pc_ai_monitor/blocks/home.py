@@ -3,8 +3,9 @@
 Tres filas como el artboard, mapeadas a los widgets de ``instrumentos``:
 
 * fila 1 — bloques de RAM (reserva rayada S9), banda de 15 minutos con
-  marcadores, y a la derecha las dos mini tarjetas de motor con el botón
-  compacto «Cambiar a …» (S4);
+  marcadores, y a la derecha «Modelos locales» (S15, L30): interruptor
+  maestro + uno por motor con la RAM que quedaría; Ctrl E sigue abriendo el
+  cambio de motor;
 * fila 2 — lanes decode/prefill con cursor compartido y valores actuales,
   anillos de caché y ventana KV, dial MTP, lámpara de GPU y pedidos;
 * fila 3 — inventario compacto de ``local-ai-models`` con margen RAM
@@ -279,6 +280,36 @@ def _as_cli_result(result: CommandResult) -> CliResult:
     )
 
 
+def _engine_in_flight(state) -> str | None:
+    """El motor con una acción de motor en curso (cambio, encender, apagar)."""
+    target = state.switching or progreso.switching_target()
+    if target:
+        return target
+    for engine in home_logica.ENGINES:
+        if progreso.HUB.running(f"engine:{engine}"):
+            return engine
+    return None
+
+
+def _engine_locks(state) -> dict[str, str]:
+    """Motivos visibles por motor cuando una actualización lo tiene parado."""
+    locks: dict[str, str] = {}
+    if progreso.HUB.running("update:engine-abito"):
+        locks["abito"] = (
+            "Bloqueado mientras se actualiza Abito: el actualizador lo para, "
+            "compila y lo vuelve a arrancar."
+        )
+    if (
+        state.updating
+        or progreso.HUB.running("engine-update")
+        or progreso.HUB.running("update:engine-gufo")
+    ):
+        locks["gufo"] = (
+            "Bloqueado mientras se actualiza el motor Gufo: la actualización lo reinicia."
+        )
+    return locks
+
+
 def start_switch(poller, target: str, *, anchor=None, retry=None) -> None:
     """``switch <target>`` desde Home con el progreso S14 (etapas del guard).
 
@@ -307,46 +338,220 @@ def start_switch(poller, target: str, *, anchor=None, retry=None) -> None:
 # ---------------------------------------------------------------------------
 
 
-class _MiniCard(Gtk.Box):
-    """Mini tarjeta de motor (comentario ljlp6zst): lamp, nombre y meta."""
+STOP_ABITO_BODY = "Es el motor base usado por Pi y el router. Confirmá para detenerlo."
+STOP_GUFO_BODY = (
+    "Se apaga Gufo sin volver a Abito: no queda ningún motor local y Pi va a la "
+    "nube. Lo que esté respondiendo se corta. Volver a cargarlo libera ≈ 85 GiB "
+    "de RAM y tarda ~90 s."
+)
 
-    def __init__(self) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+
+class LocalModelsCard(Gtk.Box):
+    """«Modelos locales» (S15, diseño 08 tab 2): maestro + un interruptor por
+    motor con lo que quedaría de RAM al encenderlo.
+
+    Un interruptor nunca muestra un estado que el administrador no confirmó:
+    al tocarlo se dispara la acción (o su confirmación) y vuelve enseguida a
+    lo confirmado; el cambio real llega con la relectura de ``resident`` y la
+    transición se ve en el bloque de progreso S14 de su fila.
+    """
+
+    def __init__(self, owner: "MotorRowBlock") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.add_css_class("card")
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self._lamp = Lamp(10)
-        top.append(self._lamp)
-        self._name = Gtk.Label(xalign=0)
-        self._name.add_css_class("heading")
-        self._name.set_hexpand(True)
-        top.append(self._name)
-        self._status = Gtk.Label(xalign=1)
-        self._status.add_css_class("mono")
-        self._status.add_css_class("muted")
-        top.append(self._status)
-        self.append(top)
-        self._meta = Gtk.Label(xalign=0)
-        self._meta.add_css_class("caption")
-        self._meta.add_css_class("muted")
-        self._meta.set_ellipsize(3)  # Pango.EllipsizeMode.END
-        self.append(self._meta)
+        self._owner = owner
+        self._syncing = False
+        self._view: home_logica.LocalModelsView | None = None
 
-    def render(self, card: dict) -> None:
-        self._name.set_text(card["name"])
-        self._status.set_text(card["status"])
-        self._lamp.set_data(card["lamp"])
-        self._meta.set_text(
-            f"ctx {card['ctx']:,}".replace(",", ".")
-            + f" · {card['footprint']} · {card['load_hint']}"
+        cap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        cap.append(_caption("Modelos locales", expand=True))
+        hint = Gtk.Label(label="un motor grande a la vez", xalign=1)
+        hint.add_css_class("caption")
+        hint.add_css_class("muted")
+        cap.append(hint)
+        self.append(cap)
+
+        # Maestro
+        master = Gtk.Grid(column_spacing=10, row_spacing=2)
+        self._master_lamp = Lamp(10)
+        self._master_lamp.set_valign(Gtk.Align.CENTER)
+        master.attach(self._master_lamp, 0, 0, 1, 1)
+        title = Gtk.Label(label="Modelos locales", xalign=0)
+        title.add_css_class("model-name")
+        master.attach(title, 1, 0, 1, 1)
+        self._master = Gtk.Switch()
+        self._master.set_valign(Gtk.Align.CENTER)
+        self._master.set_halign(Gtk.Align.END)
+        self._master.set_hexpand(True)
+        self._master.set_tooltip_text(
+            "Encendido: enciende Abito, el motor base de Pi. "
+            "Apagado: apaga el motor residente."
         )
-        self.set_tooltip_text(
-            f"{card['detail']} · {card['footprint']}"
-            + (" · residente ahora" if card["active"] else f" · «{card['button']}» para usarlo")
+        self._master.connect("state-set", self._on_master)
+        master.attach(self._master, 2, 0, 1, 2)
+        self._master_status = Gtk.Label(xalign=0)
+        self._master_status.add_css_class("caption")
+        self._master_status.add_css_class("muted")
+        self._master_status.set_wrap(True)
+        master.attach(self._master_status, 1, 1, 1, 1)
+        self._master_reason = _why()
+        master.attach(self._master_reason, 1, 2, 2, 1)
+        self.append(master)
+
+        self._rows: dict[str, dict] = {}
+        for engine in home_logica.ENGINES:
+            self.append(Gtk.Separator())
+            self._rows[engine] = self._build_row(engine)
+            self.append(self._rows[engine]["box"])
+
+    def _build_row(self, engine: str) -> dict:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        grid = Gtk.Grid(column_spacing=10, row_spacing=2)
+        lamp = Lamp(10)
+        lamp.set_valign(Gtk.Align.CENTER)
+        grid.attach(lamp, 0, 0, 1, 1)
+        names = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        name = Gtk.Label(label=engine.capitalize(), xalign=0)
+        name.add_css_class("model-name")
+        names.append(name)
+        subtitle = Gtk.Label(label=home_logica.ENGINE_SUBTITLE[engine], xalign=0)
+        subtitle.add_css_class("caption")
+        subtitle.add_css_class("muted")
+        subtitle.set_ellipsize(3)  # Pango.EllipsizeMode.END
+        subtitle.set_hexpand(True)
+        names.append(subtitle)
+        grid.attach(names, 1, 0, 1, 1)
+        switch = Gtk.Switch()
+        switch.set_valign(Gtk.Align.CENTER)
+        switch.set_halign(Gtk.Align.END)
+        switch.update_property([Gtk.AccessibleProperty.LABEL], [engine.capitalize()])
+        switch.connect("state-set", self._on_engine, engine)
+        grid.attach(switch, 2, 0, 1, 2)
+        status = Gtk.Label(xalign=0)
+        status.add_css_class("caption")
+        status.add_css_class("mono")
+        status.add_css_class("muted")
+        status.set_ellipsize(3)
+        grid.attach(status, 1, 1, 1, 1)
+        box.append(grid)
+
+        # Lo que quedaría disponible si se enciende (con su reserva).
+        projection = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bar = Gtk.ProgressBar()
+        bar.set_hexpand(True)
+        bar.set_valign(Gtk.Align.CENTER)
+        projection.append(bar)
+        value = Gtk.Label(xalign=1)
+        value.add_css_class("caption")
+        value.add_css_class("num")
+        projection.append(value)
+        box.append(projection)
+
+        reason = _why()
+        box.append(reason)
+
+        progress = progreso.ProgressInline(
+            lambda a, e=engine: a.key == f"engine:{e}" or (a.key == "switch" and a.target == e),
+            max_chars=52,
         )
+        box.append(progress)
+        return {
+            "box": box, "lamp": lamp, "switch": switch, "status": status,
+            "projection": projection, "bar": bar, "value": value,
+            "reason": reason, "progress": progress,
+        }
+
+    # -- render --------------------------------------------------------------
+
+    def render(self, view: home_logica.LocalModelsView, total_gib: float,
+               running: str | None) -> None:
+        self._view = view
+        self._syncing = True
+        try:
+            self._master.set_active(view.master_active)
+            self._master.set_state(view.master_active)
+        finally:
+            self._syncing = False
+        self._master.set_sensitive(view.master_sensitive)
+        self._master_lamp.set_data("stale" if running else view.master_lamp)
+        self._master_status.set_text(view.master_status)
+        _set_why(self._master_reason, view.master_reason)
+
+        for engine_view_ in view.engines:
+            row = self._rows[engine_view_.engine]
+            self._syncing = True
+            try:
+                row["switch"].set_active(engine_view_.active)
+                row["switch"].set_state(engine_view_.active)
+            finally:
+                self._syncing = False
+            row["switch"].set_sensitive(engine_view_.sensitive)
+            row["lamp"].set_data(
+                "stale" if running == engine_view_.engine else engine_view_.lamp
+            )
+            row["status"].set_text(engine_view_.status)
+            _set_why(row["reason"], engine_view_.reason)
+
+            value = engine_view_.projection_gib
+            row["projection"].set_visible(value is not None)
+            if value is not None:
+                row["bar"].set_fraction(max(0.0, min(1.0, value / max(total_gib, 1.0))))
+                for css in ("bar-blue", "bar-warning"):
+                    row["bar"].remove_css_class(css)
+                row["bar"].add_css_class(
+                    "bar-warning" if engine_view_.projection_low else "bar-blue"
+                )
+                row["value"].set_text(f"≈ {value:.1f} GiB")
+                for css in ("tier-warn",):
+                    row["value"].remove_css_class(css)
+                if engine_view_.projection_low:
+                    row["value"].add_css_class("tier-warn")
+                tip = (
+                    f"RAM disponible si encendés {engine_view_.name}, con su reserva "
+                    f"(≈ {home_logica.RESERVATION_GIB[engine_view_.engine]:.0f} GiB)."
+                )
+                if engine_view_.projection_low:
+                    tip += (
+                        " Quedarían menos de 20 GiB libres: el guard del motor "
+                        "decide si lo admite."
+                    )
+                row["projection"].set_tooltip_text(tip)
+
+    # -- events --------------------------------------------------------------
+
+    def _on_master(self, _switch, want_on: bool) -> bool:
+        if self._syncing:
+            return False
+        info = self._owner._poller.state.resident_info
+        self._owner.run_plan(home_logica.master_plan(info, want_on))
+        GLib.idle_add(self._owner._render)
+        return True  # el estado lo pone la relectura del administrador
+
+    def _on_engine(self, _switch, want_on: bool, engine: str) -> bool:
+        if self._syncing:
+            return False
+        info = self._owner._poller.state.resident_info
+        self._owner.run_plan(home_logica.toggle_plan(info, engine, want_on))
+        GLib.idle_add(self._owner._render)
+        return True
+
+
+def _why() -> Gtk.Label:
+    label = Gtk.Label(xalign=0)
+    label.add_css_class("why")
+    label.set_wrap(True)
+    label.set_max_width_chars(52)
+    label.set_visible(False)
+    return label
+
+
+def _set_why(label: Gtk.Label, text: str) -> None:
+    label.set_text(text)
+    label.set_visible(bool(text))
 
 
 class MotorRowBlock(Block):
-    """Fila 1: RAM, banda de 15 minutos, mini tarjetas y cambio compacto."""
+    """Fila 1: RAM, banda de 15 minutos e interruptores de modelos locales."""
 
     title = ""
     frame = False
@@ -356,7 +561,11 @@ class MotorRowBlock(Block):
         self._poller = poller or POLLER
         self._snapshot: Snapshot | None = None
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        # Grid, not a horizontal Box: a Box asks its children how wide they
+        # want to be *for its height*, and the wrapping texts of the switches
+        # card (an error message) then claimed more than the window. A Grid
+        # settles the widths first and the labels wrap inside them.
+        row = Gtk.Grid(column_spacing=12)
         row.set_hexpand(True)
 
         # — tarjeta izquierda: RAM + banda —
@@ -383,59 +592,21 @@ class MotorRowBlock(Block):
 
         self._band = MotorBand(width=560, height=66)
         left.append(self._band)
-        row.append(left)
+        row.attach(left, 0, 0, 1, 1)
 
-        # — columna derecha: mini tarjetas + cambio compacto (S4) —
+        # — derecha: «Modelos locales» (S15, L30: reemplaza las mini tarjetas
+        #    y la píldora «Cambiar a … Ctrl E»; Ctrl E sigue funcionando) —
         right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        right.set_valign(Gtk.Align.CENTER)
-        self._mini_cards: dict[str, _MiniCard] = {}
-        for _engine in home_logica.ENGINES:
-            card = _MiniCard()
-            self._mini_cards[home_logica.ENGINES[len(self._mini_cards)]] = card
-            right.append(card)
+        self._models = LocalModelsCard(self)
+        self._models.set_size_request(430, -1)
+        right.append(self._models)
 
-        self._switch_button = Gtk.Button()
-        self._switch_button.add_css_class("switch-pill")
-        self._switch_button.set_halign(Gtk.Align.START)
-        self._switch_button.connect("clicked", lambda _b: self.request_switch())
-        # Píldora compacta (S4, artboard): lámparas + ⇄ + etiqueta + kbd.
-        pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
-        palette = theme.active()
-        self._switch_from = Gtk.Label()
-        self._switch_from.set_markup(
-            f'<span foreground="{palette.blue}">●</span>'
-        )
-        self._switch_from.set_tooltip_text("Abito")
-        pill.append(self._switch_from)
-        swap = Gtk.Label(label="⇄")
-        pill.append(swap)
-        self._switch_to = Gtk.Label()
-        self._switch_to.set_markup(f'<span foreground="{palette.accent}">●</span>')
-        self._switch_to.set_tooltip_text("Gufo")
-        pill.append(self._switch_to)
-        self._switch_label = Gtk.Label(label="")
-        pill.append(self._switch_label)
-        self._switch_kbd = Gtk.Label(label="Ctrl E")
-        self._switch_kbd.add_css_class("kbd")
-        pill.append(self._switch_kbd)
-        self._switch_button.set_child(pill)
-        right.append(self._switch_button)
-
-        self._switch_reason = Gtk.Label(xalign=0)
-        self._switch_reason.add_css_class("muted")
-        self._switch_reason.add_css_class("caption")
-        self._switch_reason.set_wrap(True)
-        self._switch_reason.set_visible(False)
-        right.append(self._switch_reason)
-
-        self._progress = progreso.ProgressInline("switch")
-        right.append(self._progress)
-
-        row.append(right)
+        row.attach(right, 1, 0, 1, 1)
         self.body.append(row)
 
         self._poller.subscribe(self._on_state)
         self.connect("destroy", self._on_destroy)
+        progreso.HUB.subscribe_widget(self._render_models)
         self._render()
 
     # -- ciclo -------------------------------------------------------------
@@ -473,29 +644,24 @@ class MotorRowBlock(Block):
             time.monotonic(),
         )
 
-        for card in home_logica.mini_cards(info, state.down_engines):
-            self._mini_cards[card["engine"]].render(card)
-        self._render_switch(state, info, resident)
+        self._render_models()
 
-    def _render_switch(self, state, info, resident) -> None:
-        switching = state.switching or progreso.switching_target()
-        if switching is not None:
-            self._switch_label.set_text(f"Cambiando a {switching.capitalize()}…")
-            self._switch_button.set_sensitive(False)
-            self._switch_kbd.set_visible(False)
-            self._switch_reason.set_visible(False)
-            return
-        self._switch_kbd.set_visible(True)
-        target = home_logica.switch_target(resident)
-        view = engine_view(info, target, None)
-        self._switch_label.set_text(view["button"])
-        self._switch_button.set_sensitive(view["enabled"])
-        self._switch_button.set_tooltip_text(
-            f"{view['button']} (Ctrl E)."
-            + (f" {view['reason']}" if view["reason"] else " Pide confirmación antes de cambiar.")
+    def _render_models(self) -> None:
+        """Interruptores: también se repintan con cada cambio del hub S14,
+        para que una acción empezada en otra página los bloquee al instante."""
+        state = self._poller.state
+        info = state.resident_info
+        memory = self._snapshot.memory() if self._snapshot else {}
+        total = home_logica._optional(memory.get("total_gib"))
+        running = _engine_in_flight(state)
+        self._models.render(
+            home_logica.local_models(
+                info, memory, self._snapshot.models() if self._snapshot else [],
+                _engine_locks(state), running,
+            ),
+            total or home_logica.DEFAULT_TOTAL_GIB,
+            running,
         )
-        self._switch_reason.set_text(view["reason"] or "")
-        self._switch_reason.set_visible(bool(view["reason"]))
 
     # -- acción: cambiar de motor (misma ruta que Motores) -----------------
 
@@ -533,9 +699,116 @@ class MotorRowBlock(Block):
         dialog.present()
 
     def _start_switch(self, target: str) -> None:
-        start_switch(self._poller, target, anchor=self._progress,
+        start_switch(self._poller, target,
+                     anchor=self._models._rows[target]["progress"],
                      retry=lambda: self._confirm_switch(target))
         self._render()
+
+    # -- interruptores (S15): ensure / stop / gufo-flash stop --no-restore ----
+
+    def run_plan(self, plan: home_logica.Plan) -> None:
+        if plan.kind == "none" or _engine_in_flight(self._poller.state):
+            return
+        if plan.kind == "switch":
+            if plan.confirm:
+                self._confirm_switch(plan.target)
+            else:
+                self._start_switch(plan.target)
+        elif plan.kind == "ensure":
+            self._run_engine(plan.target, "ensure")
+        elif plan.kind == "stop":
+            self._confirm_stop(
+                f"¿Apagar {plan.target}?", STOP_ABITO_BODY,
+                lambda: self._run_engine(plan.target, "stop"),
+            )
+        elif plan.kind == "stop_gufo":
+            self._confirm_stop(
+                "¿Apagar Gufo?", STOP_GUFO_BODY, lambda: self._run_engine("gufo", "stop")
+            )
+
+    def _confirm_stop(self, title: str, body: str, accept) -> None:
+        """Mismo estilo de diálogo que «¿Apagar abito?» de Motores."""
+        root = self.get_root()
+        dialog = Gtk.MessageDialog(
+            transient_for=root if isinstance(root, Gtk.Window) else None,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=title,
+            # GTK 4: propiedad «secondary-text» (no format_secondary_text).
+            secondary_text=body,
+        )
+        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Apagar", Gtk.ResponseType.ACCEPT)
+
+        def _on_response(current: Gtk.MessageDialog, response: int) -> None:
+            current.close()
+            if response == Gtk.ResponseType.ACCEPT:
+                accept()
+
+        dialog.connect("response", _on_response)
+        dialog.present()
+
+    def _run_engine(self, engine: str, action: str) -> None:
+        """``ensure abito`` / ``stop abito`` / ``gufo-flash stop --no-restore``."""
+        from pc_ai_monitor.blocks import motores
+
+        if progreso.HUB.running(f"engine:{engine}"):
+            return
+        plan_on = action == "ensure"
+        activity = progreso.begin(progreso.pl.engine_action(
+            engine, action, section="home",
+            anchor=self._models._rows[engine]["progress"],
+            retry=lambda: self.run_plan(
+                home_logica.toggle_plan(self._poller.state.resident_info, engine, plan_on)
+            ),
+        ))
+        if engine == "gufo" and action == "stop":
+            activity.limit_s = progreso.pl.STOP_LIMIT_S
+            activity.note = (
+                "Sin porcentaje: gufo-flash stop solo avisa al terminar. "
+                "Abito no vuelve solo."
+            )
+        self._render()
+
+        def _worker() -> None:
+            if engine == "gufo":
+                result = motores.run_gufo_flash(("stop", "--no-restore"), 300)
+            else:
+                result = _run_manager(action, engine)
+            after = _run_manager("resident")
+            info = parse_resident(after.stdout) if after.returncode == 0 else None
+            GLib.idle_add(self._on_engine_done, activity, engine, action, result, info)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_engine_done(self, activity, engine: str, action: str,
+                        result: CommandResult, info: dict | None) -> bool:
+        name = engine.capitalize()
+        resident = info.get("resident") if info else None
+        failure = _command_failure(result, action, engine)
+        if result.returncode != 0:
+            ok, title, detail = False, (
+                f"No se encendió {name}" if action == "ensure" else f"No se apagó {name}"
+            ), failure
+        elif info is None:
+            ok, title, detail = False, f"{name}: estado sin verificar", (
+                "La orden terminó, pero no se pudo leer el estado real."
+            )
+        elif (resident == engine) == (action == "ensure"):
+            ok, title, detail = True, (
+                f"{name} encendido" if action == "ensure" else f"{name} apagado"
+            ), ""
+        else:
+            ok, title, detail = False, (
+                f"No se encendió {name}" if action == "ensure" else f"No se apagó {name}"
+            ), "La orden terminó, pero el administrador informa otro estado."
+        log = "" if ok else (result.stderr or result.stdout or "").strip()
+        progreso.finish(activity, ok, title, detail, log)
+        if info is not None:
+            self._poller.state.resident_info = info
+        self._render()
+        return False
 
 
 # ---------------------------------------------------------------------------

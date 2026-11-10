@@ -155,6 +155,31 @@ def stream_manager(
     return result
 
 
+GUFO_FLASH = "gufo-flash"
+
+
+def run_gufo_flash(args: tuple[str, ...], timeout: float = COMMAND_TIMEOUT_S) -> CommandResult:
+    """``gufo-flash <args>`` (worker only). Today only ``stop --no-restore``:
+    turning Gufo off from Home leaves nothing resident (L31)."""
+    try:
+        completed = subprocess.run(
+            [GUFO_FLASH, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return CommandResult(None, failure="missing")
+    except subprocess.TimeoutExpired:
+        return CommandResult(None, failure="timeout")
+    except OSError as exc:
+        return CommandResult(None, stderr=str(exc), failure="oserror")
+    return CommandResult(
+        completed.returncode, completed.stdout.strip(), completed.stderr.strip()
+    )
+
+
 def _run_manager(*args: str) -> CommandResult:
     """Ejecuta el administrador con el plazo común de las acciones."""
     return run_manager(args)

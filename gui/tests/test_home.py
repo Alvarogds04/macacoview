@@ -794,20 +794,19 @@ class WidgetHomeTests(unittest.TestCase):
         self.assertEqual(gufo.used_gib, 85.0)
         self.assertEqual(gufo.kind, "active")
 
-    def test_switch_button_is_a_compact_pill(self):
-        """S4 / defecto 1: lámparas + ⇄ + etiqueta + «Ctrl E", ancho natural."""
+    def test_local_models_card_replaces_the_compact_pill(self):
+        """L30 (B) sustituye la píldora S4 de 07: la columna derecha de la fila
+        1 es ahora la tarjeta «Modelos locales» con sus tres interruptores."""
         page, poller = self._page()
         poller.state.resident_info = RESIDENT_GUFO
         motor = page._blocks[0]
         motor._render()
 
-        button = motor._switch_button
-        self.assertNotIn("suggested-action", button.get_css_classes())
-        self.assertIn("switch-pill", button.get_css_classes())
-        self.assertEqual(button.get_halign(), Gtk.Align.START)
-        self.assertEqual(motor._switch_label.get_text(), "Cambiar a Abito")
-        self.assertTrue(motor._switch_kbd.get_visible())
-        self.assertTrue(button.get_sensitive())
+        card = motor._models
+        self.assertIsInstance(card._master, Gtk.Switch)
+        self.assertEqual(sorted(card._rows), ["abito", "gufo"])
+        self.assertTrue(card._rows["gufo"]["switch"].get_active())
+        self.assertFalse(card._rows["abito"]["switch"].get_active())
 
     def test_update_card_renders_each_state(self):
         page, poller = self._page()
@@ -1119,3 +1118,352 @@ class HistoryConcurrencyTests(unittest.TestCase):
             stop.set()
             thread.join()
         self.assertEqual(errors, [])
+
+
+# ---------------------------------------------------------------------------
+# S15 / T12: interruptores de modelos locales (lógica pura)
+# ---------------------------------------------------------------------------
+
+RESIDENT_NONE = {
+    "resident": "none",
+    "abito": {"unit": "inactive", "healthy": False, "processing": False},
+    "gufo": {"unit": "inactive", "ready": False, "configured_context": 131072},
+    "others_active": [],
+    "switch_in_progress": False,
+}
+RESIDENT_ABITO = dict(RESIDENT_NONE, resident="abito", abito={"healthy": True, "processing": False})
+RESIDENT_GUFO_FULL = dict(RESIDENT_NONE, resident="gufo")
+MEMORY_LIVE = {"total_gib": 122.7, "used_gib": 21.8, "available_gib": 100.9}
+
+
+class TogglePlanTests(unittest.TestCase):
+    """L28/L31: qué hace cada interruptor según lo que el backend confirma."""
+
+    def test_abito_on_with_nothing_resident_is_ensure(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.toggle_plan(RESIDENT_NONE, "abito", True), hl.Plan("ensure", "abito", False))
+
+    def test_gufo_on_with_nothing_resident_is_a_switch_without_dialog(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.toggle_plan(RESIDENT_NONE, "gufo", True), hl.Plan("switch", "gufo", False))
+
+    def test_one_on_while_the_other_runs_asks_for_the_switch(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.toggle_plan(RESIDENT_ABITO, "gufo", True), hl.Plan("switch", "gufo", True))
+        self.assertEqual(hl.toggle_plan(RESIDENT_GUFO_FULL, "abito", True), hl.Plan("switch", "abito", True))
+
+    def test_off_asks_and_stops_the_running_engine(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.toggle_plan(RESIDENT_ABITO, "abito", False), hl.Plan("stop", "abito", True))
+        self.assertEqual(hl.toggle_plan(RESIDENT_GUFO_FULL, "gufo", False), hl.Plan("stop_gufo", "gufo", True))
+
+    def test_no_change_or_no_data_does_nothing(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.toggle_plan(RESIDENT_ABITO, "abito", True).kind, "none")
+        self.assertEqual(hl.toggle_plan(RESIDENT_NONE, "gufo", False).kind, "none")
+        self.assertEqual(hl.toggle_plan(None, "abito", True).kind, "none")
+
+    def test_master_on_is_abito_and_off_stops_whatever_runs(self):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        self.assertEqual(hl.master_plan(RESIDENT_NONE, True), hl.Plan("ensure", "abito", False))
+        self.assertEqual(hl.master_plan(RESIDENT_ABITO, False), hl.Plan("stop", "abito", True))
+        self.assertEqual(hl.master_plan(RESIDENT_GUFO_FULL, False), hl.Plan("stop_gufo", "gufo", True))
+        self.assertEqual(hl.master_plan(RESIDENT_NONE, False).kind, "none")
+
+
+class LocalModelsViewTests(unittest.TestCase):
+    def _view(self, info, memory=MEMORY_LIVE, models=None, locks=None, running=None):
+        from pc_ai_monitor.blocks import home_logica as hl
+
+        return hl.local_models(info, memory, models or [], locks or {}, running)
+
+    def test_idle_projection_matches_08(self):
+        """08 tab 2: 100.9 disponibles → ≈ 80.9 con Abito, ≈ 15.9 con Gufo."""
+        view = self._view(RESIDENT_NONE)
+        abito, gufo = view.engines
+        self.assertFalse(view.master_active)
+        self.assertEqual(view.master_status, "Ninguno cargado · Pi y el router van a la nube")
+        self.assertEqual(abito.projection_gib, 80.9)
+        self.assertEqual(gufo.projection_gib, 15.9)
+        self.assertFalse(abito.projection_low)
+        self.assertTrue(gufo.projection_low)
+        self.assertIn("≈ 20 GiB al encender", abito.status)
+        self.assertTrue(abito.sensitive and gufo.sensitive)
+
+    def test_switches_reflect_only_the_confirmed_resident(self):
+        view = self._view(RESIDENT_ABITO)
+        abito, gufo = view.engines
+        self.assertTrue(view.master_active)
+        self.assertTrue(abito.active)
+        self.assertFalse(gufo.active)
+        self.assertIsNone(abito.projection_gib)
+        # Al cambiar se libera Abito: la proyección lo descuenta.
+        self.assertIn("pide confirmación", gufo.reason)
+
+    def test_loading_is_never_shown_as_on(self):
+        view = self._view(dict(RESIDENT_NONE, resident="gufo-loading"))
+        gufo = view.engines[1]
+        self.assertFalse(gufo.active)
+        self.assertFalse(gufo.sensitive)
+        self.assertEqual(gufo.lamp, "stale")
+
+    def test_running_action_locks_every_switch(self):
+        view = self._view(RESIDENT_NONE, running="abito")
+        abito, gufo = view.engines
+        self.assertFalse(abito.sensitive)
+        self.assertFalse(gufo.sensitive)
+        self.assertFalse(view.master_sensitive)
+        self.assertEqual(abito.reason, "")  # su progreso lo explica
+        self.assertIn("otra acción de motor", gufo.reason)
+
+    def test_update_lock_reason_is_inline(self):
+        reason = "Bloqueado mientras se actualiza Abito."
+        view = self._view(RESIDENT_NONE, locks={"abito": reason})
+        self.assertEqual(view.engines[0].reason, reason)
+        self.assertFalse(view.engines[0].sensitive)
+        self.assertFalse(view.master_sensitive)  # encender el maestro = Abito
+        self.assertEqual(view.master_reason, reason)
+
+    def test_without_manager_data_nothing_is_on_or_clickable(self):
+        view = self._view(None)
+        self.assertFalse(view.master_active or view.master_sensitive)
+        for engine in view.engines:
+            self.assertFalse(engine.active or engine.sensitive)
+            self.assertIn("No se pudo leer", engine.reason)
+
+
+# ---------------------------------------------------------------------------
+# S15 / T12: la tarjeta en Home (GTK real, diálogos reales, guard de aislamiento)
+# ---------------------------------------------------------------------------
+
+
+def Graphene_point():
+    import gi
+
+    gi.require_version("Graphene", "1.0")
+    from gi.repository import Graphene
+
+    return Graphene.Point().init(0, 0)
+
+
+class LocalModelsCardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not Gtk.init_check():
+            raise unittest.SkipTest("sin display (usá xvfb-run)")
+        from gi.repository import Adw
+
+        Adw.init()
+
+    def setUp(self):
+        from pc_ai_monitor.blocks import progreso
+
+        progreso.HUB.reset()
+        self.addCleanup(progreso.HUB.reset)
+
+    def _motor(self, info):
+        from pc_ai_monitor.blocks.home import MotorRowBlock
+
+        poller = FakePoller()
+        poller.state.resident_info = info
+        block = MotorRowBlock(poller=poller)
+        block.update_snapshot(home_snapshot(models=[], memory=dict(MEMORY_LIVE)))
+        block._render()
+        return block, poller
+
+    def _open(self, action):
+        try:
+            import _dialogos as dialogos
+        except ModuleNotFoundError:
+            from tests import _dialogos as dialogos
+        dialogs = dialogos.presented_dialogs(action)
+        for dialog in dialogs:
+            self.addCleanup(dialogos.close, dialog)
+        return dialogs, dialogos
+
+    def test_fila_1_keeps_ram_and_band_and_drops_the_mini_cards_and_pill(self):
+        """L30 (B): la tarjeta de interruptores reemplaza sólo las mini
+        tarjetas y la píldora «Cambiar a … Ctrl E»."""
+        from pc_ai_monitor.blocks.home import LocalModelsCard
+        from pc_ai_monitor.widgets.instrumentos import MotorBand, RamBlocks
+
+        block, _poller = self._motor(RESIDENT_NONE)
+        self.assertIsInstance(block._ram, RamBlocks)
+        self.assertIsInstance(block._band, MotorBand)
+        self.assertIsInstance(block._models, LocalModelsCard)
+        self.assertFalse(hasattr(block, "_mini_cards"))
+        self.assertFalse(hasattr(block, "_switch_button"))
+
+    def test_switches_show_the_confirmed_state(self):
+        block, poller = self._motor(RESIDENT_ABITO)
+        card = block._models
+        self.assertTrue(card._master.get_active())
+        self.assertTrue(card._rows["abito"]["switch"].get_active())
+        self.assertFalse(card._rows["gufo"]["switch"].get_active())
+        poller.state.resident_info = RESIDENT_NONE
+        block._render()
+        self.assertFalse(card._master.get_active())
+        self.assertFalse(card._rows["abito"]["switch"].get_active())
+
+    def test_abito_on_runs_ensure_with_progress_and_never_fakes_the_state(self):
+        block, _poller = self._motor(RESIDENT_NONE)
+        card = block._models
+        start = len(_aislamiento.ATTEMPTS)
+        dialogs, dialogos = self._open(lambda: card._rows["abito"]["switch"].set_active(True))
+        self.assertEqual(dialogs, [])  # sin confirmación: encender Abito no corta nada
+        self.assertTrue(dialogos.pump_until(
+            lambda: ("ensure", "abito") in dialogos.commands_since(start)
+        ))
+        # Mientras corre (y tras el fallo del guard) el interruptor sigue en
+        # lo que el backend confirmó: apagado.
+        self.assertFalse(card._rows["abito"]["switch"].get_active())
+        from pc_ai_monitor.blocks import progreso
+
+        self.assertTrue(dialogos.pump_until(
+            lambda: (a := progreso.HUB.get("engine:abito")) is not None and not a.running
+        ))
+        dialogos.pump(0.1)
+        self.assertFalse(card._rows["abito"]["switch"].get_active())
+        self.assertTrue(card._rows["abito"]["progress"].get_visible())
+
+    def test_gufo_on_while_abito_runs_opens_the_switch_confirmation(self):
+        from gi.repository import Adw
+
+        from pc_ai_monitor.blocks.residente_logica import confirm_text
+
+        block, poller = self._motor(RESIDENT_ABITO)
+        dialogs, dialogos = self._open(lambda: block._models._rows["gufo"]["switch"].set_active(True))
+        self.assertEqual(len(dialogs), 1)
+        self.assertIsInstance(dialogs[0], Adw.MessageDialog)
+        self.assertEqual(dialogs[0].get_heading(), confirm_text("gufo")[0])
+        start = dialogos.mark()
+        dialogs[0].response("switch")
+        self.assertTrue(dialogos.wait_for_command(start, ("switch", "gufo")))
+        self.assertEqual(poller.switch_begun, ["gufo"])
+        dialogos.pump_until(lambda: poller.state.switching is None)
+
+    def test_gufo_on_with_nothing_resident_switches_without_a_dialog(self):
+        block, _poller = self._motor(RESIDENT_NONE)
+        start = len(_aislamiento.ATTEMPTS)
+        dialogs, dialogos = self._open(lambda: block._models._rows["gufo"]["switch"].set_active(True))
+        self.assertEqual(dialogs, [])
+        self.assertTrue(dialogos.wait_for_command(start, ("switch", "gufo")))
+        dialogos.pump_until(lambda: _poller.state.switching is None)
+
+    def test_abito_off_asks_the_existing_stop_confirmation(self):
+        block, _poller = self._motor(RESIDENT_ABITO)
+        dialogs, dialogos = self._open(lambda: block._models._rows["abito"]["switch"].set_active(False))
+        self.assertEqual(len(dialogs), 1)
+        dialog = dialogs[0]
+        self.assertEqual(dialog.get_property("text"), "¿Apagar abito?")
+        start = dialogos.mark()
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        self.assertTrue(dialogos.wait_for_command(start, ("stop", "abito")))
+        self.assertTrue(block._models._rows["abito"]["switch"].get_active())  # sin confirmar
+
+    def test_gufo_off_asks_then_stops_without_restoring_abito(self):
+        """L31: Gufo off = gufo-flash stop --no-restore, tras confirmar."""
+        block, _poller = self._motor(RESIDENT_GUFO_FULL)
+        dialogs, dialogos = self._open(lambda: block._models._rows["gufo"]["switch"].set_active(False))
+        self.assertEqual(len(dialogs), 1)
+        dialog = dialogs[0]
+        self.assertEqual(dialog.get_property("text"), "¿Apagar Gufo?")
+        self.assertIn("85 GiB", dialog.get_property("secondary-text"))
+        start = len(_aislamiento.ATTEMPTS)
+        dialog.response(Gtk.ResponseType.ACCEPT)
+        self.assertTrue(dialogos.pump_until(
+            lambda: ("gufo-flash", ("stop", "--no-restore")) in _aislamiento.ATTEMPTS[start:]
+        ))
+
+    def test_cancel_changes_nothing(self):
+        block, _poller = self._motor(RESIDENT_GUFO_FULL)
+        dialogs, dialogos = self._open(lambda: block._models._master.set_active(False))
+        self.assertEqual(len(dialogs), 1)
+        start = len(_aislamiento.ATTEMPTS)
+        dialogs[0].response(Gtk.ResponseType.CANCEL)
+        dialogos.pump(0.3)
+        self.assertEqual(_aislamiento.ATTEMPTS[start:], [])
+        self.assertTrue(block._models._master.get_active())
+
+    def test_master_on_starts_abito(self):
+        block, _poller = self._motor(RESIDENT_NONE)
+        start = len(_aislamiento.ATTEMPTS)
+        dialogs, dialogos = self._open(lambda: block._models._master.set_active(True))
+        self.assertEqual(dialogs, [])
+        self.assertTrue(dialogos.pump_until(
+            lambda: ("local-ai-models", ("ensure", "abito")) in _aislamiento.ATTEMPTS[start:]
+        ))
+
+    def test_a_long_error_never_pushes_the_card_off_the_window(self):
+        """Render of an «ensure» error: in a horizontal Box the wrapping
+        message asked for its width *for the row height* and the card was
+        allocated 660 px past the window. Row 1 must keep inside 1156 px."""
+        from pc_ai_monitor.blocks import progreso
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        try:
+            import _dialogos as dialogos
+        except ModuleNotFoundError:
+            from tests import _dialogos as dialogos
+
+        import pc_ai_monitor.blocks.home as home_blocks
+        from pc_ai_monitor.pages.home import HomePage
+
+        poller = FakePoller()
+        poller.state.resident_info = RESIDENT_NONE
+        with mock.patch.object(home_blocks, "POLLER", poller):
+            page = HomePage()
+        page.update_snapshot(home_snapshot(models=[], memory=dict(MEMORY_LIVE)))
+        block = page._blocks[0]
+        window = Gtk.Window()
+        window.set_default_size(1180, 900)
+        window.set_child(page)
+        window.present()
+        self.addCleanup(window.destroy)
+        activity = pl.engine_action("abito", "ensure", section="home", retry=lambda: None)
+        progreso.HUB.begin(activity)
+        activity.fail(
+            "No se encendió Abito",
+            "No se puede encender abito: no alcanza la memoria para conservar 20 GiB "
+            "o el otro modelo grande está encendido.",
+            log="x",
+        )
+        progreso.HUB.changed()
+        dialogos.pump(0.3)
+        card = block._models
+        ok, origin = card.compute_point(window, Graphene_point())
+        self.assertTrue(ok)
+        self.assertLessEqual(origin.x + card.get_width(), window.get_width())
+
+    def test_an_action_started_elsewhere_locks_the_switches_at_once(self):
+        """Render: while «Encendiendo Abito» ran, the card still offered the
+        master and showed idle lamps — it only re-rendered on poller ticks."""
+        from pc_ai_monitor.blocks import progreso
+        from pc_ai_monitor.blocks import progreso_logica as pl
+
+        block, _poller = self._motor(RESIDENT_NONE)
+        card = block._models
+        self.assertTrue(card._master.get_sensitive())
+        progreso.HUB.begin(pl.engine_action("abito", "ensure", section="motores"))
+        progreso.HUB.changed()
+        self.assertFalse(card._master.get_sensitive())
+        self.assertFalse(card._rows["gufo"]["switch"].get_sensitive())
+        self.assertEqual(card._rows["abito"]["lamp"]._state, "stale")
+        self.assertFalse(card._master_reason.get_visible())
+
+    def test_ctrl_e_still_opens_the_switch_confirmation(self):
+        from gi.repository import Adw
+
+        from pc_ai_monitor.blocks.residente_logica import confirm_text
+
+        block, _poller = self._motor(RESIDENT_GUFO_FULL)
+        dialogs, _dialogos = self._open(block.request_switch)
+        self.assertEqual(len(dialogs), 1)
+        self.assertIsInstance(dialogs[0], Adw.MessageDialog)
+        self.assertEqual(dialogs[0].get_heading(), confirm_text("abito")[0])

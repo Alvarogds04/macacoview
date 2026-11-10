@@ -638,6 +638,13 @@ class ActualizacionesWidgetTests(unittest.TestCase):
             FakeDialog.instances[0].respond(Gtk.ResponseType.ACCEPT)
 
         self.assertTrue(done.wait(5.0))
+        # ``done`` salta con la PRIMERA orden: esperar a que el lote termine
+        # (el bloque deja de estar ocupado) antes de mirar las dos.
+        context = GLib.MainContext.default()
+        deadline = time.monotonic() + 5.0
+        while block._busy and time.monotonic() < deadline:
+            context.iteration(False)
+            time.sleep(0.01)
         update_calls = [call for call in calls if call[:1] == ("update",)]
         self.assertEqual(
             update_calls,

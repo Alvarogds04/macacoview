@@ -465,3 +465,204 @@ def update_card(
         button_tooltip=status.reason or "No hay actualizaciones disponibles.",
         tags=tags,
     )
+
+
+# -- fila 1: interruptores de modelos locales (S15, L28/L30/L31) ------------
+
+ENGINE_PORT = {"abito": ABITO_PORT, "gufo": GUFO_PORT}
+ENGINE_SUBTITLE = {
+    "abito": "Qwen3.6-35B-A3B · MTP · motor base de Pi y el router",
+    "gufo": "Qwen3.8 Flash-Next FULL · MTP · razonamiento xhigh",
+}
+USUAL_LOAD = {"abito": "~30 s", "gufo": "~90 s"}
+# local-ai-models conserva 20 GiB libres (RESERVE_KIB): por debajo, aviso.
+FREE_FLOOR_GIB = 20.0
+OTHER = {"abito": "gufo", "gufo": "abito"}
+
+
+@dataclass(frozen=True)
+class Plan:
+    """Lo que dispara un interruptor: kind none / ensure / switch / stop / stop_gufo."""
+
+    kind: str
+    target: str = ""
+    confirm: bool = False
+
+
+_NOTHING = Plan("none")
+
+
+def toggle_plan(info: dict | None, engine: str, want_on: bool) -> Plan:
+    """Un interruptor de motor. Sólo actúa sobre un estado confirmado:
+    sin datos, cargando o en conflicto no hace nada."""
+    if info is None:
+        return _NOTHING
+    resident = info.get("resident")
+    if want_on:
+        if resident == engine:
+            return _NOTHING
+        if resident == OTHER[engine]:
+            return Plan("switch", engine, True)
+        if resident == "none":
+            # Encender Abito no corta nada: ensure (08 tab 1). Gufo pasa por
+            # switch, que es su único camino de arranque.
+            return Plan("ensure", "abito") if engine == "abito" else Plan("switch", "gufo")
+        return _NOTHING
+    if resident != engine:
+        return _NOTHING
+    return Plan("stop", "abito", True) if engine == "abito" else Plan("stop_gufo", "gufo", True)
+
+
+def master_plan(info: dict | None, want_on: bool) -> Plan:
+    """Maestro: encendido = Abito; apagado = el motor que esté corriendo (L28)."""
+    if info is None:
+        return _NOTHING
+    resident = info.get("resident")
+    if want_on:
+        return toggle_plan(info, "abito", True) if resident == "none" else _NOTHING
+    return toggle_plan(info, resident, False) if resident in ENGINES else _NOTHING
+
+
+@dataclass(frozen=True)
+class EngineSwitch:
+    engine: str
+    name: str
+    subtitle: str
+    active: bool
+    sensitive: bool
+    lamp: str
+    status: str
+    reason: str
+    projection_gib: float | None
+    projection_low: bool
+    projection_text: str
+
+
+@dataclass(frozen=True)
+class LocalModelsView:
+    master_active: bool
+    master_sensitive: bool
+    master_status: str
+    master_reason: str
+    master_lamp: str
+    engines: tuple[EngineSwitch, ...]
+
+
+def _projection(
+    engine: str, resident: str | None, memory: dict, models: list[dict]
+) -> float | None:
+    """RAM disponible si se enciende ``engine`` con su reserva; si el otro es
+    residente, el cambio lo libera (su medición o, sin medir, su reserva)."""
+    available = _optional(memory.get("available_gib"))
+    if available is None or resident == engine:
+        return None
+    freed = 0.0
+    other = OTHER[engine]
+    if resident == other:
+        model = engine_model(models, ENGINE_PORT[other])
+        freed = (measured_gib(model) if model else None) or RESERVATION_GIB[other]
+    return round(available + freed - RESERVATION_GIB[engine], 1)
+
+
+def local_models(
+    info: dict | None,
+    memory: dict,
+    models: list[dict] | None,
+    locks: dict[str, str],
+    running: str | None,
+) -> LocalModelsView:
+    """La tarjeta «Modelos locales». ``locks``: motivo por motor (p. ej. una
+    actualización en curso); ``running``: motor con una acción en curso."""
+    from pc_ai_monitor.blocks.residente_logica import NAMES, engine_view
+
+    resident = info.get("resident") if info else None
+    unknown = info is None
+    busy_reason = "Hay otra acción de motor en curso; esperá a que termine."
+    engines: list[EngineSwitch] = []
+    for engine in ENGINES:
+        name = NAMES[engine]
+        active = resident == engine
+        loading = engine == "gufo" and resident == "gufo-loading"
+        port = ENGINE_PORT[engine]
+        if active:
+            lamp = "ok"
+            status = f"encendido · :{port} · ctx {ENGINE_CTX[engine]:,}".replace(",", ".")
+        elif loading:
+            lamp = "stale"
+            status = "cargando…"
+        else:
+            lamp = "off"
+            status = (
+                f"apagado · ≈ {RESERVATION_GIB[engine]:.0f} GiB al encender · :{port}"
+                f" · tarda {USUAL_LOAD[engine]}"
+            )
+
+        reason = ""
+        if unknown:
+            reason = "No se pudo leer el estado del administrador."
+        elif running is not None:
+            reason = "" if running == engine else busy_reason
+        elif engine in locks:
+            reason = locks[engine]
+        elif resident == "conflict":
+            reason = "Abito y Gufo figuran activos a la vez: revisá el estado."
+        elif loading:
+            reason = "Gufo está cargando; el interruptor se habilita al terminar."
+        elif not active:
+            view = engine_view(info, engine, None)
+            if view["reason"]:
+                reason = view["reason"]
+            elif resident == OTHER[engine]:
+                reason = (
+                    f"{NAMES[OTHER[engine]]} está encendido: encender {name} es un "
+                    "cambio de motor y pide confirmación."
+                )
+        # El aviso de confirmación no bloquea; los demás motivos sí.
+        blocking = bool(reason) and "pide confirmación" not in reason
+        sensitive = (
+            not unknown and running is None and not blocking and resident != "gufo-loading"
+        )
+
+        projection = None if unknown else _projection(engine, resident, memory, models or [])
+        low = projection is not None and projection < FREE_FLOOR_GIB
+        if projection is None:
+            projection_text = "" if active else "sin dato de RAM"
+        else:
+            projection_text = f"quedarían ≈ {projection:.1f} GiB"
+        engines.append(EngineSwitch(
+            engine, name, ENGINE_SUBTITLE[engine], active, sensitive, lamp, status,
+            reason, projection, low, projection_text,
+        ))
+
+    master_active = resident in ENGINES
+    if unknown:
+        master_status = "Estado no disponible"
+        master_lamp = "off"
+    elif resident == "gufo-loading":
+        master_status, master_lamp = "Gufo cargando…", "stale"
+    elif master_active:
+        master_status, master_lamp = f"{NAMES[resident]} encendido", "ok"
+    elif resident == "conflict":
+        master_status, master_lamp = "Abito y Gufo figuran activos a la vez", "down"
+    else:
+        master_status, master_lamp = "Ninguno cargado · Pi y el router van a la nube", "off"
+
+    # Encender = Abito; apagar = el residente: hereda el motivo de ese motor.
+    driven = engines[ENGINES.index(resident)] if master_active else engines[0]
+    master_reason = ""
+    master_sensitive = not unknown and running is None and resident not in ("gufo-loading", "conflict")
+    if master_sensitive and driven.engine in locks:
+        master_reason = locks[driven.engine]
+        master_sensitive = False
+    elif master_sensitive and not master_active and not driven.sensitive:
+        master_reason = driven.reason
+        master_sensitive = False
+    elif master_sensitive and not master_active:
+        master_reason = (
+            "Encenderlo enciende Abito (motor base de Pi y el router). "
+            "Para Gufo, usá su interruptor."
+        )
+    return LocalModelsView(
+        master_active, master_sensitive, master_status, master_reason, master_lamp,
+        tuple(engines),
+    )

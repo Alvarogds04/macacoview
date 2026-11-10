@@ -60,6 +60,40 @@ class IsolationTests(unittest.TestCase):
         self.assertTrue(any(tool == "local-ai-models" for tool, _ in _aislamiento.ATTEMPTS))
 
 
+class GufoFlashStopIsolationTests(unittest.TestCase):
+    """L31: «apagar Gufo» runs ``gufo-flash stop --no-restore``; no test may
+    reach the real gufo-flash through that route."""
+
+    @classmethod
+    def setUpClass(cls):
+        _aislamiento.isolate()
+
+    def test_gufo_flash_stop_is_refused_and_recorded(self):
+        import subprocess
+        from unittest import mock
+
+        from pc_ai_monitor.blocks import motores
+
+        spawned: list = []
+
+        def watch(argv, *args, **kwargs):
+            spawned.append(tuple(argv))
+            raise AssertionError(f"spawned {argv}")
+
+        start = len(_aislamiento.ATTEMPTS)
+        with (
+            mock.patch.object(subprocess, "run", watch),
+            mock.patch.object(subprocess, "Popen", watch),
+        ):
+            result = motores.run_gufo_flash(("stop", "--no-restore"), 30)
+
+        self.assertEqual(spawned, [])
+        self.assertIsNone(result.returncode)
+        self.assertIn(
+            ("gufo-flash", ("stop", "--no-restore")), _aislamiento.ATTEMPTS[start:]
+        )
+
+
 class ConfigIsolationTests(unittest.TestCase):
     """Tests must never write the user's real ~/.config/macacoview/config.toml.
 
