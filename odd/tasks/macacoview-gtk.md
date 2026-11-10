@@ -55,8 +55,8 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
 | T14 | Recursos Pi sessions (S17): collector per-session PSS/RSS/children + view | S17 | worker B | 9404b5c |
 | T15 | Review both workers, full suite, deploy in place, verify live | S13–S18 | inline | deployed 2026-11-10 (L32) |
 | T16 | Short «RAM por programa» in Configuración + «Agregar programa…» dialog (S19); pinning from Recursos/Procesos, node/python names and per-session pins deferred (L34) | S19 | worker | 72e616f |
-| T17 | Pi sessions collector hardening from review findings (S20) | S20 S17 | worker | — |
-| T18 | Long-command runner fixes and tests from review findings (S20) | S20 S14 | worker | — |
+| T17 | Pi sessions collector hardening from review findings (S20) | S20 S17 | worker | dd6f3a9 |
+| T18 | Long-command runner fixes and tests from review findings (S20) | S20 S14 | worker | f7e62b0 |
 
 ## Log
 
@@ -113,3 +113,4 @@ Order: T0 → T1 ∥ T2 → T3 ∥ T5 → T4 ∥ T6. B1 runs in parallel in its 
   - 72e616f short RAM list (medium, readability+reliability, review-2eb82d3ae4329d13): programas_dialogo.py:107-114 and :131-133; programas_vista.py:248-260; settings.py:372-376 and :423.
   Approximate model cost of the round: ≈ USD 6.
 - L40 (user, 2026-11-10): «arreglalo, dale, dale» after the recommendation «arreglar solo las del colector de sesiones de Pi (ruta y usuario) y los tests de los comandos largos, y dejar las de legibilidad para después» → S20, T17, T18. Deploy in place after both.
+- L41 (deploy, 2026-11-10 20:12): T17 dd6f3a9 (PI_SESSION_FILE accepted only as an owned .jsonl inside the Pi session roots, pi roots filtered to the current uid, environ mapping tested, carried session list expires after 15 s) and T18 f7e62b0 (streaming runner never stalls or drops output, update flow never stays busy, build_required retry asks to compile, exact card progress key, plain-text toasts, switch always ends). Suite 721 OK on the committed tree, config unchanged. Backup ~/.local/state/macacoview-deploy/20261110-201227/; lib + pc-ai-stats + macacoview_programs.py + macacoview_pi_sessions.py replaced; collector emits pi_sessions live (6); bar unchanged; service restarted, active, no errors. Not exercised live: real updates and engine switches.
