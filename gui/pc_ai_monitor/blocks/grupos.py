@@ -2,7 +2,9 @@
 
 The treemap is the picture (biggest block = biggest RSS); the legend keeps
 the exact numbers and is the click target: clicking a row — or a tile —
-opens that group's process list right below, in place.
+opens that group's process list right below, in place. The Pi group opens
+its per-session view instead (S17, ``pi_sesiones.PiSessionsView``) when the
+collector reports ``pi_sessions``; an older collector keeps the process list.
 """
 
 # pyright: reportAttributeAccessIssue=false
@@ -12,6 +14,7 @@ from gi.repository import Gtk
 from pc_ai_monitor import theme
 from pc_ai_monitor.blocks import Block
 from pc_ai_monitor.blocks import programas_vista as programas
+from pc_ai_monitor.blocks.pi_sesiones import PiSessionsView
 from pc_ai_monitor.blocks.recursos_vista import (
     GroupTreemap,
     top_processes,
@@ -90,6 +93,10 @@ class GroupsBlock(Block):
 
         self._snapshot = None
         self._selected = ""
+        # Una sola vista de sesiones, reutilizada: se actualiza en sitio en
+        # cada snapshot mientras está abierta (sin card propio: ya está dentro
+        # de la de grupos).
+        self._pi_view = PiSessionsView(framed=False)
 
     def update_snapshot(self, snapshot: Snapshot) -> None:
         self._snapshot = snapshot
@@ -195,6 +202,16 @@ class GroupsBlock(Block):
                 return
 
     def _render_detail(self, key: str) -> None:
+        sessions = self._snapshot.pi_sessions() if self._snapshot is not None else None
+        if key == "pi" and sessions is not None:
+            if self._pi_view.get_parent() is not self._detail:
+                while (child := self._detail.get_first_child()) is not None:
+                    self._detail.remove(child)
+                self._detail.append(self._pi_view)
+            pi = (self._snapshot.groups().get("pi") if self._snapshot else None) or {}
+            self._pi_view.update(sessions, safe(pi.get("rss_gib")))
+            return
+
         while (child := self._detail.get_first_child()) is not None:
             self._detail.remove(child)
 

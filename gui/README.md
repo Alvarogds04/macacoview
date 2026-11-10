@@ -204,6 +204,39 @@ clic (y la limpia al repetirlo), columnas por modelo y las ventanas de la
 suscripción Codex coloreadas por presión (≥ 70 % ámbar, ≥ 90 % rojo). Los
 números exactos quedan en las leyendas; las frases, en los tooltips.
 
+### Pi por sesión
+
+Un clic en la ficha o la fila **Pi** abre una fila por sesión de Pi en vez del
+top 10 de procesos (diseño 08, pestaña 4). Cada fila: nombre, PIDs, **PSS**
+(cifra principal, con barra), RSS (secundaria) e hijos directos del proceso
+`pi`. PSS y RSS suman el `pi` y todo lo que lanzó —shells, servidores MCP,
+LSP—; un `pi` lanzado por otro es un subagente: va en su propia fila, colgando
+de la sesión que lo lanzó, y no se suma dos veces. La cabecera pone el RSS del
+grupo y la PSS de las sesiones lado a lado con «no sumar»: la PSS nunca entra
+al treemap ni al «RSS total», y puede superar al RSS del grupo porque incluye
+hijos que el treemap cuenta en otros grupos (un `bash` cae en «Otros»).
+
+El nombre es el que guarda Pi con `/name` (`session_info.name`); si no hay,
+carpeta + 4 caracteres del id de sesión («koda · 5218»); si la sesión no se
+puede identificar con seguridad, carpeta + PID («koda · pid 5544»). La sesión
+se identifica sin escribir nada y sin adivinar en silencio, de más a menos
+fiable: `PI_SESSION_ID` en el entorno de un hijo (`bash` de una herramienta,
+exacta); el archivo de sesión creado en el mismo segundo en que arrancó el
+proceso, con la misma carpeta y sin otro proceso que lo reclame (segura); y como
+último recurso el único archivo de esa carpeta escrito desde el arranque cuando
+hay un solo `pi` en ella (marcada «probable»). De los archivos de sesión se lee
+la primera línea y las entradas `session_info`; nunca los mensajes.
+
+Lo calcula `scripts/macacoview_pi_sessions.py` (junto a `macacoview-stats`, que
+lo importa si está; sin él, el JSON sale igual sin `pi_sessions` y la fila Pi
+abre la lista de procesos de siempre). Solo se lee la PSS de los árboles de `pi`
+(~0.4 s con 12 sesiones), así que `--bar` y `--pill` nunca la piden y la app la
+pide cada 5 s (`--no-pi-sessions` en los demás ciclos, conservando la última
+lista). Campos nuevos del JSON: `pi_sessions` y `pi_sessions_coverage`; ninguno
+existente cambia. La captura real que usan los tests está en
+`tests/fixtures/pi_sessions_2026-11-10/` (sin prompts ni variables de entorno
+salvo `PI_SESSION_ID`/`PI_SESSION_FILE`, con el home cambiado por `@HOME@`).
+
 ## Puertos, Procesos y Configuración
 
 **Puertos** conserva sus tres KPIs, el filtro «sólo expuestos» y las columnas

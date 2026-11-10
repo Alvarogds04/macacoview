@@ -11,6 +11,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from macacoview_programs import PS_COLUMNS, discover_programs, parse_ps
 
+try:  # optional sibling: an older install without it keeps every other field
+    from macacoview_pi_sessions import collect_pi_sessions
+except ImportError:
+    collect_pi_sessions = None
+
 
 def run(cmd):
     try:
@@ -359,6 +364,27 @@ data["program_enumeration"] = {
     "process_count": len(processes),
     "skipped_rows": skipped,
 }
+
+# Pi sessions (S17): one entry per pi process with its tree PSS/RSS. Overlaps
+# groups["pi"] like programs do: never add it to the group RSS. Sampling a
+# PSS per process in every pi tree costs real kernel time (smaps_rollup walks
+# the mappings), so the bar modes never pay it and the app may opt out.
+_wants_pi_sessions = not {"--bar", "--pill", "--no-pi-sessions"} & set(sys.argv[1:])
+if collect_pi_sessions is not None and _wants_pi_sessions:
+    try:
+        data["pi_sessions"] = collect_pi_sessions(processes)
+    except Exception:
+        data["pi_sessions"] = None
+    sessions = data["pi_sessions"] or []
+    totals = {"measured": 0, "unreadable": 0, "raced": 0, "not_sampled": 0}
+    for session in sessions:
+        for key in totals:
+            totals[key] += session["pss_coverage"][key]
+    total = sum(totals.values())
+    status = ("error" if data["pi_sessions"] is None else
+              "full" if totals["measured"] == total else
+              "partial" if totals["measured"] else "unreadable")
+    data["pi_sessions_coverage"] = dict(totals, status=status, total=total)
 
 
 # --------------------------------------------------

@@ -40,6 +40,12 @@ ROUTER_METRICS_URL = "http://127.0.0.1:11009/metrics"
 DECISIONS_CAP = 2000
 DECISIONS_MAX_AGE_S = 3600.0
 
+# Sesiones de Pi (S17): el colector mide la PSS de cada proceso de cada árbol
+# de pi, y eso cuesta tiempo de kernel (~0.4 s con 12 sesiones). La app la pide
+# como mucho cada tantos segundos y entre medio arrastra la última lista.
+PI_SESSIONS_INTERVAL_S = 5.0
+PI_SESSIONS_KEYS = ("pi_sessions", "pi_sessions_coverage")
+
 # Ordered like the watch entries: pi, hermes, firefox, system, other. Single
 # source of truth: the [[watch]] defaults in config, so a renamed default entry
 # renames the history columns with it.
@@ -103,6 +109,11 @@ class Snapshot:
     def programs(self) -> list[dict[str, Any]]:
         """Programs discovered by the collector (RAM por programa); may be absent."""
         return (self.stats or {}).get("programs", []) or []
+
+    def pi_sessions(self) -> list[dict[str, Any]] | None:
+        """Sesiones de Pi del colector; None si el colector no las conoce."""
+        value = (self.stats or {}).get("pi_sessions")
+        return value if isinstance(value, list) else None
 
     def groups(self) -> dict[str, Any]:
         return (self.stats or {}).get("groups", {})
@@ -170,6 +181,8 @@ class Collector:
         self._history: deque[Sample] = deque(maxlen=config.history_capacity)
         self._decisions: deque[dict[str, Any]] = deque()
         self._decision_keys: set[tuple[Any, Any]] = set()
+        self._next_pi_sessions = 0.0
+        self._pi_sessions: dict[str, Any] = {}
 
     # -- public API -------------------------------------------------------
 
@@ -300,7 +313,12 @@ class Collector:
             self._set_error("recursos", f"falta {self._config.stats_bin.name}")
             return True
 
-        stdout, error = _run([str(self._config.stats_bin)], STATS_TIMEOUT_S)
+        now = time.monotonic()
+        want_sessions = now >= self._next_pi_sessions
+        argv = [str(self._config.stats_bin)]
+        if not want_sessions:
+            argv.append("--no-pi-sessions")
+        stdout, error = _run(argv, STATS_TIMEOUT_S)
         if error is not None:
             self._set_error("recursos", error)
             return True
@@ -310,6 +328,16 @@ class Collector:
         except json.JSONDecodeError as parse_error:
             self._set_error("recursos", f"JSON inválido: {parse_error}")
             return True
+
+        if isinstance(stats, dict):
+            if want_sessions:
+                self._next_pi_sessions = now + PI_SESSIONS_INTERVAL_S
+                self._pi_sessions = {
+                    key: stats[key] for key in PI_SESSIONS_KEYS if key in stats
+                }
+            else:
+                for key, value in self._pi_sessions.items():
+                    stats.setdefault(key, value)
 
         with self._lock:
             self._stats = stats
